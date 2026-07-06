@@ -80,6 +80,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 name = "binder"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "viewkit",
 ]
 
@@ -1842,9 +1843,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viewkit"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3983328433b00035827b6d934bdef94ceae587e796821b6961ac7cb680c4bee"
+checksum = "2d7e5b36c15a5e810c20e9854b2fd942f6d3b1d78d68562c9a751f0c69062272"
 dependencies = [
  "cosmic-text",
  "image",
