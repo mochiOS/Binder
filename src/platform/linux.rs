@@ -1,7 +1,4 @@
-use std::time::{
-    SystemTime,
-    UNIX_EPOCH,
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{ClockState, DesktopPlatform, PlatformError, SystemAction, SystemBarState};
 
@@ -12,9 +9,7 @@ pub struct LinuxPlatform {
 impl LinuxPlatform {
     pub fn new() -> Self {
         Self {
-            system_bar:
-            read_system_bar_state()
-                .unwrap_or_default(),
+            system_bar: read_system_bar_state().unwrap_or_default(),
         }
     }
 }
@@ -26,33 +21,22 @@ impl Default for LinuxPlatform {
 }
 
 impl DesktopPlatform for LinuxPlatform {
-    fn system_bar_state(
-        &self,
-    ) -> Result<SystemBarState, PlatformError> {
+    fn system_bar_state(&self) -> Result<SystemBarState, PlatformError> {
         Ok(self.system_bar.clone())
     }
 
-    fn open_system_settings(
-        &self,
-    ) -> Result<(), PlatformError> {
+    fn open_system_settings(&self) -> Result<(), PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }
 
-    fn perform_system_action(
-        &self,
-        _action: SystemAction,
-    ) -> Result<(), PlatformError> {
+    fn perform_system_action(&self, _action: SystemAction) -> Result<(), PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }
-    
-    fn refresh(
-        &mut self,
-    ) -> Result<bool, PlatformError> {
-        let next =
-            read_system_bar_state()?;
 
-        let changed =
-            next != self.system_bar;
+    fn refresh(&mut self) -> Result<bool, PlatformError> {
+        let next = read_system_bar_state()?;
+
+        let changed = next != self.system_bar;
 
         if changed {
             self.system_bar = next;
@@ -62,60 +46,34 @@ impl DesktopPlatform for LinuxPlatform {
     }
 }
 
-fn read_system_bar_state(
-) -> Result<SystemBarState, PlatformError> {
+fn read_system_bar_state() -> Result<SystemBarState, PlatformError> {
     Ok(SystemBarState {
         clock: read_clock()?,
         ..SystemBarState::default()
     })
 }
 
-fn read_clock(
-) -> Result<ClockState, PlatformError> {
+fn read_clock() -> Result<ClockState, PlatformError> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| {
-            PlatformError::InvalidResponse
-        })?;
+        .map_err(|_| PlatformError::InvalidResponse)?;
 
-    let timestamp: libc::time_t =
-        duration
-            .as_secs()
-            .try_into()
-            .map_err(|_| {
-                PlatformError::InvalidResponse
-            })?;
+    let timestamp: libc::time_t = duration
+        .as_secs()
+        .try_into()
+        .map_err(|_| PlatformError::InvalidResponse)?;
 
-    let mut local_time =
-        std::mem::MaybeUninit::<libc::tm>
-        ::uninit();
+    let mut local_time = std::mem::MaybeUninit::<libc::tm>::uninit();
 
-    let result = unsafe {
-        libc::localtime_r(
-            &timestamp,
-            local_time.as_mut_ptr(),
-        )
-    };
+    let result = unsafe { libc::localtime_r(&timestamp, local_time.as_mut_ptr()) };
 
     if result.is_null() {
-        return Err(
-            PlatformError::TransportFailure,
-        );
+        return Err(PlatformError::TransportFailure);
     }
 
-    let local_time = unsafe {
-        local_time.assume_init()
-    };
+    let local_time = unsafe { local_time.assume_init() };
 
-    let weekdays = [
-        "Sun",
-        "Mon",
-        "Tue",
-        "Wed",
-        "Thu",
-        "Fri",
-        "Sat",
-    ];
+    let weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
     let weekday = weekdays
         .get(local_time.tm_wday as usize)
@@ -130,10 +88,6 @@ fn read_clock(
             weekday,
         ),
 
-        time: format!(
-            "{:02}:{:02}",
-            local_time.tm_hour,
-            local_time.tm_min,
-        ),
+        time: format!("{:02}:{:02}", local_time.tm_hour, local_time.tm_min,),
     })
 }

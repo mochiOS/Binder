@@ -6,6 +6,7 @@ mod mochios;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[cfg(not(target_os = "linux"))]
 pub use mochios::MochiOsPlatform;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -80,14 +81,9 @@ pub enum PlatformError {
 pub trait DesktopPlatform {
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError>;
 
-    fn open_system_settings(
-        &self,
-    ) -> Result<(), PlatformError>;
+    fn open_system_settings(&self) -> Result<(), PlatformError>;
 
-    fn perform_system_action(
-        &self,
-        action: SystemAction,
-    ) -> Result<(), PlatformError>;
+    fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError>;
 
     fn refresh(&mut self) -> Result<bool, PlatformError>;
 }
@@ -95,15 +91,11 @@ pub trait DesktopPlatform {
 pub fn current() -> Rc<RefCell<dyn DesktopPlatform>> {
     #[cfg(target_os = "linux")]
     {
-        Rc::new(RefCell::new(
-            linux::LinuxPlatform::new(),
-        ))
+        Rc::new(RefCell::new(linux::LinuxPlatform::new()))
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        Rc::new(RefCell::new(
-            mochios::MochiOsPlatform::new(),
-        ))
+        Rc::new(RefCell::new(mochios::MochiOsPlatform::new()))
     }
 }

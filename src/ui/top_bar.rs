@@ -19,8 +19,7 @@ pub(crate) fn view(
     system_bar: State<SystemBarState>,
     menu_open: State<bool>,
 ) -> impl View + 'static {
-    let menu_open_on_click =
-        menu_open.clone();
+    let menu_open_on_click = menu_open.clone();
 
     let menu_button = Button::new("")
         .content(
@@ -32,12 +31,9 @@ pub(crate) fn view(
                 .height(18.0),
         )
         .style(ButtonStyle::Ghost)
-        .alignment(
-            ZStackAlignment::Leading,
-        )
+        .alignment(ZStackAlignment::Leading)
         .on_click(move || {
-            let next =
-                !menu_open_on_click.get();
+            let next = !menu_open_on_click.get();
 
             menu_open_on_click.set(next);
         });
@@ -48,8 +44,7 @@ pub(crate) fn view(
         .child(menu_button)
         .child(Spacer::new());
 
-    let clock =
-        SystemBarClock::new(system_bar);
+    let clock = SystemBarClock::new(system_bar);
 
     let trailing = HStack::new()
         .alignment(StackAlignment::Center)
@@ -79,35 +74,22 @@ struct SystemBarClock {
 }
 
 impl SystemBarClock {
-    fn new(
-        system_bar: State<SystemBarState>,
-    ) -> Self {
-        Self {
-            system_bar,
-        }
+    fn new(system_bar: State<SystemBarState>) -> Self {
+        Self { system_bar }
     }
 }
 
 impl View for SystemBarClock {
-    fn paint(
-        &self,
-        bounds: Rect,
-        context: &mut PaintContext<'_>,
-    ) {
-        let state =
-            self.system_bar.get();
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        let state = self.system_bar.get();
 
-        let time =
-            state.clock.time;
+        let time = state.clock.time;
 
-        let date =
-            state.clock.date;
+        let date = state.clock.date;
 
         let mut content = VStack::new()
             .alignment(StackAlignment::Center)
-            .distribution(
-                StackDistribution::Center,
-            )
+            .distribution(StackDistribution::Center)
             .gap(StackGap::Custom(1.0));
 
         if !time.is_empty() {
@@ -116,14 +98,9 @@ impl View for SystemBarClock {
                     .font_size(12.0)
                     .line_height(15.0)
                     .weight(700)
-                    .alignment(
-                        TextAlignment::Center,
-                    )
+                    .alignment(TextAlignment::Center)
                     .color(PRIMARY_TEXT)
-                    .frame(
-                        CLOCK_WIDTH,
-                        15.0,
-                    ),
+                    .frame(CLOCK_WIDTH, 15.0),
             );
         }
 
@@ -133,20 +110,12 @@ impl View for SystemBarClock {
                     .font_size(9.0)
                     .line_height(12.0)
                     .weight(600)
-                    .alignment(
-                        TextAlignment::Center,
-                    )
+                    .alignment(TextAlignment::Center)
                     .color(SECONDARY_TEXT)
-                    .frame(
-                        CLOCK_WIDTH,
-                        11.0,
-                    ),
+                    .frame(CLOCK_WIDTH, 11.0),
             );
         }
 
-        content.paint(
-            bounds,
-            context,
-        );
+        content.paint(bounds, context);
     }
 }

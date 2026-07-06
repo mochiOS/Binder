@@ -3,23 +3,23 @@ use std::rc::Rc;
 
 use viewkit::prelude::*;
 
-use crate::platform::{
-    DesktopPlatform,
-    SystemAction,
-};
+use crate::platform::{DesktopPlatform, SystemAction};
+
+use crate::window::DesktopWindows;
 
 pub(crate) fn view(
     platform: Rc<RefCell<dyn DesktopPlatform>>,
+
     menu_open: State<bool>,
-    about_open: State<bool>,
+    windows: State<DesktopWindows>,
 ) -> Menu {
+    let windows_for_about = windows.clone();
+
     let about_menu_open = menu_open.clone();
 
-    let settings_platform =
-        Rc::clone(&platform);
+    let settings_platform = Rc::clone(&platform);
 
-    let settings_menu_open =
-        menu_open.clone();
+    let settings_menu_open = menu_open.clone();
 
     Menu::new()
         .item(system_action_item(
@@ -47,53 +47,35 @@ pub(crate) fn view(
             menu_open,
         ))
         .separator()
-        .item(
-            MenuItem::new(
-                "About",
-            )
-                .on_select(move || {
-                    about_menu_open.set(false);
-                    about_open.set(true);
-                }),
-        )
-        .item(
-            MenuItem::new(
-                "Settings",
-            )
-                .on_select(move || {
-                    settings_menu_open.set(false);
+        .item(MenuItem::new("About").on_select(move || {
+            about_menu_open.set(false);
 
-                    if let Err(error) =
-                        settings_platform
-                            .borrow()
-                            .open_system_settings()
-                    {
-                        eprintln!(
-                            "failed to open system settings: {error:?}",
-                        );
-                    }
-                }),
-        )
+            windows_for_about.update(|desktop| {
+                desktop.open_about();
+            });
+        }))
+        .item(MenuItem::new("Settings").on_select(move || {
+            settings_menu_open.set(false);
+
+            if let Err(error) = settings_platform.borrow().open_system_settings() {
+                eprintln!("failed to open system settings: {error:?}",);
+            }
+        }))
 }
 
 fn system_action_item(
     label: &'static str,
     action: SystemAction,
+
     platform: Rc<RefCell<dyn DesktopPlatform>>,
+
     menu_open: State<bool>,
 ) -> MenuItem {
-    MenuItem::new(label)
-        .on_select(move || {
-            menu_open.set(false);
+    MenuItem::new(label).on_select(move || {
+        menu_open.set(false);
 
-            if let Err(error) =
-                platform
-                    .borrow()
-                    .perform_system_action(action)
-            {
-                eprintln!(
-                    "failed to perform {action:?}: {error:?}",
-                );
-            }
-        })
+        if let Err(error) = platform.borrow().perform_system_action(action) {
+            eprintln!("failed to perform {action:?}: {error:?}",);
+        }
+    })
 }

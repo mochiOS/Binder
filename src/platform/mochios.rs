@@ -23,17 +23,11 @@ impl DesktopPlatform for MochiOsPlatform {
         Ok(self.system_bar.clone())
     }
 
-
-    fn open_system_settings(
-        &self,
-    ) -> Result<(), PlatformError> {
+    fn open_system_settings(&self) -> Result<(), PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }
 
-    fn perform_system_action(
-        &self,
-        _action: SystemAction,
-    ) -> Result<(), PlatformError> {
+    fn perform_system_action(&self, _action: SystemAction) -> Result<(), PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }
 

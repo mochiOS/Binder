@@ -1,4 +1,8 @@
+pub mod about;
 pub(crate) mod desktop;
-pub(crate) mod top_bar;
 pub(crate) mod menu;
 pub(crate) mod popup_menu;
+pub(crate) mod top_bar;
+pub(crate) mod window;
+pub(crate) mod window_decoration;
+pub(crate) mod window_layer;
