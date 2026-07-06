@@ -1,5 +1,1 @@
-mod desktop;
-
-fn main() {
-    desktop::draw();
-}
+fn main() {}
