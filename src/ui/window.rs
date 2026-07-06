@@ -1,4 +1,6 @@
+use super::{about, window_decoration};
 use crate::window::{DesktopWindow, WindowContent};
+use viewkit::theme::{Shadow, ShadowSet};
 use viewkit::{
     draw_command::DrawCommand,
     event::{EventContext, EventResult, ViewEvent},
@@ -6,18 +8,22 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
-use super::{about, window_decoration};
-
 pub(crate) const WINDOW_CORNER_RADIUS: f32 = 14.0;
-
 const WINDOW_BACKGROUND: Color = Color::rgba(250, 250, 250, 235);
-
 const WINDOW_BORDER: Color = Color::rgba(0, 0, 0, 31);
+
+const INACTIVE_WINDOW_SHADOW: ShadowSet =
+    ShadowSet::single(Shadow::new(Color::rgba(0, 0, 0, 8), 0.0, 2.0, 5.0, 1.0));
+
+const ACTIVE_WINDOW_SHADOW: ShadowSet = ShadowSet::double(
+    Shadow::new(Color::rgba(0, 0, 0, 20), 0.0, 2.0, 5.0, 0.0),
+    Shadow::new(Color::rgba(0, 0, 0, 28), 0.0, 5.0, 14.0, 0.0),
+);
 
 struct WindowView {
     decoration: window_decoration::WindowDecoration,
-
     content: Box<dyn View + 'static>,
+    shadow: ShadowStyle,
 }
 
 impl WindowView {
@@ -64,7 +70,7 @@ impl View for WindowView {
         Rectangle::new()
             .color(RectangleColor::Custom(Color::TRANSPARENT))
             .radius(CornerRadius::Custom(WINDOW_CORNER_RADIUS))
-            .shadow(ShadowStyle::Window)
+            .shadow(self.shadow)
             .paint(bounds, context);
 
         context.display_list.push(DrawCommand::PushRoundedClip {
@@ -118,6 +124,12 @@ pub(crate) fn view(window: &DesktopWindow, focused: bool) -> impl View + 'static
         decoration: window_decoration::WindowDecoration::new(window.title.clone(), focused),
 
         content,
+
+        shadow: if focused {
+            ShadowStyle::Custom(ACTIVE_WINDOW_SHADOW)
+        } else {
+            ShadowStyle::Custom(INACTIVE_WINDOW_SHADOW)
+        },
     }
 }
 

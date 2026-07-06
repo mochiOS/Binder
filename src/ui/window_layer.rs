@@ -113,13 +113,13 @@ where
         context: &mut EventContext<'_>,
     ) -> EventResult {
         if let Some(drag) = self.drag.get() {
-            match event {
+            return match event {
                 ViewEvent::PointerMoved { position } => {
                     self.move_dragged_window(bounds, drag, *position);
 
                     context.request_redraw();
 
-                    return EventResult::Consumed;
+                    EventResult::Consumed
                 }
 
                 ViewEvent::PointerReleased {
@@ -132,13 +132,11 @@ where
 
                     context.request_redraw();
 
-                    return EventResult::Consumed;
+                    EventResult::Consumed
                 }
 
-                _ => {
-                    return EventResult::Consumed;
-                }
-            }
+                _ => EventResult::Consumed,
+            };
         }
 
         if let ViewEvent::PointerPressed {
@@ -146,9 +144,27 @@ where
             button: PointerButton::Primary,
         } = event
         {
-            let desktop = self.windows.get();
+            let hit_window = {
+                let desktop = self.windows.get();
 
-            let Some(hit_window) = Self::topmost_window_at(&desktop, *position) else {
+                topmost_window_at(&desktop, *position)
+            };
+
+            let Some(hit_window) = hit_window else {
+                let is_desktop_area = position.y >= bounds.origin.y + DESKTOP_TOP_INSET;
+
+                if is_desktop_area {
+                    let has_focused_window = self.windows.get().focused.is_some();
+
+                    if has_focused_window {
+                        self.windows.update(|desktop| {
+                            desktop.focused = None;
+                        });
+
+                        context.request_redraw();
+                    }
+                }
+
                 return self.content.handle_event(bounds, event, context);
             };
 
@@ -192,4 +208,15 @@ where
 
         self.content.handle_event(bounds, event, context)
     }
+}
+
+fn topmost_window_at(desktop: &DesktopWindows, position: Point) -> Option<DesktopWindow> {
+    desktop
+        .windows
+        .iter()
+        .rev()
+        .find(|desktop_window| {
+            !desktop_window.minimized && window::contains(desktop_window.frame, position)
+        })
+        .cloned()
 }
