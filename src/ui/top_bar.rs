@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::platform::{DesktopPlatform, SystemBarState};
 use viewkit::prelude::*;
-
-use crate::platform::{ClockState, DesktopPlatform, SystemBarState};
+use viewkit::view::PaintContext;
 
 const BAR_CONTENT_HEIGHT: f32 = 39.0;
 
@@ -21,11 +21,9 @@ const PRIMARY_TEXT: Color = Color::from_rgb_hex(0x191919);
 const SECONDARY_TEXT: Color = Color::from_rgb_hex(0x626262);
 
 pub(crate) fn view(
-    system_bar: SystemBarState,
+    system_bar: State<SystemBarState>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
 ) -> impl View + 'static {
-    let ClockState { date, time } = system_bar.clock;
-
     let menu_platform = Rc::clone(&platform);
 
     let menu_button = Button::new("")
@@ -61,7 +59,8 @@ pub(crate) fn view(
         .child(menu_button)
         .child(Spacer::new());
 
-    let clock = clock_view(date, time);
+    let clock =
+        SystemBarClock::new(system_bar);
 
     let trailing = HStack::new()
         .alignment(StackAlignment::Center)
@@ -86,43 +85,79 @@ pub(crate) fn view(
         .child(Divider::new())
 }
 
-fn clock_view(
-    date: String,
-    time: String,
-) -> VStack {
-    let mut clock = VStack::new()
-        .alignment(StackAlignment::Center)
-        .gap(StackGap::Custom(1.0));
+struct SystemBarClock {
+    system_bar: State<SystemBarState>,
+}
 
-    if !time.is_empty() {
-        clock = clock.child(
-            Text::new(time)
-                .font_size(12.0)
-                .line_height(15.0)
-                .weight(700)
-                .alignment(TextAlignment::Center)
-                .color(PRIMARY_TEXT)
-                .frame(
-                    CLOCK_WIDTH,
-                    15.0,
-                ),
+impl SystemBarClock {
+    fn new(
+        system_bar: State<SystemBarState>,
+    ) -> Self {
+        Self {
+            system_bar,
+        }
+    }
+}
+
+impl View for SystemBarClock {
+    fn paint(
+        &self,
+        bounds: Rect,
+        context: &mut PaintContext<'_>,
+    ) {
+        let state =
+            self.system_bar.get();
+
+        let time =
+            state.clock.time;
+
+        let date =
+            state.clock.date;
+
+        let mut content = VStack::new()
+            .alignment(StackAlignment::Center)
+            .distribution(
+                StackDistribution::Center,
+            )
+            .gap(StackGap::Custom(1.0));
+
+        if !time.is_empty() {
+            content = content.child(
+                Text::new(time)
+                    .font_size(12.0)
+                    .line_height(15.0)
+                    .weight(700)
+                    .alignment(
+                        TextAlignment::Center,
+                    )
+                    .color(PRIMARY_TEXT)
+                    .frame(
+                        CLOCK_WIDTH,
+                        15.0,
+                    ),
+            );
+        }
+
+        if !date.is_empty() {
+            content = content.child(
+                Text::new(date)
+                    .font_size(9.0)
+                    .line_height(12.0)
+                    .weight(600)
+                    .alignment(
+                        TextAlignment::Center,
+                    )
+                    .color(SECONDARY_TEXT)
+                    .frame(
+                        CLOCK_WIDTH,
+                        11.0,
+                    ),
+            );
+        }
+
+        content.paint(
+            bounds,
+            context,
         );
     }
-
-    if !date.is_empty() {
-        clock = clock.child(
-            Text::new(date)
-                .font_size(9.0)
-                .line_height(12.0)
-                .weight(600)
-                .alignment(TextAlignment::Center)
-                .color(SECONDARY_TEXT)
-                .frame(
-                    CLOCK_WIDTH,
-                    11.0,
-                ),
-        );
-    }
-
-    clock
 }

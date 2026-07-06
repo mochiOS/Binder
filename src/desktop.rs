@@ -30,6 +30,9 @@ impl App for BinderApp {
     }
 
     fn body(&self, _context: &ViewContext) -> Self::Body {
-        crate::ui::desktop::view(self.system_bar.get(), self.platform.clone())
+        crate::ui::desktop::view(
+            self.system_bar.clone(),
+            Rc::clone(&self.platform),
+        )
     }
 }
