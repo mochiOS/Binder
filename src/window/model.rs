@@ -18,6 +18,22 @@ pub struct DesktopWindow {
     pub minimized: bool,
 
     pub content: WindowContent,
+
+    pub interaction: WindowInteraction,
+    pub restore_frame: Option<Rect>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowControl {
+    Minimize,
+    Maximize,
+    Close,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowInteraction {
+    pub hovered: Option<WindowControl>,
+    pub pressed: Option<WindowControl>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,6 +62,10 @@ impl DesktopWindows {
             .find(|window| window.content == WindowContent::About)
             .map(|window| window.id)
         {
+            if let Some(window) = self.windows.iter_mut().find(|window| window.id == id) {
+                window.minimized = false;
+            }
+
             self.focus(id);
             return id;
         }
@@ -63,6 +83,8 @@ impl DesktopWindows {
             minimized: false,
 
             content: WindowContent::About,
+            interaction: WindowInteraction::default(),
+            restore_frame: None,
         });
 
         self.focused = Some(id);
@@ -75,17 +97,21 @@ impl DesktopWindows {
             return;
         };
 
-        let window = self.windows.remove(index);
+        let mut window = self.windows.remove(index);
+
+        window.minimized = false;
 
         self.windows.push(window);
         self.focused = Some(id);
     }
 
     pub fn close(&mut self, id: WindowId) {
+        let was_focused = self.focused == Some(id);
+
         self.windows.retain(|window| window.id != id);
 
-        if self.focused == Some(id) {
-            self.focused = self.windows.last().map(|window| window.id);
+        if was_focused {
+            self.focus_topmost_visible();
         }
     }
 
@@ -95,6 +121,82 @@ impl DesktopWindows {
         self.next_id = self.next_id.saturating_add(1);
 
         id
+    }
+
+    pub fn set_hovered_control(&mut self, target: Option<(WindowId, WindowControl)>) {
+        for window in &mut self.windows {
+            window.interaction.hovered = match target {
+                Some((id, control)) if id == window.id => Some(control),
+
+                _ => None,
+            };
+        }
+    }
+
+    pub fn clear_pressed_controls(&mut self) {
+        for window in &mut self.windows {
+            window.interaction.pressed = None;
+        }
+    }
+
+    pub fn clear_interactions(&mut self) {
+        for window in &mut self.windows {
+            window.interaction = WindowInteraction::default();
+        }
+    }
+
+    pub fn press_control(&mut self, id: WindowId, control: WindowControl) {
+        self.clear_pressed_controls();
+
+        if let Some(window) = self.windows.iter_mut().find(|window| window.id == id) {
+            window.interaction.pressed = Some(control);
+
+            window.interaction.hovered = Some(control);
+        }
+    }
+
+    pub fn minimize(&mut self, id: WindowId) {
+        if let Some(window) = self.windows.iter_mut().find(|window| window.id == id) {
+            window.minimized = true;
+            window.interaction = WindowInteraction::default();
+        }
+
+        if self.focused == Some(id) {
+            self.focus_topmost_visible();
+        }
+    }
+
+    pub fn toggle_maximize(&mut self, id: WindowId, work_area: Rect) {
+        let changed = {
+            let Some(window) = self.windows.iter_mut().find(|window| window.id == id) else {
+                return;
+            };
+
+            if let Some(restore_frame) = window.restore_frame.take() {
+                window.frame = restore_frame;
+            } else {
+                window.restore_frame = Some(window.frame);
+
+                window.frame = work_area;
+            }
+
+            window.interaction = WindowInteraction::default();
+
+            true
+        };
+
+        if changed {
+            self.focus(id);
+        }
+    }
+
+    fn focus_topmost_visible(&mut self) {
+        self.focused = self
+            .windows
+            .iter()
+            .rev()
+            .find(|window| !window.minimized)
+            .map(|window| window.id);
     }
 }
 

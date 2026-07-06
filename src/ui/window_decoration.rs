@@ -1,8 +1,7 @@
 use std::sync::OnceLock;
 
+use crate::window::{WindowControl, WindowInteraction};
 use viewkit::{
-    event::{EventContext, EventResult, ViewEvent},
-    platform::PointerButton,
     prelude::*,
     view::{Constraints, MeasureContext, PaintContext},
 };
@@ -26,24 +25,14 @@ const CLOSE_HOVER_BACKGROUND: Color = Color::from_rgb_hex(0xE81123);
 
 pub(crate) struct WindowDecoration {
     title: String,
-    focused: bool,
-
-    minimize_hovered: State<bool>,
-    maximize_hovered: State<bool>,
-    close_hovered: State<bool>,
+    interaction: WindowInteraction,
 }
 
 impl WindowDecoration {
-    pub(crate) fn new(title: impl Into<String>, focused: bool) -> Self {
+    pub(crate) fn new(title: impl Into<String>, interaction: WindowInteraction) -> Self {
         Self {
             title: title.into(),
-            focused,
-
-            minimize_hovered: State::new(false),
-
-            maximize_hovered: State::new(false),
-
-            close_hovered: State::new(false),
+            interaction,
         }
     }
 
@@ -59,19 +48,24 @@ impl WindowDecoration {
     fn paint_control(
         bounds: Rect,
         hovered: bool,
+        pressed: bool,
         close: bool,
         icon: ControlIcon,
         context: &mut PaintContext<'_>,
     ) {
-        let background = if close && hovered {
+        let background = if close && pressed {
+            Color::from_rgb_hex(0xC50F1F)
+        } else if close && hovered {
             CLOSE_HOVER_BACKGROUND
+        } else if pressed {
+            Color::rgba(0, 0, 0, 26)
         } else if hovered {
             CONTROL_HOVER_BACKGROUND
         } else {
             Color::TRANSPARENT
         };
 
-        let foreground = if close && hovered {
+        let foreground = if close && (hovered || pressed) {
             Color::WHITE
         } else {
             CONTROL_COLOR
@@ -90,23 +84,6 @@ impl WindowDecoration {
         );
 
         control_icon(icon, foreground).paint(icon_bounds, context);
-    }
-
-    fn update_hover(&self, bounds: Rect, position: Point) {
-        self.minimize_hovered
-            .set(Self::control_bounds(bounds, 0).contains(position));
-
-        self.maximize_hovered
-            .set(Self::control_bounds(bounds, 1).contains(position));
-
-        self.close_hovered
-            .set(Self::control_bounds(bounds, 2).contains(position));
-    }
-
-    fn clear_hover(&self) {
-        self.minimize_hovered.set(false);
-        self.maximize_hovered.set(false);
-        self.close_hovered.set(false);
     }
 }
 
@@ -147,9 +124,16 @@ impl View for WindowDecoration {
                 context,
             );
 
+        let minimize_hovered = self.interaction.hovered == Some(WindowControl::Minimize);
+
+        let maximize_hovered = self.interaction.hovered == Some(WindowControl::Maximize);
+
+        let close_hovered = self.interaction.hovered == Some(WindowControl::Close);
+
         Self::paint_control(
             Self::control_bounds(bounds, 0),
-            self.minimize_hovered.get(),
+            minimize_hovered,
+            minimize_hovered && self.interaction.pressed == Some(WindowControl::Minimize),
             false,
             ControlIcon::Minimize,
             context,
@@ -157,7 +141,8 @@ impl View for WindowDecoration {
 
         Self::paint_control(
             Self::control_bounds(bounds, 1),
-            self.maximize_hovered.get(),
+            maximize_hovered,
+            maximize_hovered && self.interaction.pressed == Some(WindowControl::Maximize),
             false,
             ControlIcon::Maximize,
             context,
@@ -165,50 +150,12 @@ impl View for WindowDecoration {
 
         Self::paint_control(
             Self::control_bounds(bounds, 2),
-            self.close_hovered.get(),
+            close_hovered,
+            close_hovered && self.interaction.pressed == Some(WindowControl::Close),
             true,
             ControlIcon::Close,
             context,
         );
-    }
-
-    fn handle_event(
-        &self,
-        bounds: Rect,
-        event: &ViewEvent,
-        context: &mut EventContext<'_>,
-    ) -> EventResult {
-        match event {
-            ViewEvent::PointerMoved { position } => {
-                self.update_hover(bounds, *position);
-
-                context.request_redraw();
-
-                if controls_bounds(bounds).contains(*position) {
-                    EventResult::Consumed
-                } else {
-                    EventResult::Ignored
-                }
-            }
-
-            ViewEvent::PointerLeft | ViewEvent::FocusChanged { focused: false } => {
-                self.clear_hover();
-                context.request_redraw();
-
-                EventResult::Ignored
-            }
-
-            ViewEvent::PointerPressed {
-                position,
-                button: PointerButton::Primary,
-            }
-            | ViewEvent::PointerReleased {
-                position,
-                button: PointerButton::Primary,
-            } if controls_bounds(bounds).contains(*position) => EventResult::Consumed,
-
-            _ => EventResult::Ignored,
-        }
     }
 }
 
@@ -260,15 +207,6 @@ pub(crate) fn title_bar_bounds(frame: Rect) -> Rect {
         frame.origin.x,
         frame.origin.y,
         frame.size.width,
-        TITLE_BAR_HEIGHT,
-    )
-}
-
-pub(crate) fn controls_bounds(frame: Rect) -> Rect {
-    Rect::new(
-        frame.origin.x + frame.size.width - CONTROLS_WIDTH,
-        frame.origin.y,
-        CONTROLS_WIDTH,
         TITLE_BAR_HEIGHT,
     )
 }

@@ -124,7 +124,10 @@ pub(crate) fn view(window: &DesktopWindow, focused: bool) -> impl View + 'static
     };
 
     WindowView {
-        decoration: window_decoration::WindowDecoration::new(window.title.clone(), focused),
+        decoration: window_decoration::WindowDecoration::new(
+            window.title.clone(),
+            window.interaction,
+        ),
 
         content,
 
