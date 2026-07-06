@@ -1,3 +1,5 @@
+use crate::desktop::WindowResize;
+use crate::window::{DesktopWindow, DesktopWindows, WindowControl, WindowDrag};
 use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
@@ -5,18 +7,18 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
-use crate::window::{DesktopWindow, DesktopWindows, WindowControl, WindowDrag};
-
 use super::{window, window_decoration};
 
 const DESKTOP_TOP_INSET: f32 = 40.0;
+const RESIZE_HANDLE_SIZE: f32 = 10.0;
+const MINIMUM_WINDOW_WIDTH: f32 = 280.0;
+const MINIMUM_WINDOW_HEIGHT: f32 = 180.0;
 
 pub(crate) struct WindowLayer<C> {
     content: C,
-
     windows: State<DesktopWindows>,
-
     drag: State<Option<WindowDrag>>,
+    resize: State<Option<WindowResize>>,
 }
 
 impl<C> WindowLayer<C>
@@ -25,15 +27,15 @@ where
 {
     pub(crate) fn new(
         content: C,
-
         windows: State<DesktopWindows>,
-
         drag: State<Option<WindowDrag>>,
+        resize: State<Option<WindowResize>>,
     ) -> Self {
         Self {
             content,
             windows,
             drag,
+            resize,
         }
     }
 
@@ -150,6 +152,61 @@ where
             (bounds.size.height - DESKTOP_TOP_INSET).max(0.0),
         )
     }
+
+    fn bottom_right_resize_bounds(frame: Rect) -> Rect {
+        Rect::new(
+            frame.origin.x + frame.size.width - RESIZE_HANDLE_SIZE,
+            frame.origin.y + frame.size.height - RESIZE_HANDLE_SIZE,
+            RESIZE_HANDLE_SIZE,
+            RESIZE_HANDLE_SIZE,
+        )
+    }
+
+    fn resize_window(&self, bounds: Rect, resize: WindowResize, pointer: Point) {
+        let delta_x = pointer.x - resize.pointer_origin.x;
+
+        let delta_y = pointer.y - resize.pointer_origin.y;
+
+        let maximum_width =
+            (bounds.origin.x + bounds.size.width - resize.frame_origin.x).max(MINIMUM_WINDOW_WIDTH);
+
+        let maximum_height = (bounds.origin.y + bounds.size.height - resize.frame_origin.y)
+            .max(MINIMUM_WINDOW_HEIGHT);
+
+        let width = (resize.frame_size.width + delta_x).clamp(MINIMUM_WINDOW_WIDTH, maximum_width);
+
+        let height =
+            (resize.frame_size.height + delta_y).clamp(MINIMUM_WINDOW_HEIGHT, maximum_height);
+
+        self.windows.update(|desktop| {
+            let Some(window) = desktop
+                .windows
+                .iter_mut()
+                .find(|window| window.id == resize.window)
+            else {
+                return;
+            };
+
+            window.frame.size = Size::new(width, height);
+        });
+    }
+
+    fn topmost_resize_window_at(
+        desktop: &DesktopWindows,
+        position: Point,
+    ) -> Option<DesktopWindow> {
+        desktop
+            .windows
+            .iter()
+            .rev()
+            .find(|window| {
+                !window.minimized
+                    && window.resizable
+                    && window.restore_frame.is_none()
+                    && Self::bottom_right_resize_bounds(window.frame).contains(position)
+            })
+            .cloned()
+    }
 }
 
 impl<C> View for WindowLayer<C>
@@ -182,6 +239,33 @@ where
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
+        if let Some(resize) = self.resize.get() {
+            return match event {
+                ViewEvent::PointerMoved { position } => {
+                    self.resize_window(bounds, resize, *position);
+
+                    context.request_redraw();
+
+                    EventResult::Consumed
+                }
+
+                ViewEvent::PointerReleased {
+                    button: PointerButton::Primary,
+                    ..
+                }
+                | ViewEvent::PointerLeft
+                | ViewEvent::FocusChanged { focused: false } => {
+                    self.resize.set(None);
+
+                    context.request_redraw();
+
+                    EventResult::Consumed
+                }
+
+                _ => EventResult::Consumed,
+            };
+        }
+
         if let Some(drag) = self.drag.get() {
             return match event {
                 ViewEvent::PointerMoved { position } => {
@@ -230,6 +314,32 @@ where
                 position,
                 button: PointerButton::Primary,
             } => {
+                let resize_window = {
+                    let desktop = self.windows.get();
+
+                    Self::topmost_resize_window_at(&desktop, *position)
+                };
+
+                if let Some(resize_window) = resize_window {
+                    self.windows.update(|desktop| {
+                        desktop.focus(resize_window.id);
+                        desktop.clear_pressed_controls();
+                    });
+
+                    self.resize.set(Some(WindowResize {
+                        window: resize_window.id,
+                        pointer_origin: *position,
+                        frame_origin: resize_window.frame.origin,
+                        frame_size: resize_window.frame.size,
+                    }));
+
+                    self.drag.set(None);
+
+                    context.request_redraw();
+
+                    return EventResult::Consumed;
+                }
+
                 let hit_window = {
                     let desktop = self.windows.get();
 
@@ -253,7 +363,6 @@ where
                         if changed {
                             self.windows.update(|desktop| {
                                 desktop.focused = None;
-
                                 desktop.clear_interactions();
                             });
 
@@ -268,7 +377,6 @@ where
 
                 self.windows.update(|desktop| {
                     desktop.focus(hit_window.id);
-
                     desktop.clear_pressed_controls();
 
                     if let Some(control) = control {
@@ -282,11 +390,11 @@ where
                 if control.is_none() && in_title_bar && hit_window.restore_frame.is_none() {
                     self.drag.set(Some(WindowDrag {
                         window: hit_window.id,
-
                         pointer_origin: *position,
-
                         window_origin: hit_window.frame.origin,
                     }));
+
+                    self.resize.set(None);
                 }
 
                 context.request_redraw();
@@ -357,6 +465,9 @@ where
             }
 
             ViewEvent::PointerLeft | ViewEvent::FocusChanged { focused: false } => {
+                self.resize.set(None);
+                self.drag.set(None);
+
                 if self.clear_interactions() {
                     context.request_redraw();
                 }
@@ -377,4 +488,13 @@ where
             }
         }
     }
+}
+
+fn bottom_right_resize_bounds(frame: Rect) -> Rect {
+    Rect::new(
+        frame.origin.x + frame.size.width - RESIZE_HANDLE_SIZE,
+        frame.origin.y + frame.size.height - RESIZE_HANDLE_SIZE,
+        RESIZE_HANDLE_SIZE,
+        RESIZE_HANDLE_SIZE,
+    )
 }

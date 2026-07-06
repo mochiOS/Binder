@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::platform::{self, DesktopPlatform, SystemBarState};
-use crate::window::{DesktopWindows, WindowDrag};
+use crate::window::{DesktopWindows, WindowDrag, WindowId};
 use viewkit::prelude::*;
 
 pub struct BinderApp {
@@ -11,6 +11,15 @@ pub struct BinderApp {
     mochios_menu_open: State<bool>,
     windows: State<DesktopWindows>,
     window_drag: State<Option<WindowDrag>>,
+    window_resize: State<Option<WindowResize>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowResize {
+    pub window: WindowId,
+    pub pointer_origin: Point,
+    pub frame_origin: Point,
+    pub frame_size: Size,
 }
 
 impl App for BinderApp {
@@ -27,6 +36,7 @@ impl App for BinderApp {
             mochios_menu_open: State::new(false),
             windows: State::new(DesktopWindows::default()),
             window_drag: State::new(None),
+            window_resize: State::new(None),
         }
     }
 
@@ -43,6 +53,7 @@ impl App for BinderApp {
             self.mochios_menu_open.clone(),
             self.windows.clone(),
             self.window_drag.clone(),
+            self.window_resize.clone(),
         )
     }
 }

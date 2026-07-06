@@ -79,7 +79,7 @@ impl DesktopWindows {
 
             frame: Rect::new(430.0, 190.0, 420.0, 300.0),
 
-            resizable: false,
+            resizable: true,
             minimized: false,
 
             content: WindowContent::About,

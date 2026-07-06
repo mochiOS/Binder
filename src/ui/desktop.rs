@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use viewkit::{prelude::*, view::PaintContext};
-
 use super::top_bar;
+use crate::desktop::WindowResize;
 use crate::platform::{DesktopPlatform, SystemBarState};
 use crate::window::{DesktopWindows, WindowDrag};
+use viewkit::{prelude::*, view::PaintContext};
 
 const DESKTOP_BACKGROUND: Color = Color::rgba(200, 200, 200, 255);
 
@@ -14,14 +14,11 @@ const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
-
     platform: Rc<RefCell<dyn DesktopPlatform>>,
-
     menu_open: State<bool>,
-
     windows: State<DesktopWindows>,
-
     window_drag: State<Option<WindowDrag>>,
+    resize: State<Option<WindowResize>>,
 ) -> Box<dyn View + 'static> {
     let refresh_driver = PlatformRefreshView::new(Rc::clone(&platform), system_bar.clone());
 
@@ -37,8 +34,12 @@ pub(crate) fn view(
             .content(content),
     );
 
-    let windowed_desktop =
-        super::window_layer::WindowLayer::new(desktop_content, windows.clone(), window_drag);
+    let windowed_desktop = super::window_layer::WindowLayer::new(
+        desktop_content,
+        windows.clone(),
+        window_drag,
+        resize,
+    );
 
     let menu = super::menu::view(platform, menu_open.clone(), windows);
 
