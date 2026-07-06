@@ -3,12 +3,7 @@ use std::time::{
     UNIX_EPOCH,
 };
 
-use super::{
-    ClockState,
-    DesktopPlatform,
-    PlatformError,
-    SystemBarState,
-};
+use super::{ClockState, DesktopPlatform, PlatformError, SystemAction, SystemBarState};
 
 pub struct LinuxPlatform {
     system_bar: SystemBarState,
@@ -37,13 +32,19 @@ impl DesktopPlatform for LinuxPlatform {
         Ok(self.system_bar.clone())
     }
 
-    fn open_system_menu(
+    fn open_system_settings(
         &self,
     ) -> Result<(), PlatformError> {
-        // TODO: Binder内部のメニュー状態を開く処理へ接続する。
-        Ok(())
+        Err(PlatformError::UnsupportedOperation)
     }
 
+    fn perform_system_action(
+        &self,
+        _action: SystemAction,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+    
     fn refresh(
         &mut self,
     ) -> Result<bool, PlatformError> {

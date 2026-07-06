@@ -26,6 +26,8 @@ const PLATFORM_REFRESH_INTERVAL: Duration =
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
+    menu_open: State<bool>,
+    about_open: State<bool>,
 ) -> Box<dyn View + 'static> {
     let refresh_driver =
         PlatformRefreshView::new(
@@ -39,13 +41,13 @@ pub(crate) fn view(
         .child(
             top_bar::view(
                 system_bar,
-                platform,
+                menu_open.clone(),
             )
                 .height(40.0),
         )
         .child(Spacer::new());
 
-    Box::new(
+    let desktop_content =
         Background::new()
             .background(refresh_driver)
             .content(
@@ -58,7 +60,21 @@ pub(crate) fn view(
                         ),
                     )
                     .content(content),
-            ),
+            );
+
+    let menu =
+        super::menu::view(
+            platform,
+            menu_open.clone(),
+            about_open,
+        );
+
+    Box::new(
+        super::popup_menu::PopupMenu::new(
+            desktop_content,
+            menu,
+            menu_open,
+        ),
     )
 }
 

@@ -1,15 +1,10 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use crate::platform::{DesktopPlatform, SystemBarState};
+use crate::platform::SystemBarState;
 use viewkit::prelude::*;
 use viewkit::view::PaintContext;
 
 const BAR_CONTENT_HEIGHT: f32 = 39.0;
-
 const HORIZONTAL_PADDING: f32 = 14.0;
 const VERTICAL_PADDING: f32 = 5.0;
-const MENU_WIDTH: f32 = 92.0;
 const MENU_HEIGHT: f32 = 29.0;
 const CLOCK_WIDTH: f32 = 220.0;
 const CLOCK_HEIGHT: f32 = 29.0;
@@ -22,9 +17,10 @@ const SECONDARY_TEXT: Color = Color::from_rgb_hex(0x626262);
 
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
-    platform: Rc<RefCell<dyn DesktopPlatform>>,
+    menu_open: State<bool>,
 ) -> impl View + 'static {
-    let menu_platform = Rc::clone(&platform);
+    let menu_open_on_click =
+        menu_open.clone();
 
     let menu_button = Button::new("")
         .content(
@@ -36,22 +32,15 @@ pub(crate) fn view(
                 .height(18.0),
         )
         .style(ButtonStyle::Ghost)
-        .alignment(ZStackAlignment::Leading)
+        .alignment(
+            ZStackAlignment::Leading,
+        )
         .on_click(move || {
-            let result = menu_platform
-                .borrow()
-                .open_system_menu();
+            let next =
+                !menu_open_on_click.get();
 
-            if let Err(error) = result {
-                eprintln!(
-                    "failed to open mochiOS menu: {error:?}",
-                );
-            }
-        })
-        .frame(
-            MENU_WIDTH,
-            MENU_HEIGHT,
-        );
+            menu_open_on_click.set(next);
+        });
 
     let leading = HStack::new()
         .alignment(StackAlignment::Center)

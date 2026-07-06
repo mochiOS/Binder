@@ -7,6 +7,8 @@ use crate::platform::{self, DesktopPlatform, SystemBarState};
 pub struct BinderApp {
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     system_bar: State<SystemBarState>,
+    mochios_menu_open: State<bool>,
+    about_open: State<bool>,
 }
 
 impl App for BinderApp {
@@ -20,6 +22,8 @@ impl App for BinderApp {
         Self {
             platform,
             system_bar: State::new(system_bar),
+            mochios_menu_open: State::new(false),
+            about_open: State::new(false),
         }
     }
 
@@ -33,6 +37,8 @@ impl App for BinderApp {
         crate::ui::desktop::view(
             self.system_bar.clone(),
             Rc::clone(&self.platform),
+            self.mochios_menu_open.clone(),
+            self.about_open.clone(),
         )
     }
 }

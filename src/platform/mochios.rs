@@ -1,4 +1,4 @@
-use super::{DesktopPlatform, PlatformError, SystemBarState};
+use super::{DesktopPlatform, PlatformError, SystemAction, SystemBarState};
 
 pub struct MochiOsPlatform {
     system_bar: SystemBarState,
@@ -23,9 +23,18 @@ impl DesktopPlatform for MochiOsPlatform {
         Ok(self.system_bar.clone())
     }
 
-    fn open_system_menu(&self) -> Result<(), PlatformError> {
-        // TODO: Binder内部のメニュー状態を開く処理へ接続する。
-        Ok(())
+
+    fn open_system_settings(
+        &self,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn perform_system_action(
+        &self,
+        _action: SystemAction,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
     }
 
     fn refresh(&mut self) -> Result<bool, PlatformError> {

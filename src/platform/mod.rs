@@ -19,6 +19,15 @@ pub struct NotificationState {
     pub unread_count: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemAction {
+    Sleep,
+    Restart,
+    ShutDown,
+    LockScreen,
+    LogOut,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetworkState {
     Unavailable,
@@ -65,12 +74,20 @@ pub enum PlatformError {
     InvalidResponse,
     PermissionDenied,
     TransportFailure,
+    UnsupportedOperation,
 }
 
 pub trait DesktopPlatform {
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError>;
 
-    fn open_system_menu(&self) -> Result<(), PlatformError>;
+    fn open_system_settings(
+        &self,
+    ) -> Result<(), PlatformError>;
+
+    fn perform_system_action(
+        &self,
+        action: SystemAction,
+    ) -> Result<(), PlatformError>;
 
     fn refresh(&mut self) -> Result<bool, PlatformError>;
 }
