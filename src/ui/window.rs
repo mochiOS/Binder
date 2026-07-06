@@ -24,6 +24,7 @@ struct WindowView {
     decoration: window_decoration::WindowDecoration,
     content: Box<dyn View + 'static>,
     shadow: ShadowStyle,
+    focused: bool,
 }
 
 impl WindowView {
@@ -89,11 +90,13 @@ impl View for WindowView {
 
         context.display_list.push(DrawCommand::PopClip);
 
-        Rectangle::new()
-            .color(RectangleColor::Custom(Color::TRANSPARENT))
-            .radius(CornerRadius::Custom(WINDOW_CORNER_RADIUS))
-            .border(BorderStyle::custom(WINDOW_BORDER, 1.0))
-            .paint(bounds, context);
+        if self.focused {
+            Rectangle::new()
+                .color(RectangleColor::Custom(Color::TRANSPARENT))
+                .radius(CornerRadius::Custom(WINDOW_CORNER_RADIUS))
+                .border(BorderStyle::custom(WINDOW_BORDER, 1.0))
+                .paint(bounds, context);
+        }
     }
 
     fn handle_event(
@@ -130,6 +133,7 @@ pub(crate) fn view(window: &DesktopWindow, focused: bool) -> impl View + 'static
         } else {
             ShadowStyle::Custom(INACTIVE_WINDOW_SHADOW)
         },
+        focused,
     }
 }
 
