@@ -1,4 +1,4 @@
-use crate::desktop::WindowResize;
+use crate::desktop::{ResizeEdge, WindowResize};
 use crate::window::{DesktopWindow, DesktopWindows, WindowControl, WindowDrag};
 use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
@@ -153,13 +153,111 @@ where
         )
     }
 
-    fn bottom_right_resize_bounds(frame: Rect) -> Rect {
-        Rect::new(
-            frame.origin.x + frame.size.width - RESIZE_HANDLE_SIZE,
-            frame.origin.y + frame.size.height - RESIZE_HANDLE_SIZE,
-            RESIZE_HANDLE_SIZE,
-            RESIZE_HANDLE_SIZE,
-        )
+    fn resize_edge_at(frame: Rect, position: Point) -> Option<ResizeEdge> {
+        let left = frame.origin.x;
+        let top = frame.origin.y;
+
+        let right = frame.origin.x + frame.size.width;
+
+        let bottom = frame.origin.y + frame.size.height;
+
+        let inside_horizontal = position.x >= left && position.x <= right;
+
+        let inside_vertical = position.y >= top && position.y <= bottom;
+
+        if !inside_horizontal || !inside_vertical {
+            return None;
+        }
+
+        let near_left = position.x <= left + RESIZE_HANDLE_SIZE;
+
+        let near_right = position.x >= right - RESIZE_HANDLE_SIZE;
+
+        let near_top = position.y <= top + RESIZE_HANDLE_SIZE;
+
+        let near_bottom = position.y >= bottom - RESIZE_HANDLE_SIZE;
+
+        /*
+         * 四隅を辺より先に判定する。
+         */
+        if near_left && near_top {
+            return Some(ResizeEdge::TopLeft);
+        }
+
+        if near_right && near_top {
+            return Some(ResizeEdge::TopRight);
+        }
+
+        if near_left && near_bottom {
+            return Some(ResizeEdge::BottomLeft);
+        }
+
+        if near_right && near_bottom {
+            return Some(ResizeEdge::BottomRight);
+        }
+
+        if near_left {
+            return Some(ResizeEdge::Left);
+        }
+
+        if near_right {
+            return Some(ResizeEdge::Right);
+        }
+
+        if near_top {
+            return Some(ResizeEdge::Top);
+        }
+
+        if near_bottom {
+            return Some(ResizeEdge::Bottom);
+        }
+
+        None
+    }
+
+    fn cursor_for_resize_edge(edge: ResizeEdge) -> CursorIcon {
+        match edge {
+            ResizeEdge::Left | ResizeEdge::Right => CursorIcon::EwResize,
+
+            ResizeEdge::Top | ResizeEdge::Bottom => CursorIcon::NsResize,
+
+            ResizeEdge::TopLeft | ResizeEdge::BottomRight => CursorIcon::NwseResize,
+
+            ResizeEdge::TopRight | ResizeEdge::BottomLeft => CursorIcon::NeswResize,
+        }
+    }
+
+    fn topmost_resize_window_at(
+        desktop: &DesktopWindows,
+        position: Point,
+    ) -> Option<(DesktopWindow, ResizeEdge)> {
+        desktop.windows.iter().rev().find_map(|window| {
+            if window.minimized || !window.resizable || window.restore_frame.is_some() {
+                return None;
+            }
+
+            Self::resize_edge_at(window.frame, position).map(|edge| (window.clone(), edge))
+        })
+    }
+
+    fn update_resize_cursor(
+        &self,
+        position: Point,
+        context: &mut EventContext<'_>,
+    ) -> Option<ResizeEdge> {
+        let desktop = self.windows.get();
+
+        let edge = Self::topmost_resize_window_at(&desktop, position).map(|(_, edge)| edge);
+
+        let cursor = match edge {
+            Some(edge) => Self::cursor_for_resize_edge(edge),
+
+            None => CursorIcon::Default,
+        };
+
+        context.set_cursor(cursor);
+
+        edge
     }
 
     fn resize_window(&self, bounds: Rect, resize: WindowResize, pointer: Point) {
@@ -167,16 +265,76 @@ where
 
         let delta_y = pointer.y - resize.pointer_origin.y;
 
-        let maximum_width =
-            (bounds.origin.x + bounds.size.width - resize.frame_origin.x).max(MINIMUM_WINDOW_WIDTH);
+        let work_area = Self::desktop_work_area(bounds);
 
-        let maximum_height = (bounds.origin.y + bounds.size.height - resize.frame_origin.y)
-            .max(MINIMUM_WINDOW_HEIGHT);
+        let work_left = work_area.origin.x;
 
-        let width = (resize.frame_size.width + delta_x).clamp(MINIMUM_WINDOW_WIDTH, maximum_width);
+        let work_top = work_area.origin.y;
 
-        let height =
-            (resize.frame_size.height + delta_y).clamp(MINIMUM_WINDOW_HEIGHT, maximum_height);
+        let work_right = work_area.origin.x + work_area.size.width;
+
+        let work_bottom = work_area.origin.y + work_area.size.height;
+
+        let start_left = resize.frame_origin.x;
+
+        let start_top = resize.frame_origin.y;
+
+        let start_right = resize.frame_origin.x + resize.frame_size.width;
+
+        let start_bottom = resize.frame_origin.y + resize.frame_size.height;
+
+        let resize_left = matches!(
+            resize.edge,
+            ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
+        );
+
+        let resize_right = matches!(
+            resize.edge,
+            ResizeEdge::Right | ResizeEdge::TopRight | ResizeEdge::BottomRight
+        );
+
+        let resize_top = matches!(
+            resize.edge,
+            ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
+        );
+
+        let resize_bottom = matches!(
+            resize.edge,
+            ResizeEdge::Bottom | ResizeEdge::BottomLeft | ResizeEdge::BottomRight
+        );
+
+        let mut left = start_left;
+        let mut top = start_top;
+        let mut right = start_right;
+        let mut bottom = start_bottom;
+
+        if resize_left {
+            let maximum_left = (start_right - MINIMUM_WINDOW_WIDTH).max(work_left);
+
+            left = (start_left + delta_x).clamp(work_left, maximum_left);
+        }
+
+        if resize_right {
+            let minimum_right = (start_left + MINIMUM_WINDOW_WIDTH).min(work_right);
+
+            right = (start_right + delta_x).clamp(minimum_right, work_right);
+        }
+
+        if resize_top {
+            let maximum_top = (start_bottom - MINIMUM_WINDOW_HEIGHT).max(work_top);
+
+            top = (start_top + delta_y).clamp(work_top, maximum_top);
+        }
+
+        if resize_bottom {
+            let minimum_bottom = (start_top + MINIMUM_WINDOW_HEIGHT).min(work_bottom);
+
+            bottom = (start_bottom + delta_y).clamp(minimum_bottom, work_bottom);
+        }
+
+        let width = (right - left).max(MINIMUM_WINDOW_WIDTH);
+
+        let height = (bottom - top).max(MINIMUM_WINDOW_HEIGHT);
 
         self.windows.update(|desktop| {
             let Some(window) = desktop
@@ -187,39 +345,12 @@ where
                 return;
             };
 
-            window.frame.size = Size::new(width, height);
+            if !window.resizable || window.restore_frame.is_some() {
+                return;
+            }
+
+            window.frame = Rect::new(left, top, width, height);
         });
-    }
-
-    fn topmost_resize_window_at(
-        desktop: &DesktopWindows,
-        position: Point,
-    ) -> Option<DesktopWindow> {
-        desktop
-            .windows
-            .iter()
-            .rev()
-            .find(|window| {
-                !window.minimized
-                    && window.resizable
-                    && window.restore_frame.is_none()
-                    && Self::bottom_right_resize_bounds(window.frame).contains(position)
-            })
-            .cloned()
-    }
-
-    fn update_resize_cursor(&self, position: Point, context: &mut EventContext<'_>) -> bool {
-        let desktop = self.windows.get();
-
-        let resize_hovered = Self::topmost_resize_window_at(&desktop, position).is_some();
-
-        context.set_cursor(if resize_hovered {
-            CursorIcon::NwseResize
-        } else {
-            CursorIcon::Default
-        });
-
-        resize_hovered
     }
 }
 
@@ -253,10 +384,13 @@ where
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
+        /*
+         * リサイズ操作中。
+         */
         if let Some(resize) = self.resize.get() {
             return match event {
                 ViewEvent::PointerMoved { position } => {
-                    context.set_cursor(CursorIcon::NwseResize);
+                    context.set_cursor(Self::cursor_for_resize_edge(resize.edge));
 
                     self.resize_window(bounds, resize, *position);
 
@@ -292,6 +426,9 @@ where
             };
         }
 
+        /*
+         * ウィンドウ移動中。
+         */
         if let Some(drag) = self.drag.get() {
             return match event {
                 ViewEvent::PointerMoved { position } => {
@@ -333,7 +470,7 @@ where
 
         match event {
             ViewEvent::PointerMoved { position } => {
-                let resize_hovered = self.update_resize_cursor(*position, context);
+                let resize_edge = self.update_resize_cursor(*position, context);
 
                 if self.update_hovered_control(*position) {
                     context.request_redraw();
@@ -343,7 +480,7 @@ where
 
                 let window_hovered = Self::topmost_window_at(&desktop, *position).is_some();
 
-                if resize_hovered || window_hovered {
+                if resize_edge.is_some() || window_hovered {
                     EventResult::Consumed
                 } else {
                     drop(desktop);
@@ -356,14 +493,18 @@ where
                 position,
                 button: PointerButton::Primary,
             } => {
-                let resize_window = {
+                /*
+                 * リサイズ領域は通常の
+                 * 角丸ヒットテストより先に調べる。
+                 */
+                let resize_target = {
                     let desktop = self.windows.get();
 
                     Self::topmost_resize_window_at(&desktop, *position)
                 };
 
-                if let Some(resize_window) = resize_window {
-                    context.set_cursor(CursorIcon::NwseResize);
+                if let Some((resize_window, edge)) = resize_target {
+                    context.set_cursor(Self::cursor_for_resize_edge(edge));
 
                     self.windows.update(|desktop| {
                         desktop.focus(resize_window.id);
@@ -373,6 +514,8 @@ where
 
                     self.resize.set(Some(WindowResize {
                         window: resize_window.id,
+
+                        edge,
 
                         pointer_origin: *position,
 
@@ -399,6 +542,10 @@ where
                 let Some(hit_window) = hit_window else {
                     let is_desktop_area = position.y >= bounds.origin.y + DESKTOP_TOP_INSET;
 
+                    /*
+                     * トップバーを押したときは
+                     * Window関連Stateを変更しない。
+                     */
                     if is_desktop_area {
                         let desktop = self.windows.get();
 
@@ -509,13 +656,13 @@ where
                     return EventResult::Consumed;
                 }
 
-                let resize_hovered = self.update_resize_cursor(*position, context);
+                let resize_edge = self.update_resize_cursor(*position, context);
 
                 let desktop = self.windows.get();
 
                 let window_hovered = Self::topmost_window_at(&desktop, *position).is_some();
 
-                if resize_hovered || window_hovered {
+                if resize_edge.is_some() || window_hovered {
                     EventResult::Consumed
                 } else {
                     drop(desktop);

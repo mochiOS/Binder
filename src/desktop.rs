@@ -14,14 +14,26 @@ pub struct BinderApp {
     window_resize: State<Option<WindowResize>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WindowResize {
     pub window: WindowId,
+    pub edge: ResizeEdge,
     pub pointer_origin: Point,
     pub frame_origin: Point,
     pub frame_size: Size,
 }
-
 impl App for BinderApp {
     type Body = Box<dyn View + 'static>;
 
