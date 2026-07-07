@@ -9,7 +9,7 @@ develop = []
 mochios = []
 
 [dependencies]
-viewkit = "0.3.2"
+viewkit = "0.3.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
