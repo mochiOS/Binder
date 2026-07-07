@@ -207,6 +207,20 @@ where
             })
             .cloned()
     }
+
+    fn update_resize_cursor(&self, position: Point, context: &mut EventContext<'_>) -> bool {
+        let desktop = self.windows.get();
+
+        let resize_hovered = Self::topmost_resize_window_at(&desktop, position).is_some();
+
+        context.set_cursor(if resize_hovered {
+            CursorIcon::NwseResize
+        } else {
+            CursorIcon::Default
+        });
+
+        resize_hovered
+    }
 }
 
 impl<C> View for WindowLayer<C>
@@ -242,6 +256,8 @@ where
         if let Some(resize) = self.resize.get() {
             return match event {
                 ViewEvent::PointerMoved { position } => {
+                    context.set_cursor(CursorIcon::NwseResize);
+
                     self.resize_window(bounds, resize, *position);
 
                     context.request_redraw();
@@ -250,12 +266,22 @@ where
                 }
 
                 ViewEvent::PointerReleased {
+                    position,
                     button: PointerButton::Primary,
-                    ..
-                }
-                | ViewEvent::PointerLeft
-                | ViewEvent::FocusChanged { focused: false } => {
+                } => {
                     self.resize.set(None);
+
+                    self.update_resize_cursor(*position, context);
+
+                    context.request_redraw();
+
+                    EventResult::Consumed
+                }
+
+                ViewEvent::PointerLeft | ViewEvent::FocusChanged { focused: false } => {
+                    self.resize.set(None);
+
+                    context.set_cursor(CursorIcon::Default);
 
                     context.request_redraw();
 
@@ -269,6 +295,8 @@ where
         if let Some(drag) = self.drag.get() {
             return match event {
                 ViewEvent::PointerMoved { position } => {
+                    context.set_cursor(CursorIcon::Default);
+
                     self.move_dragged_window(bounds, drag, *position);
 
                     context.request_redraw();
@@ -277,12 +305,22 @@ where
                 }
 
                 ViewEvent::PointerReleased {
+                    position,
                     button: PointerButton::Primary,
-                    ..
-                }
-                | ViewEvent::PointerLeft
-                | ViewEvent::FocusChanged { focused: false } => {
+                } => {
                     self.drag.set(None);
+
+                    self.update_resize_cursor(*position, context);
+
+                    context.request_redraw();
+
+                    EventResult::Consumed
+                }
+
+                ViewEvent::PointerLeft | ViewEvent::FocusChanged { focused: false } => {
+                    self.drag.set(None);
+
+                    context.set_cursor(CursorIcon::Default);
 
                     context.request_redraw();
 
@@ -295,13 +333,17 @@ where
 
         match event {
             ViewEvent::PointerMoved { position } => {
+                let resize_hovered = self.update_resize_cursor(*position, context);
+
                 if self.update_hovered_control(*position) {
                     context.request_redraw();
                 }
 
                 let desktop = self.windows.get();
 
-                if Self::topmost_window_at(&desktop, *position).is_some() {
+                let window_hovered = Self::topmost_window_at(&desktop, *position).is_some();
+
+                if resize_hovered || window_hovered {
                     EventResult::Consumed
                 } else {
                     drop(desktop);
@@ -321,15 +363,21 @@ where
                 };
 
                 if let Some(resize_window) = resize_window {
+                    context.set_cursor(CursorIcon::NwseResize);
+
                     self.windows.update(|desktop| {
                         desktop.focus(resize_window.id);
+
                         desktop.clear_pressed_controls();
                     });
 
                     self.resize.set(Some(WindowResize {
                         window: resize_window.id,
+
                         pointer_origin: *position,
+
                         frame_origin: resize_window.frame.origin,
+
                         frame_size: resize_window.frame.size,
                     }));
 
@@ -339,6 +387,8 @@ where
 
                     return EventResult::Consumed;
                 }
+
+                context.set_cursor(CursorIcon::Default);
 
                 let hit_window = {
                     let desktop = self.windows.get();
@@ -363,6 +413,7 @@ where
                         if changed {
                             self.windows.update(|desktop| {
                                 desktop.focused = None;
+
                                 desktop.clear_interactions();
                             });
 
@@ -377,6 +428,7 @@ where
 
                 self.windows.update(|desktop| {
                     desktop.focus(hit_window.id);
+
                     desktop.clear_pressed_controls();
 
                     if let Some(control) = control {
@@ -390,7 +442,9 @@ where
                 if control.is_none() && in_title_bar && hit_window.restore_frame.is_none() {
                     self.drag.set(Some(WindowDrag {
                         window: hit_window.id,
+
                         pointer_origin: *position,
+
                         window_origin: hit_window.frame.origin,
                     }));
 
@@ -448,14 +502,20 @@ where
 
                     self.update_hovered_control(*position);
 
+                    self.update_resize_cursor(*position, context);
+
                     context.request_redraw();
 
                     return EventResult::Consumed;
                 }
 
+                let resize_hovered = self.update_resize_cursor(*position, context);
+
                 let desktop = self.windows.get();
 
-                if Self::topmost_window_at(&desktop, *position).is_some() {
+                let window_hovered = Self::topmost_window_at(&desktop, *position).is_some();
+
+                if resize_hovered || window_hovered {
                     EventResult::Consumed
                 } else {
                     drop(desktop);
@@ -465,8 +525,7 @@ where
             }
 
             ViewEvent::PointerLeft | ViewEvent::FocusChanged { focused: false } => {
-                self.resize.set(None);
-                self.drag.set(None);
+                context.set_cursor(CursorIcon::Default);
 
                 if self.clear_interactions() {
                     context.request_redraw();
@@ -479,7 +538,11 @@ where
                 if let Some(position) = event.position() {
                     let desktop = self.windows.get();
 
-                    if Self::topmost_window_at(&desktop, position).is_some() {
+                    let resize_hit = Self::topmost_resize_window_at(&desktop, position).is_some();
+
+                    let window_hit = Self::topmost_window_at(&desktop, position).is_some();
+
+                    if resize_hit || window_hit {
                         return EventResult::Consumed;
                     }
                 }
@@ -488,13 +551,4 @@ where
             }
         }
     }
-}
-
-fn bottom_right_resize_bounds(frame: Rect) -> Rect {
-    Rect::new(
-        frame.origin.x + frame.size.width - RESIZE_HANDLE_SIZE,
-        frame.origin.y + frame.size.height - RESIZE_HANDLE_SIZE,
-        RESIZE_HANDLE_SIZE,
-        RESIZE_HANDLE_SIZE,
-    )
 }

@@ -5,7 +5,6 @@ use viewkit::view::PaintContext;
 const BAR_CONTENT_HEIGHT: f32 = 39.0;
 const HORIZONTAL_PADDING: f32 = 14.0;
 const VERTICAL_PADDING: f32 = 5.0;
-const MENU_HEIGHT: f32 = 29.0;
 const CLOCK_WIDTH: f32 = 220.0;
 const CLOCK_HEIGHT: f32 = 29.0;
 
