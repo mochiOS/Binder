@@ -10,7 +10,9 @@ use viewkit::{
 use super::{window, window_decoration};
 
 const DESKTOP_TOP_INSET: f32 = 40.0;
-const RESIZE_HANDLE_SIZE: f32 = 10.0;
+const RESIZE_HANDLE_OUTER_SIZE: f32 = 10.0;
+const RESIZE_HANDLE_INNER_SIZE: f32 = 5.0;
+const RESIZE_CORNER_LENGTH: f32 = 28.0;
 const MINIMUM_WINDOW_WIDTH: f32 = 280.0;
 const MINIMUM_WINDOW_HEIGHT: f32 = 180.0;
 
@@ -156,59 +158,77 @@ where
     fn resize_edge_at(frame: Rect, position: Point) -> Option<ResizeEdge> {
         let left = frame.origin.x;
         let top = frame.origin.y;
+        let right = left + frame.size.width;
+        let bottom = top + frame.size.height;
 
-        let right = frame.origin.x + frame.size.width;
+        let outer_left = left - RESIZE_HANDLE_OUTER_SIZE;
 
-        let bottom = frame.origin.y + frame.size.height;
+        let outer_top = top - RESIZE_HANDLE_OUTER_SIZE;
 
-        let inside_horizontal = position.x >= left && position.x <= right;
+        let outer_right = right + RESIZE_HANDLE_OUTER_SIZE;
 
-        let inside_vertical = position.y >= top && position.y <= bottom;
+        let outer_bottom = bottom + RESIZE_HANDLE_OUTER_SIZE;
 
-        if !inside_horizontal || !inside_vertical {
+        if position.x < outer_left
+            || position.x > outer_right
+            || position.y < outer_top
+            || position.y > outer_bottom
+        {
             return None;
         }
 
-        let near_left = position.x <= left + RESIZE_HANDLE_SIZE;
+        let in_left_band =
+            position.x >= outer_left && position.x <= left + RESIZE_HANDLE_INNER_SIZE;
 
-        let near_right = position.x >= right - RESIZE_HANDLE_SIZE;
+        let in_right_band =
+            position.x >= right - RESIZE_HANDLE_INNER_SIZE && position.x <= outer_right;
 
-        let near_top = position.y <= top + RESIZE_HANDLE_SIZE;
+        let in_top_band = position.y >= outer_top && position.y <= top + RESIZE_HANDLE_INNER_SIZE;
 
-        let near_bottom = position.y >= bottom - RESIZE_HANDLE_SIZE;
+        let in_bottom_band =
+            position.y >= bottom - RESIZE_HANDLE_INNER_SIZE && position.y <= outer_bottom;
 
-        /*
-         * 四隅を辺より先に判定する。
-         */
-        if near_left && near_top {
+        let top_left = (in_left_band && position.y <= top + RESIZE_CORNER_LENGTH)
+            || (in_top_band && position.x <= left + RESIZE_CORNER_LENGTH);
+
+        let top_right = (in_right_band && position.y <= top + RESIZE_CORNER_LENGTH)
+            || (in_top_band && position.x >= right - RESIZE_CORNER_LENGTH);
+
+        let bottom_left = (in_left_band && position.y >= bottom - RESIZE_CORNER_LENGTH)
+            || (in_bottom_band && position.x <= left + RESIZE_CORNER_LENGTH);
+
+        let bottom_right = (in_right_band && position.y >= bottom - RESIZE_CORNER_LENGTH)
+            || (in_bottom_band && position.x >= right - RESIZE_CORNER_LENGTH);
+
+        if top_left {
             return Some(ResizeEdge::TopLeft);
         }
 
-        if near_right && near_top {
+        if top_right {
             return Some(ResizeEdge::TopRight);
         }
 
-        if near_left && near_bottom {
+        if bottom_left {
             return Some(ResizeEdge::BottomLeft);
         }
 
-        if near_right && near_bottom {
+        if bottom_right {
             return Some(ResizeEdge::BottomRight);
         }
 
-        if near_left {
+        if in_left_band {
             return Some(ResizeEdge::Left);
         }
 
-        if near_right {
+        if in_right_band {
             return Some(ResizeEdge::Right);
         }
 
-        if near_top {
+        if in_top_band {
             return Some(ResizeEdge::Top);
         }
 
-        if near_bottom {
+        if in_bottom_band {
             return Some(ResizeEdge::Bottom);
         }
 
