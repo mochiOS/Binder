@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use viewkit::prelude::*;
 
-use crate::platform::{DesktopPlatform, SystemAction};
+use crate::platform::{ApplicationId, DesktopPlatform, SystemAction};
 
 use crate::window::DesktopWindows;
 
@@ -13,6 +13,8 @@ pub(crate) fn view(
     menu_open: State<bool>,
     windows: State<DesktopWindows>,
 ) -> Menu {
+    let about_platform = Rc::clone(&platform);
+
     let windows_for_about = windows.clone();
 
     let about_menu_open = menu_open.clone();
@@ -50,8 +52,38 @@ pub(crate) fn view(
         .item(MenuItem::new("About").on_select(move || {
             about_menu_open.set(false);
 
+            let existing = {
+                let desktop = windows_for_about.get();
+
+                desktop.about_window()
+            };
+
+            if let Some(window_id) = existing {
+                windows_for_about.update(|desktop| {
+                    desktop.focus(window_id);
+                });
+
+                return;
+            }
+
+            let process_id = {
+                let mut platform = about_platform.borrow_mut();
+
+                platform.launch_application(ApplicationId::About)
+            };
+
+            let process_id = match process_id {
+                Ok(process_id) => process_id,
+
+                Err(error) => {
+                    eprintln!("failed to launch About: {error:?}",);
+
+                    return;
+                }
+            };
+
             windows_for_about.update(|desktop| {
-                desktop.open_about();
+                desktop.open_about(process_id);
             });
         }))
         .item(MenuItem::new("Settings").on_select(move || {

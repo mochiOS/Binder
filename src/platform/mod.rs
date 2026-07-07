@@ -9,6 +9,14 @@ use std::rc::Rc;
 #[cfg(not(target_os = "linux"))]
 pub use mochios::MochiOsPlatform;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ProcessId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApplicationId {
+    About,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClockState {
     pub date: String,
@@ -34,6 +42,7 @@ pub enum NetworkState {
     Unavailable,
     Disconnected,
     Connecting,
+
     Connected {
         network_name: Option<String>,
         signal_strength: Option<u8>,
@@ -76,6 +85,9 @@ pub enum PlatformError {
     PermissionDenied,
     TransportFailure,
     UnsupportedOperation,
+
+    ProcessLaunchFailed,
+    ProcessTerminationFailed,
 }
 
 pub trait DesktopPlatform {
@@ -84,6 +96,24 @@ pub trait DesktopPlatform {
     fn open_system_settings(&self) -> Result<(), PlatformError>;
 
     fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError>;
+
+    fn launch_application(
+        &mut self,
+        _application: ApplicationId,
+    ) -> Result<ProcessId, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn synchronize_applications(
+        &mut self,
+        _active_processes: &[ProcessId],
+    ) -> Result<(), PlatformError> {
+        Ok(())
+    }
+
+    fn take_exited_processes(&mut self) -> Vec<ProcessId> {
+        Vec::new()
+    }
 
     fn refresh(&mut self) -> Result<bool, PlatformError>;
 }

@@ -1,3 +1,5 @@
+use crate::platform::ProcessId;
+
 use viewkit::prelude::{Point, Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -18,6 +20,8 @@ pub struct DesktopWindow {
     pub minimized: bool,
 
     pub content: WindowContent,
+
+    pub process_id: Option<ProcessId>,
 
     pub interaction: WindowInteraction,
     pub restore_frame: Option<Rect>,
@@ -55,21 +59,14 @@ impl Default for DesktopWindows {
 }
 
 impl DesktopWindows {
-    pub fn open_about(&mut self) -> WindowId {
-        if let Some(id) = self
-            .windows
+    pub fn about_window(&self) -> Option<WindowId> {
+        self.windows
             .iter()
             .find(|window| window.content == WindowContent::About)
             .map(|window| window.id)
-        {
-            if let Some(window) = self.windows.iter_mut().find(|window| window.id == id) {
-                window.minimized = false;
-            }
+    }
 
-            self.focus(id);
-            return id;
-        }
-
+    pub fn open_about(&mut self, process_id: ProcessId) -> WindowId {
         let id = self.allocate_id();
 
         self.windows.push(DesktopWindow {
@@ -83,13 +80,39 @@ impl DesktopWindows {
             minimized: false,
 
             content: WindowContent::About,
+
+            process_id: Some(process_id),
+
             interaction: WindowInteraction::default(),
+
             restore_frame: None,
         });
 
         self.focused = Some(id);
 
         id
+    }
+
+    pub fn process_ids(&self) -> Vec<ProcessId> {
+        self.windows
+            .iter()
+            .filter_map(|window| window.process_id)
+            .collect()
+    }
+
+    pub fn close_process(&mut self, process_id: ProcessId) {
+        let focused_was_removed = self
+            .focused
+            .and_then(|focused| self.windows.iter().find(|window| window.id == focused))
+            .and_then(|window| window.process_id)
+            == Some(process_id);
+
+        self.windows
+            .retain(|window| window.process_id != Some(process_id));
+
+        if focused_was_removed {
+            self.focus_topmost_visible();
+        }
     }
 
     pub fn focus(&mut self, id: WindowId) {
@@ -105,7 +128,13 @@ impl DesktopWindows {
         self.focused = Some(id);
     }
 
-    pub fn close(&mut self, id: WindowId) {
+    pub fn close(&mut self, id: WindowId) -> Option<ProcessId> {
+        let process_id = self
+            .windows
+            .iter()
+            .find(|window| window.id == id)
+            .and_then(|window| window.process_id);
+
         let was_focused = self.focused == Some(id);
 
         self.windows.retain(|window| window.id != id);
@@ -113,6 +142,8 @@ impl DesktopWindows {
         if was_focused {
             self.focus_topmost_visible();
         }
+
+        process_id
     }
 
     fn allocate_id(&mut self) -> WindowId {
@@ -158,6 +189,7 @@ impl DesktopWindows {
     pub fn minimize(&mut self, id: WindowId) {
         if let Some(window) = self.windows.iter_mut().find(|window| window.id == id) {
             window.minimized = true;
+
             window.interaction = WindowInteraction::default();
         }
 
@@ -167,27 +199,21 @@ impl DesktopWindows {
     }
 
     pub fn toggle_maximize(&mut self, id: WindowId, work_area: Rect) {
-        let changed = {
-            let Some(window) = self.windows.iter_mut().find(|window| window.id == id) else {
-                return;
-            };
-
-            if let Some(restore_frame) = window.restore_frame.take() {
-                window.frame = restore_frame;
-            } else {
-                window.restore_frame = Some(window.frame);
-
-                window.frame = work_area;
-            }
-
-            window.interaction = WindowInteraction::default();
-
-            true
+        let Some(window) = self.windows.iter_mut().find(|window| window.id == id) else {
+            return;
         };
 
-        if changed {
-            self.focus(id);
+        if let Some(restore_frame) = window.restore_frame.take() {
+            window.frame = restore_frame;
+        } else {
+            window.restore_frame = Some(window.frame);
+
+            window.frame = work_area;
         }
+
+        window.interaction = WindowInteraction::default();
+
+        self.focus(id);
     }
 
     fn focus_topmost_visible(&mut self) {

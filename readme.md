@@ -1,3 +1,3 @@
 # Binder
 
-Desktop environment for mochiOS.
+Desktop environment / file manager for mochiOS.

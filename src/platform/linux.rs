@@ -1,16 +1,83 @@
+use std::collections::{HashMap, HashSet};
+
+use std::process::{Child, Command, Stdio};
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{ClockState, DesktopPlatform, PlatformError, SystemAction, SystemBarState};
+use super::{
+    ApplicationId, ClockState, DesktopPlatform, PlatformError, ProcessId, SystemAction,
+    SystemBarState,
+};
 
 pub struct LinuxPlatform {
     system_bar: SystemBarState,
+
+    children: HashMap<ProcessId, Child>,
+    exited_processes: Vec<ProcessId>,
 }
 
 impl LinuxPlatform {
     pub fn new() -> Self {
         Self {
             system_bar: read_system_bar_state().unwrap_or_default(),
+
+            children: HashMap::new(),
+            exited_processes: Vec::new(),
         }
+    }
+
+    fn reap_exited_children(&mut self) -> Result<(), PlatformError> {
+        let mut exited = Vec::new();
+
+        for (process_id, child) in &mut self.children {
+            match child.try_wait() {
+                Ok(Some(_status)) => {
+                    exited.push(*process_id);
+                }
+
+                Ok(None) => {}
+
+                Err(_) => {
+                    return Err(PlatformError::TransportFailure);
+                }
+            }
+        }
+
+        for process_id in exited {
+            self.children.remove(&process_id);
+
+            self.exited_processes.push(process_id);
+        }
+
+        Ok(())
+    }
+
+    fn terminate_child(&mut self, process_id: ProcessId) -> Result<(), PlatformError> {
+        let Some(mut child) = self.children.remove(&process_id) else {
+            return Ok(());
+        };
+
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                return Ok(());
+            }
+
+            Ok(None) => {}
+
+            Err(_) => {
+                return Err(PlatformError::ProcessTerminationFailed);
+            }
+        }
+
+        child
+            .kill()
+            .map_err(|_| PlatformError::ProcessTerminationFailed)?;
+
+        child
+            .wait()
+            .map_err(|_| PlatformError::ProcessTerminationFailed)?;
+
+        Ok(())
     }
 }
 
@@ -33,7 +100,58 @@ impl DesktopPlatform for LinuxPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
+    fn launch_application(
+        &mut self,
+        application: ApplicationId,
+    ) -> Result<ProcessId, PlatformError> {
+        let executable = std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
+
+        let role = match application {
+            ApplicationId::About => "--role=about",
+        };
+
+        let child = Command::new(executable)
+            .arg(role)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|_| PlatformError::ProcessLaunchFailed)?;
+
+        let process_id = ProcessId(child.id());
+
+        self.children.insert(process_id, child);
+
+        Ok(process_id)
+    }
+
+    fn synchronize_applications(
+        &mut self,
+        active_processes: &[ProcessId],
+    ) -> Result<(), PlatformError> {
+        let active: HashSet<ProcessId> = active_processes.iter().copied().collect();
+
+        let stale_processes: Vec<ProcessId> = self
+            .children
+            .keys()
+            .copied()
+            .filter(|process_id| !active.contains(process_id))
+            .collect();
+
+        for process_id in stale_processes {
+            self.terminate_child(process_id)?;
+        }
+
+        Ok(())
+    }
+
+    fn take_exited_processes(&mut self) -> Vec<ProcessId> {
+        std::mem::take(&mut self.exited_processes)
+    }
+
     fn refresh(&mut self) -> Result<bool, PlatformError> {
+        self.reap_exited_children()?;
+
         let next = read_system_bar_state()?;
 
         let changed = next != self.system_bar;
@@ -46,9 +164,19 @@ impl DesktopPlatform for LinuxPlatform {
     }
 }
 
+impl Drop for LinuxPlatform {
+    fn drop(&mut self) {
+        for (_, mut child) in self.children.drain() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 fn read_system_bar_state() -> Result<SystemBarState, PlatformError> {
     Ok(SystemBarState {
         clock: read_clock()?,
+
         ..SystemBarState::default()
     })
 }
