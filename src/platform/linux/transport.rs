@@ -339,6 +339,10 @@ pub(super) fn run_application_process(application: ApplicationId) -> Result<(), 
 
     let mut created_window = None;
 
+    let mut _window_size = None;
+
+    let mut _focused = false;
+
     loop {
         let mut buffer = [0_u8; 1024];
 
@@ -384,6 +388,26 @@ pub(super) fn run_application_process(application: ApplicationId) -> Result<(), 
                         .map_err(|_| PlatformError::TransportFailure)?;
 
                     return Ok(());
+                }
+
+                ServerEvent::Resized {
+                    window,
+                    width,
+                    height,
+                } => {
+                    if created_window != Some(window) {
+                        continue;
+                    }
+
+                    _window_size = Some((width, height));
+                }
+
+                ServerEvent::FocusChanged { window, focused } => {
+                    if created_window != Some(window) {
+                        continue;
+                    }
+
+                    _focused = focused;
                 }
             }
         }

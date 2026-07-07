@@ -10,7 +10,7 @@ use crate::ipc::{ApplicationId, ClientRequest, RemoteWindowId, ServerEvent};
 
 use super::{
     ClockState, CloseWindowRequest, CreateWindowRequest, DesktopPlatform, PlatformError, ProcessId,
-    SystemAction, SystemBarState,
+    SystemAction, SystemBarState, WindowFocusChangedNotification, WindowResizedNotification,
 };
 
 use transport::{BINDER_SOCKET_ENV, LinuxIpcServer, TransportEvent};
@@ -413,6 +413,58 @@ impl DesktopPlatform for LinuxPlatform {
         }
 
         Ok(changed)
+    }
+
+    fn notify_window_resized(
+        &mut self,
+        notification: WindowResizedNotification,
+    ) -> Result<(), PlatformError> {
+        {
+            let child = self
+                .children
+                .get(&notification.process_id)
+                .ok_or(PlatformError::ServiceUnavailable)?;
+
+            if !child.windows.contains(&notification.window) {
+                return Err(PlatformError::PermissionDenied);
+            }
+        }
+
+        self.transport.send_event(
+            notification.process_id,
+            ServerEvent::Resized {
+                window: notification.window,
+
+                width: notification.width,
+
+                height: notification.height,
+            },
+        )
+    }
+
+    fn notify_window_focus_changed(
+        &mut self,
+        notification: WindowFocusChangedNotification,
+    ) -> Result<(), PlatformError> {
+        {
+            let child = self
+                .children
+                .get(&notification.process_id)
+                .ok_or(PlatformError::ServiceUnavailable)?;
+
+            if !child.windows.contains(&notification.window) {
+                return Err(PlatformError::PermissionDenied);
+            }
+        }
+
+        self.transport.send_event(
+            notification.process_id,
+            ServerEvent::FocusChanged {
+                window: notification.window,
+
+                focused: notification.focused,
+            },
+        )
     }
 }
 

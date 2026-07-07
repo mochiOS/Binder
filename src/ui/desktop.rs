@@ -89,23 +89,30 @@ impl View for PlatformRefreshView {
     fn paint(&self, _bounds: Rect, context: &mut PaintContext<'_>) {
         context.request_redraw_at(Instant::now() + PLATFORM_REFRESH_INTERVAL);
 
-        let has_close_requests = {
+        let needs_notifications = {
             let desktop = self.windows.get();
 
-            desktop.has_pending_close_requests()
+            desktop.has_pending_platform_notifications()
         };
 
-        let pending_close_requests = if has_close_requests {
-            let mut requests = Vec::new();
+        let (pending_close_requests, resized_notifications, focus_notifications) =
+            if needs_notifications {
+                let mut close_requests = Vec::new();
 
-            self.windows.update(|desktop| {
-                requests = desktop.take_pending_close_requests();
-            });
+                let mut resized = Vec::new();
 
-            requests
-        } else {
-            Vec::new()
-        };
+                let mut focus_changed = Vec::new();
+
+                self.windows.update(|desktop| {
+                    close_requests = desktop.take_pending_close_requests();
+
+                    (resized, focus_changed) = desktop.take_window_state_notifications();
+                });
+
+                (close_requests, resized, focus_changed)
+            } else {
+                (Vec::new(), Vec::new(), Vec::new())
+            };
 
         let active_processes = {
             let desktop = self.windows.get();
@@ -134,25 +141,39 @@ impl View for PlatformRefreshView {
                 }
             }
 
+            for notification in resized_notifications {
+                if let Err(error) = platform.notify_window_resized(notification) {
+                    eprintln!("failed to notify window resize: {error:?}",);
+                }
+            }
+
+            for notification in focus_notifications {
+                if let Err(error) = platform.notify_window_focus_changed(notification) {
+                    eprintln!("failed to notify window focus: {error:?}",);
+                }
+            }
+
             if let Err(error) = platform.synchronize_applications(&active_processes) {
                 eprintln!("failed to synchronize applications: {error:?}",);
             }
 
-            let system_bar_changed = match platform.refresh() {
-                Ok(changed) => changed,
+            let system_bar_changed = platform.refresh().unwrap_or_else(|error| {
+                eprintln!("failed to refresh platform: {error:?}",);
 
-                Err(error) => {
-                    eprintln!("failed to refresh platform: {error:?}",);
+                false
+            });
 
-                    false
-                }
-            };
+            let create_requests = platform.take_create_window_requests();
+
+            let close_requests = platform.take_close_window_requests();
+
+            let exited_processes = platform.take_exited_processes();
 
             (
                 system_bar_changed,
-                platform.take_create_window_requests(),
-                platform.take_close_window_requests(),
-                platform.take_exited_processes(),
+                create_requests,
+                close_requests,
+                exited_processes,
                 failed_close_requests,
             )
         };

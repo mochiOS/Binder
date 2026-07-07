@@ -11,6 +11,8 @@ const CLIENT_CLOSE_WINDOW: u8 = 2;
 
 const SERVER_WINDOW_CREATED: u8 = 129;
 const SERVER_CLOSE_REQUESTED: u8 = 130;
+const SERVER_RESIZED: u8 = 131;
+const SERVER_FOCUS_CHANGED: u8 = 132;
 
 const APPLICATION_ABOUT: u8 = 1;
 
@@ -39,9 +41,24 @@ pub enum ClientRequest {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServerEvent {
-    WindowCreated { window: RemoteWindowId },
+    WindowCreated {
+        window: RemoteWindowId,
+    },
 
-    CloseRequested { window: RemoteWindowId },
+    CloseRequested {
+        window: RemoteWindowId,
+    },
+
+    Resized {
+        window: RemoteWindowId,
+        width: u32,
+        height: u32,
+    },
+
+    FocusChanged {
+        window: RemoteWindowId,
+        focused: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +123,34 @@ pub fn encode_server_event(event: &ServerEvent) -> Result<Vec<u8>, ProtocolError
         ServerEvent::CloseRequested { window } => {
             encode_frame(SERVER_CLOSE_REQUESTED, &window.0.to_le_bytes())
         }
+
+        ServerEvent::Resized {
+            window,
+            width,
+            height,
+        } => {
+            validate_window_size(*width, *height)?;
+
+            let mut payload = Vec::with_capacity(16);
+
+            payload.extend_from_slice(&window.0.to_le_bytes());
+
+            payload.extend_from_slice(&width.to_le_bytes());
+
+            payload.extend_from_slice(&height.to_le_bytes());
+
+            encode_frame(SERVER_RESIZED, &payload)
+        }
+
+        ServerEvent::FocusChanged { window, focused } => {
+            let mut payload = Vec::with_capacity(9);
+
+            payload.extend_from_slice(&window.0.to_le_bytes());
+
+            payload.push(u8::from(*focused));
+
+            encode_frame(SERVER_FOCUS_CHANGED, &payload)
+        }
     }
 }
 
@@ -142,16 +187,65 @@ pub fn try_decode_server_event(buffer: &mut Vec<u8>) -> Result<Option<ServerEven
         return Ok(None);
     };
 
-    let mut reader = PayloadReader::new(&payload);
-
-    let window = RemoteWindowId(reader.read_u64()?);
-
-    reader.finish()?;
-
     let event = match kind {
-        SERVER_WINDOW_CREATED => ServerEvent::WindowCreated { window },
+        SERVER_WINDOW_CREATED => {
+            let mut reader = PayloadReader::new(&payload);
 
-        SERVER_CLOSE_REQUESTED => ServerEvent::CloseRequested { window },
+            let window = RemoteWindowId(reader.read_u64()?);
+
+            reader.finish()?;
+
+            ServerEvent::WindowCreated { window }
+        }
+
+        SERVER_CLOSE_REQUESTED => {
+            let mut reader = PayloadReader::new(&payload);
+
+            let window = RemoteWindowId(reader.read_u64()?);
+
+            reader.finish()?;
+
+            ServerEvent::CloseRequested { window }
+        }
+
+        SERVER_RESIZED => {
+            let mut reader = PayloadReader::new(&payload);
+
+            let window = RemoteWindowId(reader.read_u64()?);
+
+            let width = reader.read_u32()?;
+
+            let height = reader.read_u32()?;
+
+            validate_window_size(width, height)?;
+
+            reader.finish()?;
+
+            ServerEvent::Resized {
+                window,
+                width,
+                height,
+            }
+        }
+
+        SERVER_FOCUS_CHANGED => {
+            let mut reader = PayloadReader::new(&payload);
+
+            let window = RemoteWindowId(reader.read_u64()?);
+
+            let focused = match reader.read_u8()? {
+                0 => false,
+                1 => true,
+
+                _ => {
+                    return Err(ProtocolError::InvalidPayload);
+                }
+            };
+
+            reader.finish()?;
+
+            ServerEvent::FocusChanged { window, focused }
+        }
 
         _ => {
             return Err(ProtocolError::InvalidMessage);
@@ -230,7 +324,7 @@ fn take_frame(buffer: &mut Vec<u8>) -> Result<Option<(u8, Vec<u8>)>, ProtocolErr
         return Ok(None);
     }
 
-    if buffer[0..4] != PROTOCOL_MAGIC {
+    if buffer.get(0..4) != Some(PROTOCOL_MAGIC.as_slice()) {
         return Err(ProtocolError::InvalidMagic);
     }
 

@@ -30,6 +30,21 @@ pub struct CloseWindowRequest {
     pub window: RemoteWindowId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowResizedNotification {
+    pub process_id: ProcessId,
+    pub window: RemoteWindowId,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowFocusChangedNotification {
+    pub process_id: ProcessId,
+    pub window: RemoteWindowId,
+    pub focused: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClockState {
     pub date: String,
@@ -128,6 +143,20 @@ pub trait DesktopPlatform {
         &mut self,
         _process_id: ProcessId,
         _window: RemoteWindowId,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn notify_window_resized(
+        &mut self,
+        _notification: WindowResizedNotification,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn notify_window_focus_changed(
+        &mut self,
+        _notification: WindowFocusChangedNotification,
     ) -> Result<(), PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }

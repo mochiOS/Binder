@@ -1,4 +1,8 @@
-use crate::platform::{CloseWindowRequest, ProcessId, RemoteWindowId};
+use crate::platform::{
+    CloseWindowRequest, ProcessId, RemoteWindowId, WindowFocusChangedNotification,
+    WindowResizedNotification,
+};
+use std::collections::{HashMap, HashSet};
 
 use viewkit::prelude::{Point, Rect};
 
@@ -48,12 +52,11 @@ pub struct WindowInteraction {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DesktopWindows {
     pub windows: Vec<DesktopWindow>,
-
     pub focused: Option<WindowId>,
-
     next_id: u64,
-
     pending_close_requests: Vec<CloseWindowRequest>,
+    reported_sizes: HashMap<(ProcessId, RemoteWindowId), (u32, u32)>,
+    reported_focus: HashMap<(ProcessId, RemoteWindowId), bool>,
 }
 
 impl Default for DesktopWindows {
@@ -62,8 +65,9 @@ impl Default for DesktopWindows {
             windows: Vec::new(),
             focused: None,
             next_id: 1,
-
             pending_close_requests: Vec::new(),
+            reported_sizes: HashMap::new(),
+            reported_focus: HashMap::new(),
         }
     }
 }
@@ -238,6 +242,73 @@ impl DesktopWindows {
         self.remove_window(id);
     }
 
+    pub fn take_window_state_notifications(
+        &mut self,
+    ) -> (
+        Vec<WindowResizedNotification>,
+        Vec<WindowFocusChangedNotification>,
+    ) {
+        let snapshots: Vec<(ProcessId, RemoteWindowId, u32, u32, bool)> = self
+            .windows
+            .iter()
+            .filter_map(|window| {
+                let process_id = window.process_id?;
+
+                let remote_window = window.remote_window?;
+
+                let width = window.frame.size.width.round().clamp(1.0, 16_384.0) as u32;
+
+                let height = window.frame.size.height.round().clamp(1.0, 16_384.0) as u32;
+
+                let focused = self.focused == Some(window.id);
+
+                Some((process_id, remote_window, width, height, focused))
+            })
+            .collect();
+
+        let active_windows: HashSet<(ProcessId, RemoteWindowId)> = snapshots
+            .iter()
+            .map(|(process_id, remote_window, _, _, _)| (*process_id, *remote_window))
+            .collect();
+
+        let mut resized = Vec::new();
+
+        let mut focus_changed = Vec::new();
+
+        for (process_id, remote_window, width, height, focused) in snapshots {
+            let key = (process_id, remote_window);
+
+            let previous_size = self.reported_sizes.insert(key, (width, height));
+
+            if previous_size != Some((width, height)) {
+                resized.push(WindowResizedNotification {
+                    process_id,
+                    window: remote_window,
+                    width,
+                    height,
+                });
+            }
+
+            let previous_focus = self.reported_focus.insert(key, focused);
+
+            if previous_focus != Some(focused) {
+                focus_changed.push(WindowFocusChangedNotification {
+                    process_id,
+                    window: remote_window,
+                    focused,
+                });
+            }
+        }
+
+        self.reported_sizes
+            .retain(|key, _| active_windows.contains(key));
+
+        self.reported_focus
+            .retain(|key, _| active_windows.contains(key));
+
+        (resized, focus_changed)
+    }
+
     fn remove_window(&mut self, id: WindowId) {
         let was_focused = self.focused == Some(id);
 
@@ -316,6 +387,53 @@ impl DesktopWindows {
         window.interaction = WindowInteraction::default();
 
         self.focus(id);
+    }
+
+    pub fn has_pending_platform_notifications(&self) -> bool {
+        if !self.pending_close_requests.is_empty() {
+            return true;
+        }
+
+        let mut active_windows = HashSet::new();
+
+        for window in &self.windows {
+            let (Some(process_id), Some(remote_window)) = (window.process_id, window.remote_window)
+            else {
+                continue;
+            };
+
+            let key = (process_id, remote_window);
+
+            active_windows.insert(key);
+
+            let width = window.frame.size.width.round().clamp(1.0, 16_384.0) as u32;
+
+            let height = window.frame.size.height.round().clamp(1.0, 16_384.0) as u32;
+
+            let size = (width, height);
+
+            if self.reported_sizes.get(&key).copied() != Some(size) {
+                return true;
+            }
+
+            let focused = self.focused == Some(window.id);
+
+            if self.reported_focus.get(&key).copied() != Some(focused) {
+                return true;
+            }
+        }
+
+        if self
+            .reported_sizes
+            .keys()
+            .any(|key| !active_windows.contains(key))
+        {
+            return true;
+        }
+
+        self.reported_focus
+            .keys()
+            .any(|key| !active_windows.contains(key))
     }
 
     fn focus_topmost_visible(&mut self) {
