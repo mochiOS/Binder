@@ -1,18 +1,25 @@
 mod desktop;
+mod ipc;
 mod platform;
 mod ui;
 mod window;
 
 use desktop::BinderApp;
+use platform::ApplicationId;
 use std::ffi::OsStr;
-use viewkit::prelude::ViewKitError;
+
+use viewkit::prelude::{ViewKitError, run};
 
 fn run_desktop() -> Result<(), ViewKitError> {
-    viewkit::prelude::run::<BinderApp>()
+    run::<BinderApp>()
 }
 
 fn run_about_process() -> ! {
-    eprintln!("Binder About process started: pid={}", std::process::id(),);
+    if let Err(error) = crate::ipc::send_create_window(ApplicationId::About) {
+        eprintln!("failed to request About window: {error:?}",);
+
+        std::process::exit(1);
+    }
 
     loop {
         std::thread::park();

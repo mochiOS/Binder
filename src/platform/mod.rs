@@ -12,9 +12,15 @@ pub use mochios::MochiOsPlatform;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProcessId(pub u32);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplicationId {
     About,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CreateWindowRequest {
+    pub process_id: ProcessId,
+    pub application: ApplicationId,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -109,6 +115,10 @@ pub trait DesktopPlatform {
         _active_processes: &[ProcessId],
     ) -> Result<(), PlatformError> {
         Ok(())
+    }
+
+    fn take_create_window_requests(&mut self) -> Vec<CreateWindowRequest> {
+        Vec::new()
     }
 
     fn take_exited_processes(&mut self) -> Vec<ProcessId> {

@@ -1,16 +1,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use std::time::{Duration, Instant};
-
 use super::top_bar;
-
 use crate::desktop::WindowResize;
-
-use crate::platform::{DesktopPlatform, SystemBarState};
-
+use crate::platform::{ApplicationId, DesktopPlatform, SystemBarState};
 use crate::window::{DesktopWindows, WindowDrag};
-
+use std::time::{Duration, Instant};
 use viewkit::{prelude::*, view::PaintContext};
 
 const DESKTOP_BACKGROUND: Color = Color::rgba(200, 200, 200, 255);
@@ -93,22 +88,36 @@ impl View for PlatformRefreshView {
             desktop.process_ids()
         };
 
-        let (system_bar_changed, exited_processes) = {
+        let (system_bar_changed, create_window_requests, exited_processes) = {
             let mut platform = self.platform.borrow_mut();
 
             if let Err(error) = platform.synchronize_applications(&active_processes) {
                 eprintln!("failed to synchronize applications: {error:?}",);
             }
 
-            let changed = platform.refresh().unwrap_or(false);
+            let system_bar_changed = platform.refresh().unwrap_or_else(|error| {
+                eprintln!("failed to refresh platform: {error:?}",);
 
-            let exited = platform.take_exited_processes();
+                false
+            });
 
-            (changed, exited)
+            let create_window_requests = platform.take_create_window_requests();
+
+            let exited_processes = platform.take_exited_processes();
+
+            (system_bar_changed, create_window_requests, exited_processes)
         };
 
-        if !exited_processes.is_empty() {
+        if !create_window_requests.is_empty() || !exited_processes.is_empty() {
             self.windows.update(|desktop| {
+                for request in create_window_requests {
+                    match request.application {
+                        ApplicationId::About => {
+                            desktop.open_about(request.process_id);
+                        }
+                    }
+                }
+
                 for process_id in exited_processes {
                     desktop.close_process(process_id);
                 }

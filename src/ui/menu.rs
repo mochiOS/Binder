@@ -66,25 +66,13 @@ pub(crate) fn view(
                 return;
             }
 
-            let process_id = {
-                let mut platform = about_platform.borrow_mut();
+            let result = about_platform
+                .borrow_mut()
+                .launch_application(ApplicationId::About);
 
-                platform.launch_application(ApplicationId::About)
-            };
-
-            let process_id = match process_id {
-                Ok(process_id) => process_id,
-
-                Err(error) => {
-                    eprintln!("failed to launch About: {error:?}",);
-
-                    return;
-                }
-            };
-
-            windows_for_about.update(|desktop| {
-                desktop.open_about(process_id);
-            });
+            if let Err(error) = result {
+                eprintln!("failed to launch About: {error:?}",);
+            }
         }))
         .item(MenuItem::new("Settings").on_select(move || {
             settings_menu_open.set(false);

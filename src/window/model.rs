@@ -67,6 +67,25 @@ impl DesktopWindows {
     }
 
     pub fn open_about(&mut self, process_id: ProcessId) -> WindowId {
+        if let Some(id) = self
+            .windows
+            .iter()
+            .find(|window| window.content == WindowContent::About)
+            .map(|window| window.id)
+        {
+            if let Some(window) = self.windows.iter_mut().find(|window| window.id == id) {
+                window.minimized = false;
+
+                if window.process_id.is_none() {
+                    window.process_id = Some(process_id);
+                }
+            }
+
+            self.focus(id);
+
+            return id;
+        }
+
         let id = self.allocate_id();
 
         self.windows.push(DesktopWindow {
