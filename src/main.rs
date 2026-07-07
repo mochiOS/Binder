@@ -4,9 +4,11 @@ mod platform;
 mod ui;
 mod window;
 
-use desktop::BinderApp;
-use platform::ApplicationId;
 use std::ffi::OsStr;
+
+use desktop::BinderApp;
+
+use platform::ApplicationId;
 
 use viewkit::prelude::{ViewKitError, run};
 
@@ -14,24 +16,18 @@ fn run_desktop() -> Result<(), ViewKitError> {
     run::<BinderApp>()
 }
 
-fn run_about_process() -> ! {
-    if let Err(error) = crate::ipc::send_create_window(ApplicationId::About) {
-        eprintln!("failed to request About window: {error:?}",);
-
-        std::process::exit(1);
-    }
-
-    loop {
-        std::thread::park();
-    }
-}
-
 fn run_process_role(role: &OsStr) -> Result<(), ViewKitError> {
-    if role == OsStr::new("--role=about") {
-        run_about_process();
-    }
+    let application = if role == OsStr::new("--role=about") {
+        ApplicationId::About
+    } else {
+        eprintln!("unknown Binder role: {:?}", role,);
 
-    eprintln!("unknown Binder process argument: {:?}", role,);
+        return Ok(());
+    };
+
+    if let Err(error) = platform::run_application_process(application) {
+        eprintln!("Binder child process failed: {error:?}",);
+    }
 
     Ok(())
 }
@@ -41,15 +37,15 @@ fn main() -> Result<(), ViewKitError> {
 
     let _executable = arguments.next();
 
-    let Some(first_argument) = arguments.next() else {
+    let Some(role) = arguments.next() else {
         return run_desktop();
     };
 
-    if let Some(unexpected_argument) = arguments.next() {
-        eprintln!("unexpected Binder argument: {:?}", unexpected_argument,);
+    if let Some(argument) = arguments.next() {
+        eprintln!("unexpected Binder argument: {:?}", argument,);
 
         return Ok(());
     }
 
-    run_process_role(&first_argument)
+    run_process_role(&role)
 }

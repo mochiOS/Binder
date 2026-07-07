@@ -6,21 +6,28 @@ mod mochios;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+pub use crate::ipc::{ApplicationId, RemoteWindowId};
+
 #[cfg(not(target_os = "linux"))]
 pub use mochios::MochiOsPlatform;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProcessId(pub u32);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ApplicationId {
-    About,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreateWindowRequest {
     pub process_id: ProcessId,
     pub application: ApplicationId,
+    pub title: String,
+    pub width: u32,
+    pub height: u32,
+    pub resizable: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CloseWindowRequest {
+    pub process_id: ProcessId,
+    pub window: RemoteWindowId,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -91,7 +98,6 @@ pub enum PlatformError {
     PermissionDenied,
     TransportFailure,
     UnsupportedOperation,
-
     ProcessLaunchFailed,
     ProcessTerminationFailed,
 }
@@ -110,6 +116,22 @@ pub trait DesktopPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
+    fn register_window(
+        &mut self,
+        _process_id: ProcessId,
+        _window: RemoteWindowId,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn request_window_close(
+        &mut self,
+        _process_id: ProcessId,
+        _window: RemoteWindowId,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
     fn synchronize_applications(
         &mut self,
         _active_processes: &[ProcessId],
@@ -118,6 +140,10 @@ pub trait DesktopPlatform {
     }
 
     fn take_create_window_requests(&mut self) -> Vec<CreateWindowRequest> {
+        Vec::new()
+    }
+
+    fn take_close_window_requests(&mut self) -> Vec<CloseWindowRequest> {
         Vec::new()
     }
 
@@ -137,5 +163,17 @@ pub fn current() -> Rc<RefCell<dyn DesktopPlatform>> {
     #[cfg(not(target_os = "linux"))]
     {
         Rc::new(RefCell::new(mochios::MochiOsPlatform::new()))
+    }
+}
+
+pub fn run_application_process(application: ApplicationId) -> Result<(), PlatformError> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::run_application_process(application)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        mochios::run_application_process(application)
     }
 }

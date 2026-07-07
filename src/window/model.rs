@@ -1,4 +1,4 @@
-use crate::platform::ProcessId;
+use crate::platform::{CloseWindowRequest, ProcessId, RemoteWindowId};
 
 use viewkit::prelude::{Point, Rect};
 
@@ -18,12 +18,16 @@ pub struct DesktopWindow {
 
     pub resizable: bool,
     pub minimized: bool,
+    pub close_requested: bool,
 
     pub content: WindowContent,
 
     pub process_id: Option<ProcessId>,
 
+    pub remote_window: Option<RemoteWindowId>,
+
     pub interaction: WindowInteraction,
+
     pub restore_frame: Option<Rect>,
 }
 
@@ -37,15 +41,19 @@ pub enum WindowControl {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WindowInteraction {
     pub hovered: Option<WindowControl>,
+
     pub pressed: Option<WindowControl>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DesktopWindows {
     pub windows: Vec<DesktopWindow>,
+
     pub focused: Option<WindowId>,
 
     next_id: u64,
+
+    pending_close_requests: Vec<CloseWindowRequest>,
 }
 
 impl Default for DesktopWindows {
@@ -54,6 +62,8 @@ impl Default for DesktopWindows {
             windows: Vec::new(),
             focused: None,
             next_id: 1,
+
+            pending_close_requests: Vec::new(),
         }
     }
 }
@@ -66,41 +76,53 @@ impl DesktopWindows {
             .map(|window| window.id)
     }
 
-    pub fn open_about(&mut self, process_id: ProcessId) -> WindowId {
-        if let Some(id) = self
+    pub fn open_about(
+        &mut self,
+        process_id: ProcessId,
+        title: String,
+        width: u32,
+        height: u32,
+        resizable: bool,
+    ) -> (WindowId, RemoteWindowId) {
+        if let Some((id, remote_window)) = self
             .windows
             .iter()
             .find(|window| window.content == WindowContent::About)
-            .map(|window| window.id)
+            .map(|window| {
+                (
+                    window.id,
+                    window.remote_window.unwrap_or(RemoteWindowId(window.id.0)),
+                )
+            })
         {
             if let Some(window) = self.windows.iter_mut().find(|window| window.id == id) {
                 window.minimized = false;
-
-                if window.process_id.is_none() {
-                    window.process_id = Some(process_id);
-                }
             }
 
             self.focus(id);
 
-            return id;
+            return (id, remote_window);
         }
 
         let id = self.allocate_id();
 
+        let remote_window = RemoteWindowId(id.0);
+
         self.windows.push(DesktopWindow {
             id,
+            title,
 
-            title: String::from("About mochiOS"),
+            frame: Rect::new(430.0, 190.0, width as f32, height as f32),
 
-            frame: Rect::new(430.0, 190.0, 420.0, 300.0),
-
-            resizable: true,
+            resizable,
             minimized: false,
+            close_requested: false,
 
             content: WindowContent::About,
 
             process_id: Some(process_id),
+
+            remote_window: Some(remote_window),
 
             interaction: WindowInteraction::default(),
 
@@ -109,7 +131,7 @@ impl DesktopWindows {
 
         self.focused = Some(id);
 
-        id
+        (id, remote_window)
     }
 
     pub fn process_ids(&self) -> Vec<ProcessId> {
@@ -119,15 +141,48 @@ impl DesktopWindows {
             .collect()
     }
 
+    pub fn has_pending_close_requests(&self) -> bool {
+        !self.pending_close_requests.is_empty()
+    }
+
+    pub fn take_pending_close_requests(&mut self) -> Vec<CloseWindowRequest> {
+        std::mem::take(&mut self.pending_close_requests)
+    }
+
+    pub fn cancel_close_request(&mut self, process_id: ProcessId, remote_window: RemoteWindowId) {
+        if let Some(window) = self.windows.iter_mut().find(|window| {
+            window.process_id == Some(process_id) && window.remote_window == Some(remote_window)
+        }) {
+            window.close_requested = false;
+        }
+    }
+
+    pub fn close_remote(&mut self, process_id: ProcessId, remote_window: RemoteWindowId) {
+        let window_id = self
+            .windows
+            .iter()
+            .find(|window| {
+                window.process_id == Some(process_id) && window.remote_window == Some(remote_window)
+            })
+            .map(|window| window.id);
+
+        if let Some(window_id) = window_id {
+            self.remove_window(window_id);
+        }
+    }
+
     pub fn close_process(&mut self, process_id: ProcessId) {
-        let focused_was_removed = self
-            .focused
-            .and_then(|focused| self.windows.iter().find(|window| window.id == focused))
-            .and_then(|window| window.process_id)
-            == Some(process_id);
+        let focused_was_removed = self.focused.is_some_and(|focused| {
+            self.windows
+                .iter()
+                .any(|window| window.id == focused && window.process_id == Some(process_id))
+        });
 
         self.windows
             .retain(|window| window.process_id != Some(process_id));
+
+        self.pending_close_requests
+            .retain(|request| request.process_id != process_id);
 
         if focused_was_removed {
             self.focus_topmost_visible();
@@ -144,16 +199,46 @@ impl DesktopWindows {
         window.minimized = false;
 
         self.windows.push(window);
+
         self.focused = Some(id);
     }
 
-    pub fn close(&mut self, id: WindowId) -> Option<ProcessId> {
-        let process_id = self
-            .windows
-            .iter()
-            .find(|window| window.id == id)
-            .and_then(|window| window.process_id);
+    pub fn close(&mut self, id: WindowId) {
+        let mut is_remote = false;
 
+        let mut request = None;
+
+        if let Some(window) = self.windows.iter_mut().find(|window| window.id == id) {
+            if let (Some(process_id), Some(remote_window)) =
+                (window.process_id, window.remote_window)
+            {
+                is_remote = true;
+
+                if !window.close_requested {
+                    window.close_requested = true;
+
+                    window.interaction = WindowInteraction::default();
+
+                    request = Some(CloseWindowRequest {
+                        process_id,
+                        window: remote_window,
+                    });
+                }
+            }
+        }
+
+        if is_remote {
+            if let Some(request) = request {
+                self.pending_close_requests.push(request);
+            }
+
+            return;
+        }
+
+        self.remove_window(id);
+    }
+
+    fn remove_window(&mut self, id: WindowId) {
         let was_focused = self.focused == Some(id);
 
         self.windows.retain(|window| window.id != id);
@@ -161,8 +246,6 @@ impl DesktopWindows {
         if was_focused {
             self.focus_topmost_visible();
         }
-
-        process_id
     }
 
     fn allocate_id(&mut self) -> WindowId {
@@ -248,7 +331,6 @@ impl DesktopWindows {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WindowDrag {
     pub window: WindowId,
-
     pub pointer_origin: Point,
     pub window_origin: Point,
 }

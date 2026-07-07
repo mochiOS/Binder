@@ -1,14 +1,20 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::top_bar;
-use crate::desktop::WindowResize;
-use crate::platform::{ApplicationId, DesktopPlatform, SystemBarState};
-use crate::window::{DesktopWindows, WindowDrag};
 use std::time::{Duration, Instant};
+
+use super::top_bar;
+
+use crate::desktop::WindowResize;
+
+use crate::platform::{ApplicationId, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState};
+
+use crate::window::{DesktopWindows, WindowDrag};
+
 use viewkit::{prelude::*, view::PaintContext};
 
 const DESKTOP_BACKGROUND: Color = Color::rgba(200, 200, 200, 255);
+
 const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn view(
@@ -17,6 +23,7 @@ pub(crate) fn view(
     platform: Rc<RefCell<dyn DesktopPlatform>>,
 
     menu_open: State<bool>,
+
     windows: State<DesktopWindows>,
 
     window_drag: State<Option<WindowDrag>>,
@@ -82,43 +89,130 @@ impl View for PlatformRefreshView {
     fn paint(&self, _bounds: Rect, context: &mut PaintContext<'_>) {
         context.request_redraw_at(Instant::now() + PLATFORM_REFRESH_INTERVAL);
 
+        let has_close_requests = {
+            let desktop = self.windows.get();
+
+            desktop.has_pending_close_requests()
+        };
+
+        let pending_close_requests = if has_close_requests {
+            let mut requests = Vec::new();
+
+            self.windows.update(|desktop| {
+                requests = desktop.take_pending_close_requests();
+            });
+
+            requests
+        } else {
+            Vec::new()
+        };
+
         let active_processes = {
             let desktop = self.windows.get();
 
             desktop.process_ids()
         };
 
-        let (system_bar_changed, create_window_requests, exited_processes) = {
+        let (
+            system_bar_changed,
+            create_requests,
+            close_requests,
+            exited_processes,
+            failed_close_requests,
+        ) = {
             let mut platform = self.platform.borrow_mut();
+
+            let mut failed_close_requests = Vec::new();
+
+            for request in pending_close_requests {
+                if let Err(error) =
+                    platform.request_window_close(request.process_id, request.window)
+                {
+                    eprintln!("failed to request window close: {error:?}",);
+
+                    failed_close_requests.push(request);
+                }
+            }
 
             if let Err(error) = platform.synchronize_applications(&active_processes) {
                 eprintln!("failed to synchronize applications: {error:?}",);
             }
 
-            let system_bar_changed = platform.refresh().unwrap_or_else(|error| {
-                eprintln!("failed to refresh platform: {error:?}",);
+            let system_bar_changed = match platform.refresh() {
+                Ok(changed) => changed,
 
-                false
-            });
+                Err(error) => {
+                    eprintln!("failed to refresh platform: {error:?}",);
 
-            let create_window_requests = platform.take_create_window_requests();
+                    false
+                }
+            };
 
-            let exited_processes = platform.take_exited_processes();
-
-            (system_bar_changed, create_window_requests, exited_processes)
+            (
+                system_bar_changed,
+                platform.take_create_window_requests(),
+                platform.take_close_window_requests(),
+                platform.take_exited_processes(),
+                failed_close_requests,
+            )
         };
 
-        if !create_window_requests.is_empty() || !exited_processes.is_empty() {
+        let has_window_changes = !create_requests.is_empty()
+            || !close_requests.is_empty()
+            || !exited_processes.is_empty()
+            || !failed_close_requests.is_empty();
+
+        let mut registrations: Vec<(ProcessId, RemoteWindowId)> = Vec::new();
+
+        if has_window_changes {
             self.windows.update(|desktop| {
-                for request in create_window_requests {
+                for request in create_requests {
                     match request.application {
                         ApplicationId::About => {
-                            desktop.open_about(request.process_id);
+                            let (_window_id, remote_window) = desktop.open_about(
+                                request.process_id,
+                                request.title,
+                                request.width,
+                                request.height,
+                                request.resizable,
+                            );
+
+                            registrations.push((request.process_id, remote_window));
                         }
                     }
                 }
 
+                for request in close_requests {
+                    desktop.close_remote(request.process_id, request.window);
+                }
+
                 for process_id in exited_processes {
+                    desktop.close_process(process_id);
+                }
+
+                for request in failed_close_requests {
+                    desktop.cancel_close_request(request.process_id, request.window);
+                }
+            });
+        }
+
+        let mut failed_registrations = Vec::new();
+
+        if !registrations.is_empty() {
+            let mut platform = self.platform.borrow_mut();
+
+            for (process_id, remote_window) in registrations {
+                if let Err(error) = platform.register_window(process_id, remote_window) {
+                    eprintln!("failed to register window: {error:?}",);
+
+                    failed_registrations.push(process_id);
+                }
+            }
+        }
+
+        if !failed_registrations.is_empty() {
+            self.windows.update(|desktop| {
+                for process_id in failed_registrations {
                     desktop.close_process(process_id);
                 }
             });
