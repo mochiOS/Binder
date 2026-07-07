@@ -2,5 +2,10 @@
 name = "binder_protocol"
 version = "0.1.0"
 edition = "2024"
+authors = ["tas0dev <github@tas0dev>"]
+license = "Apache-2.0"
+description = "Binder IPC protocol definitions for mochiOS."
+keywords = ["binder", "ipc", "mochios", "gui", "ui"]
+categories = ["gui", "os"]
 
 [dependencies]
