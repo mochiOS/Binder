@@ -215,6 +215,10 @@ pub trait DesktopPlatform {
     fn launch_app(&mut self, _app: &AppInfo) -> Result<ProcessId, PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }
+
+    fn running_app_bundle_ids(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 pub fn current() -> Rc<RefCell<dyn DesktopPlatform>> {

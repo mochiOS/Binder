@@ -32,8 +32,12 @@ pub(crate) fn view(
     dock_pointer: State<Option<Point>>,
     dock_running_apps: State<Vec<String>>,
 ) -> Box<dyn View + 'static> {
-    let refresh_driver =
-        PlatformRefreshView::new(Rc::clone(&platform), system_bar.clone(), windows.clone());
+    let refresh_driver = PlatformRefreshView::new(
+        Rc::clone(&platform),
+        system_bar.clone(),
+        windows.clone(),
+        dock_running_apps.clone(),
+    );
 
     let content = VStack::new()
         .alignment(StackAlignment::Stretch)
@@ -79,6 +83,8 @@ struct PlatformRefreshView {
     system_bar: State<SystemBarState>,
 
     windows: State<DesktopWindows>,
+
+    dock_running_apps: State<Vec<String>>,
 }
 
 impl PlatformRefreshView {
@@ -88,11 +94,14 @@ impl PlatformRefreshView {
         system_bar: State<SystemBarState>,
 
         windows: State<DesktopWindows>,
+
+        dock_running_apps: State<Vec<String>>,
     ) -> Self {
         Self {
             platform,
             system_bar,
             windows,
+            dock_running_apps,
         }
     }
 }
@@ -138,6 +147,7 @@ impl View for PlatformRefreshView {
             close_requests,
             exited_processes,
             failed_close_requests,
+            running_apps,
         ) = {
             let mut platform = self.platform.borrow_mut();
 
@@ -175,6 +185,8 @@ impl View for PlatformRefreshView {
                 false
             });
 
+            let running_apps = platform.running_app_bundle_ids();
+
             let create_requests = platform.take_create_window_requests();
 
             let close_requests = platform.take_close_window_requests();
@@ -187,8 +199,13 @@ impl View for PlatformRefreshView {
                 close_requests,
                 exited_processes,
                 failed_close_requests,
+                running_apps,
             )
         };
+
+        if self.dock_running_apps.get() != running_apps {
+            self.dock_running_apps.set(running_apps);
+        }
 
         let has_window_changes = !create_requests.is_empty()
             || !close_requests.is_empty()

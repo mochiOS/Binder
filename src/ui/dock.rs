@@ -221,12 +221,6 @@ where
 
             return;
         }
-
-        self.running_apps.update(|running| {
-            if !running.iter().any(|bundle_id| bundle_id == &app.bundle_id) {
-                running.push(app.bundle_id.clone());
-            }
-        });
     }
 
     fn paint_app_icon(app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
@@ -370,8 +364,6 @@ where
                     .radius(CornerRadius::Custom(DOCK_ITEM_RADIUS))
                     .paint(visual.item, context);
             }
-
-            Self::paint_app_icon(app, visual.icon, context);
 
             let icon = snap_rect(visual.icon);
 

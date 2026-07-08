@@ -514,6 +514,13 @@ impl DesktopPlatform for LinuxPlatform {
 
         self.spawn_managed_child(ApplicationId::About, app.bundle_id.clone(), command)
     }
+
+    fn running_app_bundle_ids(&self) -> Vec<String> {
+        self.children
+            .values()
+            .map(|child| child.bundle_id.clone())
+            .collect()
+    }
 }
 
 impl Drop for LinuxPlatform {
