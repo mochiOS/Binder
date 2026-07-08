@@ -2,10 +2,5 @@ name = "Test application"
 bundle_id = "com.example.test"
 version = "0.1.0"
 developer = "tas0dev"
-entry = "entry.elf"
+entry = "self:test"
 description = "Test application for demonstrating Binder"
-icon = "icon.png"
-
-resources = [
-    "icon.png"
-]

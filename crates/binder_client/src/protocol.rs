@@ -15,10 +15,12 @@ const SERVER_RESIZED: u8 = 131;
 const SERVER_FOCUS_CHANGED: u8 = 132;
 
 const APPLICATION_ABOUT: u8 = 1;
+const APPLICATION_TEST: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ApplicationId {
     About,
+    Test,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -234,6 +236,7 @@ fn take_frame(buffer: &mut Vec<u8>) -> Result<Option<(u8, Vec<u8>)>, ProtocolErr
 fn encode_application(application: ApplicationId) -> u8 {
     match application {
         ApplicationId::About => APPLICATION_ABOUT,
+        ApplicationId::Test => APPLICATION_TEST,
     }
 }
 

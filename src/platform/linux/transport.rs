@@ -423,6 +423,14 @@ fn create_window_request(application: ApplicationId) -> ClientRequest {
             height: 300,
             resizable: true,
         },
+
+        ApplicationId::Test => ClientRequest::CreateWindow {
+            application,
+            title: String::from("Test Window"),
+            width: 360,
+            height: 220,
+            resizable: true,
+        },
     }
 }
 

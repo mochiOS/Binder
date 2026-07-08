@@ -230,6 +230,18 @@ impl View for PlatformRefreshView {
 
                             registrations.push((request.process_id, remote_window));
                         }
+
+                        ApplicationId::Test => {
+                            let (_window_id, remote_window) = desktop.open_test(
+                                request.process_id,
+                                request.title,
+                                request.width,
+                                request.height,
+                                request.resizable,
+                            );
+
+                            registrations.push((request.process_id, remote_window));
+                        }
                     }
                 }
 

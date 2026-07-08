@@ -144,8 +144,20 @@ impl BinderClient {
     }
 
     pub fn create_window(&mut self, options: WindowOptions) -> Result<WindowHandle> {
+        self.create_window_for_application(ApplicationId::About, options)
+    }
+
+    pub fn create_test_window(&mut self, options: WindowOptions) -> Result<WindowHandle> {
+        self.create_window_for_application(ApplicationId::Test, options)
+    }
+
+    fn create_window_for_application(
+        &mut self,
+        application: ApplicationId,
+        options: WindowOptions,
+    ) -> Result<WindowHandle> {
         self.transport.send(&ClientRequest::CreateWindow {
-            application: ApplicationId::About,
+            application,
             title: options.title,
             width: options.width,
             height: options.height,

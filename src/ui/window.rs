@@ -1,4 +1,4 @@
-use super::{about, window_decoration};
+use super::{about, test, window_decoration};
 use crate::window::{DesktopWindow, WindowContent};
 use viewkit::theme::{Shadow, ShadowSet};
 use viewkit::{
@@ -121,6 +121,7 @@ impl View for WindowView {
 pub(crate) fn view(window: &DesktopWindow, focused: bool) -> impl View + 'static {
     let content: Box<dyn View + 'static> = match window.content {
         WindowContent::About => Box::new(about::view()),
+        WindowContent::Test => Box::new(test::view()),
     };
 
     WindowView {

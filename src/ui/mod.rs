@@ -1,8 +1,9 @@
-pub mod about;
+pub(crate) mod about;
 pub(crate) mod desktop;
 pub(crate) mod dock;
 pub(crate) mod menu;
 pub(crate) mod popup_menu;
+pub(crate) mod test;
 pub(crate) mod top_bar;
 pub(crate) mod window;
 pub(crate) mod window_decoration;

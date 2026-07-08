@@ -4,12 +4,10 @@ mod platform;
 mod ui;
 mod window;
 
-use std::ffi::OsStr;
-
 use binder_client::{BinderClient, Error as BinderClientError, WindowEvent, WindowOptions};
-
 use desktop::BinderApp;
-
+use std::collections::HashSet;
+use std::ffi::OsStr;
 use viewkit::prelude::{ViewKitError, run};
 
 fn run_desktop() -> Result<(), ViewKitError> {
@@ -47,16 +45,58 @@ fn run_about_process() -> Result<(), BinderClientError> {
     }
 }
 
+fn run_test_process() -> Result<(), BinderClientError> {
+    let mut client = BinderClient::connect()?;
+
+    let mut windows = HashSet::new();
+
+    for index in 0..3 {
+        let window = client.create_test_window(
+            WindowOptions::new(format!("Test Window {}", index + 1), 360, 220).resizable(true),
+        )?;
+
+        windows.insert(window);
+    }
+
+    loop {
+        match client.next_event()? {
+            WindowEvent::CloseRequested { window } if windows.contains(&window) => {
+                client.close_window(window)?;
+
+                windows.remove(&window);
+
+                if windows.is_empty() {
+                    return Ok(());
+                }
+            }
+
+            WindowEvent::Resized { .. } => {}
+
+            WindowEvent::FocusChanged { .. } => {}
+
+            _ => {}
+        }
+    }
+}
+
 fn run_process_role(role: &OsStr) {
-    if role != OsStr::new("--role=about") {
-        eprintln!("unknown Binder role: {:?}", role,);
+    if role == OsStr::new("--role=about") {
+        if let Err(error) = run_about_process() {
+            eprintln!("Binder child process failed: {error}",);
+        }
 
         return;
     }
 
-    if let Err(error) = run_about_process() {
-        eprintln!("Binder child process failed: {error}",);
+    if role == OsStr::new("--role=test") {
+        if let Err(error) = run_test_process() {
+            eprintln!("Binder test process failed: {error}",);
+        }
+
+        return;
     }
+
+    eprintln!("unknown Binder role: {:?}", role,);
 }
 
 fn main() -> Result<(), ViewKitError> {

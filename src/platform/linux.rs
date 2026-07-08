@@ -170,11 +170,9 @@ impl LinuxPlatform {
                     return;
                 }
 
-                if child.registered_at.is_some() {
-                    return;
+                if child.registered_at.is_none() {
+                    child.registered_at = Some(Instant::now());
                 }
-
-                child.registered_at = Some(Instant::now());
 
                 child.disconnected_at = None;
 
@@ -322,15 +320,16 @@ impl DesktopPlatform for LinuxPlatform {
     ) -> Result<ProcessId, PlatformError> {
         let executable = std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
 
-        let argument = match application {
-            ApplicationId::About => "--role=about",
+        let (argument, bundle_id) = match application {
+            ApplicationId::About => ("--role=about", "com.mochi.binder.about"),
+            ApplicationId::Test => ("--role=test", "com.mochi.binder.test"),
         };
 
         let mut command = Command::new(executable);
 
         command.arg(argument);
 
-        self.spawn_managed_child(application, String::from("com.mochi.binder.about"), command)
+        self.spawn_managed_child(application, String::from(bundle_id), command)
     }
 
     fn register_window(
@@ -491,6 +490,17 @@ impl DesktopPlatform for LinuxPlatform {
     }
 
     fn launch_app(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
+        if app.entry == "self:test" || app.bundle_id == "com.mochi.binder.test" {
+            let executable =
+                std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
+
+            let mut command = Command::new(executable);
+
+            command.arg("--role=test");
+
+            return self.spawn_managed_child(ApplicationId::Test, app.bundle_id.clone(), command);
+        }
+
         if app.entry == "self:about" || app.bundle_id == "com.mochi.binder" {
             let executable =
                 std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;

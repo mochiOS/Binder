@@ -12,6 +12,7 @@ pub struct WindowId(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowContent {
     About,
+    Test,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -456,7 +457,47 @@ impl DesktopWindows {
             return;
         };
 
+        if self.focused == Some(window_id) {
+            let Some(window) = self.windows.iter().find(|window| window.id == window_id) else {
+                return;
+            };
+
+            if !window.minimized {
+                return;
+            }
+        }
+
         self.focus(window_id);
+    }
+
+    pub fn open_test(
+        &mut self,
+        process_id: ProcessId,
+        title: String,
+        width: u32,
+        height: u32,
+        resizable: bool,
+    ) -> (WindowId, RemoteWindowId) {
+        let id = self.allocate_id();
+        let remote_window = RemoteWindowId(id.0);
+        let offset = ((id.0.saturating_sub(1) % 6) as f32) * 28.0;
+
+        self.windows.push(DesktopWindow {
+            id,
+            title,
+            frame: Rect::new(360.0 + offset, 160.0 + offset, width as f32, height as f32),
+            resizable,
+            minimized: false,
+            close_requested: false,
+            content: WindowContent::Test,
+            process_id: Some(process_id),
+            remote_window: Some(remote_window),
+            interaction: WindowInteraction::default(),
+            restore_frame: None,
+        });
+
+        self.focused = Some(id);
+        (id, remote_window)
     }
 }
 
