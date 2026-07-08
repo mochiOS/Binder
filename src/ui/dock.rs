@@ -26,11 +26,16 @@ const DOCK_RADIUS: f32 = 48.0;
 const DOCK_ITEM_RADIUS: f32 = 16.0;
 const DOCK_INTERACTION_TOP_OVERFLOW: f32 = 26.0;
 
+const DOCK_TOOLTIP_HEIGHT: f32 = 30.0;
+const DOCK_TOOLTIP_MARGIN: f32 = 10.0;
+const DOCK_TOOLTIP_HORIZONTAL_PADDING: f32 = 12.0;
+const DOCK_TOOLTIP_RADIUS: f32 = 12.0;
+const DOCK_TOOLTIP_BACKGROUND: Color = Color::rgba(38, 38, 38, 230);
+const DOCK_TOOLTIP_TEXT: Color = Color::rgba(255, 255, 255, 255);
+
 const DOCK_BACKGROUND: Color = Color::rgba(255, 255, 255, 190);
 
 const DOCK_BORDER: Color = Color::rgba(0, 0, 0, 28);
-
-const DOCK_ITEM_HOVER: Color = Color::rgba(255, 255, 255, 170);
 
 const FALLBACK_APP_ICON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/appicon.svg",);
 
@@ -247,6 +252,39 @@ where
                 .paint(bounds, context);
         }
     }
+
+    fn tooltip_width(text: &str) -> f32 {
+        let character_count = text.chars().count() as f32;
+
+        let text_width = character_count * 7.5;
+
+        (text_width + DOCK_TOOLTIP_HORIZONTAL_PADDING * 2.0).clamp(48.0, 220.0)
+    }
+
+    fn paint_tooltip(app: &AppInfo, icon: Rect, context: &mut PaintContext<'_>) {
+        let width = Self::tooltip_width(&app.name);
+
+        let center_x = icon.origin.x + icon.size.width / 2.0;
+
+        let tooltip = Rect::new(
+            center_x - width / 2.0,
+            icon.origin.y - DOCK_TOOLTIP_MARGIN - DOCK_TOOLTIP_HEIGHT,
+            width,
+            DOCK_TOOLTIP_HEIGHT,
+        );
+
+        Rectangle::new()
+            .color(RectangleColor::Custom(DOCK_TOOLTIP_BACKGROUND))
+            .radius(CornerRadius::Custom(DOCK_TOOLTIP_RADIUS))
+            .paint(tooltip, context);
+
+        Text::new(app.name.clone())
+            .font_size(13.0)
+            .line_height(DOCK_TOOLTIP_HEIGHT)
+            .alignment(TextAlignment::Center)
+            .color(DOCK_TOOLTIP_TEXT)
+            .paint(tooltip, context);
+    }
 }
 
 impl<C> View for DockLayer<C>
@@ -284,6 +322,8 @@ where
 
         let pointer = self.pointer.get();
 
+        let mut tooltip: Option<(&AppInfo, Rect)> = None;
+
         for (index, app) in apps.iter().enumerate() {
             let visual = Self::item_visual(dock, index, pointer, pressed);
 
@@ -302,6 +342,18 @@ where
             }
 
             Self::paint_app_icon(app, visual.icon, context);
+
+            let icon = snap_rect(visual.icon);
+
+            Self::paint_app_icon(app, icon, context);
+
+            if hovered == Some(index) {
+                tooltip = Some((app, icon));
+            }
+        }
+
+        if let Some((app, icon)) = tooltip {
+            Self::paint_tooltip(app, icon, context);
         }
     }
 
@@ -416,4 +468,14 @@ where
             }
         }
     }
+}
+
+fn snap_rect(rect: Rect) -> Rect {
+    let x = rect.origin.x.round();
+    let y = rect.origin.y.round();
+
+    let width = rect.size.width.round().max(1.0);
+    let height = rect.size.height.round().max(1.0);
+
+    Rect::new(x, y, width, height)
 }
