@@ -3,11 +3,13 @@ use std::rc::Rc;
 
 use std::time::{Duration, Instant};
 
-use super::top_bar;
+use super::{dock, top_bar};
 
 use crate::desktop::WindowResize;
 
-use crate::platform::{ApplicationId, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState};
+use crate::platform::{
+    AppInfo, ApplicationId, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState,
+};
 
 use crate::window::{DesktopWindows, WindowDrag};
 
@@ -19,16 +21,15 @@ const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
-
     platform: Rc<RefCell<dyn DesktopPlatform>>,
-
     menu_open: State<bool>,
-
     windows: State<DesktopWindows>,
-
     window_drag: State<Option<WindowDrag>>,
-
     resize: State<Option<WindowResize>>,
+    apps: State<Vec<AppInfo>>,
+    dock_hovered: State<Option<usize>>,
+    dock_pressed: State<Option<usize>>,
+    dock_pointer: State<Option<Point>>,
 ) -> Box<dyn View + 'static> {
     let refresh_driver =
         PlatformRefreshView::new(Rc::clone(&platform), system_bar.clone(), windows.clone());
@@ -52,10 +53,19 @@ pub(crate) fn view(
         resize,
     );
 
+    let docked_desktop = dock::DockLayer::new(
+        windowed_desktop,
+        Rc::clone(&platform),
+        apps,
+        dock_hovered,
+        dock_pressed,
+        dock_pointer,
+    );
+
     let menu = super::menu::view(platform, menu_open.clone(), windows);
 
     Box::new(super::popup_menu::PopupMenu::new(
-        windowed_desktop,
+        docked_desktop,
         menu,
         menu_open,
     ))

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::platform::{self, DesktopPlatform, SystemBarState};
+use crate::platform::{self, AppInfo, DesktopPlatform, SystemBarState};
 use crate::window::{DesktopWindows, WindowDrag, WindowId};
 use viewkit::prelude::*;
 
@@ -12,6 +12,10 @@ pub struct BinderApp {
     windows: State<DesktopWindows>,
     window_drag: State<Option<WindowDrag>>,
     window_resize: State<Option<WindowResize>>,
+    apps: State<Vec<AppInfo>>,
+    dock_hovered_app: State<Option<usize>>,
+    dock_pressed_app: State<Option<usize>>,
+    dock_pointer: State<Option<Point>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,8 +43,8 @@ impl App for BinderApp {
 
     fn new() -> Self {
         let platform = platform::current();
-
         let system_bar = platform.borrow().system_bar_state().unwrap_or_default();
+        let apps = platform.borrow().get_apps();
 
         Self {
             platform,
@@ -49,6 +53,10 @@ impl App for BinderApp {
             windows: State::new(DesktopWindows::default()),
             window_drag: State::new(None),
             window_resize: State::new(None),
+            apps: State::new(apps),
+            dock_hovered_app: State::new(None),
+            dock_pressed_app: State::new(None),
+            dock_pointer: State::new(None),
         }
     }
 
@@ -66,6 +74,10 @@ impl App for BinderApp {
             self.windows.clone(),
             self.window_drag.clone(),
             self.window_resize.clone(),
+            self.apps.clone(),
+            self.dock_hovered_app.clone(),
+            self.dock_pressed_app.clone(),
+            self.dock_pointer.clone(),
         )
     }
 }

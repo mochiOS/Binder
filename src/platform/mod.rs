@@ -4,6 +4,7 @@ mod linux;
 mod mochios;
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 pub use crate::ipc::{ApplicationId, RemoteWindowId};
@@ -75,6 +76,31 @@ pub enum NetworkState {
         network_name: Option<String>,
         signal_strength: Option<u8>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppInfo {
+    pub root: PathBuf,
+    pub name: String,
+    pub bundle_id: String,
+    pub version: String,
+    pub developer: String,
+    pub entry: String,
+    pub description: String,
+    pub icon: Option<PathBuf>,
+    pub resources: Vec<PathBuf>,
+}
+
+impl AppInfo {
+    pub fn entry_path(&self) -> PathBuf {
+        let path = PathBuf::from(&self.entry);
+
+        if path.is_absolute() {
+            path
+        } else {
+            self.root.join(path)
+        }
+    }
 }
 
 impl Default for NetworkState {
@@ -181,6 +207,14 @@ pub trait DesktopPlatform {
     }
 
     fn refresh(&mut self) -> Result<bool, PlatformError>;
+
+    fn get_apps(&self) -> Vec<AppInfo> {
+        Vec::new()
+    }
+
+    fn launch_app(&mut self, _app: &AppInfo) -> Result<ProcessId, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
 }
 
 pub fn current() -> Rc<RefCell<dyn DesktopPlatform>> {

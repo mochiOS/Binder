@@ -22,13 +22,13 @@
     <g clip-path="url(#clip)">
         <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
 
-        <path d="M0 256H1024" stroke="#D8D8DC" stroke-width="2"/>
-        <path d="M0 512H1024" stroke="#D8D8DC" stroke-width="2"/>
-        <path d="M0 768H1024" stroke="#D8D8DC" stroke-width="2"/>
+        <path d="M0 256H1024" stroke="#ACACAC" stroke-width="2"/>
+        <path d="M0 512H1024" stroke="#ACACAC" stroke-width="2"/>
+        <path d="M0 768H1024" stroke="#ACACAC" stroke-width="2"/>
 
-        <path d="M256 0V1024" stroke="#D8D8DC" stroke-width="2"/>
-        <path d="M512 0V1024" stroke="#D8D8DC" stroke-width="2"/>
-        <path d="M768 0V1024" stroke="#D8D8DC" stroke-width="2"/>
+        <path d="M256 0V1024" stroke="#ACACAC" stroke-width="2"/>
+        <path d="M512 0V1024" stroke="#ACACAC" stroke-width="2"/>
+        <path d="M768 0V1024" stroke="#ACACAC" stroke-width="2"/>
 
         <path d="M0 0L1024 1024" stroke="#DDDEE2" stroke-width="2"/>
         <path d="M1024 0L0 1024" stroke="#DDDEE2" stroke-width="2"/>

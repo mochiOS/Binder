@@ -1,7 +1,8 @@
 mod transport;
 
 use std::collections::{HashMap, HashSet};
-
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -9,8 +10,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::ipc::{ApplicationId, ClientRequest, RemoteWindowId, ServerEvent};
 
 use super::{
-    ClockState, CloseWindowRequest, CreateWindowRequest, DesktopPlatform, PlatformError, ProcessId,
-    SystemAction, SystemBarState, WindowFocusChangedNotification, WindowResizedNotification,
+    AppInfo, ClockState, CloseWindowRequest, CreateWindowRequest, DesktopPlatform, PlatformError,
+    ProcessId, SystemAction, SystemBarState, WindowFocusChangedNotification,
+    WindowResizedNotification,
 };
 
 use transport::{BINDER_SOCKET_ENV, LinuxIpcServer, TransportEvent};
@@ -466,6 +468,18 @@ impl DesktopPlatform for LinuxPlatform {
             },
         )
     }
+
+    fn get_apps(&self) -> Vec<AppInfo> {
+        read_apps()
+    }
+
+    fn launch_app(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
+        if app.bundle_id == "com.mochi.binder" {
+            return self.launch_application(ApplicationId::About);
+        }
+
+        Err(PlatformError::UnsupportedOperation)
+    }
 }
 
 impl Drop for LinuxPlatform {
@@ -527,4 +541,204 @@ fn read_clock() -> Result<ClockState, PlatformError> {
 
         time: format!("{:02}:{:02}", local_time.tm_hour, local_time.tm_min,),
     })
+}
+
+fn resources_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources")
+}
+
+fn applications_root() -> PathBuf {
+    resources_root().join("apps")
+}
+
+fn read_apps() -> Vec<AppInfo> {
+    let root = applications_root();
+
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+
+    let mut apps = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if path.extension().and_then(|extension| extension.to_str()) != Some("app") {
+            continue;
+        }
+
+        if !path.is_dir() {
+            continue;
+        }
+
+        if let Some(app) = read_app_manifest(&path) {
+            apps.push(app);
+        }
+    }
+
+    apps.sort_by(|left, right| left.name.cmp(&right.name));
+
+    apps
+}
+
+fn read_app_manifest(app_root: &Path) -> Option<AppInfo> {
+    let manifest_path = app_root.join("about.toml");
+
+    let content = fs::read_to_string(manifest_path).ok()?;
+
+    let name = parse_string_field(&content, "name")?;
+
+    let bundle_id = parse_string_field(&content, "bundle_id")?;
+
+    let entry = parse_string_field(&content, "entry")?;
+
+    let version = parse_string_field(&content, "version").unwrap_or_default();
+
+    let developer = parse_string_field(&content, "developer").unwrap_or_default();
+
+    let description = parse_string_field(&content, "description").unwrap_or_default();
+
+    let icon = parse_string_field(&content, "icon").map(|path| resolve_app_path(app_root, &path));
+
+    let resources = parse_string_array_field(&content, "resources")
+        .into_iter()
+        .map(|path| resolve_app_path(app_root, &path))
+        .collect();
+
+    Some(AppInfo {
+        root: app_root.to_path_buf(),
+
+        name,
+        bundle_id,
+        version,
+        developer,
+        entry,
+        description,
+        icon,
+        resources,
+    })
+}
+
+fn resolve_app_path(app_root: &Path, path: &str) -> PathBuf {
+    let path = PathBuf::from(path);
+
+    if path.is_absolute() {
+        path
+    } else {
+        app_root.join(path)
+    }
+}
+
+fn parse_string_field(content: &str, key: &str) -> Option<String> {
+    for line in content.lines() {
+        let line = line.trim();
+
+        let Some((field, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        if field.trim() != key {
+            continue;
+        }
+
+        return parse_string_literals(value).into_iter().next();
+    }
+
+    None
+}
+
+fn parse_string_array_field(content: &str, key: &str) -> Vec<String> {
+    let mut values = Vec::new();
+
+    let mut in_array = false;
+
+    for line in content.lines() {
+        let line = line.trim();
+
+        if line.is_empty() {
+            continue;
+        }
+
+        if in_array {
+            values.extend(parse_string_literals(line));
+
+            if line.contains(']') {
+                in_array = false;
+            }
+
+            continue;
+        }
+
+        let Some((field, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        if field.trim() != key {
+            continue;
+        }
+
+        values.extend(parse_string_literals(value));
+
+        if value.contains('[') && !value.contains(']') {
+            in_array = true;
+        }
+    }
+
+    values
+}
+
+fn parse_string_literals(text: &str) -> Vec<String> {
+    let mut values = Vec::new();
+
+    let mut current = String::new();
+
+    let mut in_string = false;
+
+    let mut escaped = false;
+
+    for character in text.chars() {
+        if !in_string {
+            if character == '"' {
+                in_string = true;
+                current.clear();
+            }
+
+            continue;
+        }
+
+        if escaped {
+            current.push(match character {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '"' => '"',
+                '\\' => '\\',
+                other => other,
+            });
+
+            escaped = false;
+
+            continue;
+        }
+
+        if character == '\\' {
+            escaped = true;
+
+            continue;
+        }
+
+        if character == '"' {
+            values.push(current.clone());
+
+            current.clear();
+
+            in_string = false;
+
+            continue;
+        }
+
+        current.push(character);
+    }
+
+    values
 }
