@@ -1,0 +1,11 @@
+name = "Hello application"
+bundle_id = "com.example.hello"
+version = "0.1.0"
+developer = "tas0dev"
+entry = "entry.elf"
+description = "Hello application for demonstrating Binder"
+icon = "icon.png"
+
+resources = [
+    "icon.png"
+]

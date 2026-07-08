@@ -1,0 +1,11 @@
+name = "Example application"
+bundle_id = "com.example.app"
+version = "0.1.0"
+developer = "tas0dev"
+entry = "entry.elf"
+description = "Example application for demonstrating Binder"
+icon = "icon.png"
+
+resources = [
+    "icon.png"
+]
