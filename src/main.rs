@@ -6,9 +6,9 @@ mod window;
 
 use std::ffi::OsStr;
 
-use desktop::BinderApp;
+use binder_client::{BinderClient, Error as BinderClientError, WindowEvent, WindowOptions};
 
-use platform::ApplicationId;
+use desktop::BinderApp;
 
 use viewkit::prelude::{ViewKitError, run};
 
@@ -16,20 +16,47 @@ fn run_desktop() -> Result<(), ViewKitError> {
     run::<BinderApp>()
 }
 
-fn run_process_role(role: &OsStr) -> Result<(), ViewKitError> {
-    let application = if role == OsStr::new("--role=about") {
-        ApplicationId::About
-    } else {
+fn run_about_process() -> Result<(), BinderClientError> {
+    let mut client = BinderClient::connect()?;
+
+    let window =
+        client.create_window(WindowOptions::new("About mochiOS", 420, 300).resizable(true))?;
+
+    loop {
+        match client.next_event()? {
+            WindowEvent::CloseRequested {
+                window: event_window,
+            } if event_window == window => {
+                client.close_window(window)?;
+
+                return Ok(());
+            }
+
+            WindowEvent::Resized {
+                window: event_window,
+                ..
+            } if event_window == window => {}
+
+            WindowEvent::FocusChanged {
+                window: event_window,
+                ..
+            } if event_window == window => {}
+
+            _ => {}
+        }
+    }
+}
+
+fn run_process_role(role: &OsStr) {
+    if role != OsStr::new("--role=about") {
         eprintln!("unknown Binder role: {:?}", role,);
 
-        return Ok(());
-    };
-
-    if let Err(error) = platform::run_application_process(application) {
-        eprintln!("Binder child process failed: {error:?}",);
+        return;
     }
 
-    Ok(())
+    if let Err(error) = run_about_process() {
+        eprintln!("Binder child process failed: {error}",);
+    }
 }
 
 fn main() -> Result<(), ViewKitError> {
@@ -47,5 +74,7 @@ fn main() -> Result<(), ViewKitError> {
         return Ok(());
     }
 
-    run_process_role(&role)
+    run_process_role(&role);
+
+    Ok(())
 }
