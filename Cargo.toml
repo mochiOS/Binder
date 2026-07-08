@@ -16,7 +16,7 @@ develop = []
 mochios = []
 
 [dependencies]
-viewkit = "0.3.3"
+viewkit = "0.3.4"
 binder_client = { path = "crates/binder_client" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
