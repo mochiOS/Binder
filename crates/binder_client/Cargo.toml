@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 authors = ["tas0dev <github@tas0dev>"]
 license = "Apache-2.0"
-description = "A client library for mochiOS Binder IPC."
+description = "Client SDK for creating Binder windows and receiving Binder window events"
 keywords = ["binder", "ipc", "mochios", "gui", "ui"]
 categories = ["gui", "os"]
+repository = "https://github.com/mochiOS/Binder"
 
 [dependencies]
