@@ -10,3 +10,4 @@ categories = ["gui", "os"]
 repository = "https://github.com/mochiOS/Binder"
 
 [dependencies]
+viewkit = "0.3.3"
