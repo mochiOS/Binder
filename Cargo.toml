@@ -1,3 +1,9 @@
+[workspace]
+members = [
+    ".",
+    "crates/binder_client",
+]
+
 [package]
 name = "binder"
 version = "0.1.0"
