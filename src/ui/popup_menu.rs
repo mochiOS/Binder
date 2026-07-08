@@ -87,12 +87,31 @@ where
 
             ViewEvent::PointerFocusRequested { .. } => EventResult::Consumed,
 
+            ViewEvent::PointerMoved { position } => {
+                if menu_bounds.contains(*position) {
+                    let result = self.menu.handle_event(menu_bounds, event, context);
+
+                    return result.merge(EventResult::Consumed);
+                }
+
+                if trigger_bounds.contains(*position) {
+                    return self.content.handle_event(bounds, event, context);
+                }
+
+                self.menu.handle_event(menu_bounds, event, context);
+
+                EventResult::Consumed
+            }
+
             ViewEvent::PointerPressed {
                 position,
                 button: PointerButton::Primary,
             } => {
                 if menu_bounds.contains(*position) {
-                    return self.menu.handle_event(menu_bounds, event, context);
+                    return self
+                        .menu
+                        .handle_event(menu_bounds, event, context)
+                        .merge(EventResult::Consumed);
                 }
 
                 if trigger_bounds.contains(*position) {
@@ -109,29 +128,41 @@ where
                 position,
                 button: PointerButton::Primary,
             } => {
-                let menu_result = self.menu.handle_event(menu_bounds, event, context);
+                if menu_bounds.contains(*position) {
+                    let result = self.menu.handle_event(menu_bounds, event, context);
 
-                let content_result = self.content.handle_event(bounds, event, context);
+                    if result.is_consumed() {
+                        self.open.set(false);
+                        context.request_redraw();
+                    }
 
-                if menu_bounds.contains(*position) && menu_result.is_consumed() {
-                    self.open.set(false);
-                    context.request_redraw();
+                    return result.merge(EventResult::Consumed);
                 }
 
-                menu_result
-                    .merge(content_result)
-                    .merge(EventResult::Consumed)
+                if trigger_bounds.contains(*position) {
+                    return self.content.handle_event(bounds, event, context);
+                }
+
+                EventResult::Consumed
             }
 
-            ViewEvent::PointerMoved { .. } | ViewEvent::PointerLeft => {
-                let menu_result = self.menu.handle_event(menu_bounds, event, context);
+            ViewEvent::PointerLeft => self
+                .menu
+                .handle_event(menu_bounds, event, context)
+                .merge(EventResult::Consumed),
 
-                let content_result = self.content.handle_event(bounds, event, context);
+            _ => {
+                if let Some(position) = event.position() {
+                    if menu_bounds.contains(position) {
+                        return self
+                            .menu
+                            .handle_event(menu_bounds, event, context)
+                            .merge(EventResult::Consumed);
+                    }
+                }
 
-                menu_result.merge(content_result)
+                EventResult::Consumed
             }
-
-            _ => self.menu.handle_event(menu_bounds, event, context),
         }
     }
 }

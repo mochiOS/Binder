@@ -1855,9 +1855,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viewkit"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13e9e59f97e3036557893a0d0728fd6ceada0c9f7533ebd152feefb8cd07e01e"
+checksum = "1f199aba6b5cb417f8450dca6cdf2fba10179136ec21329d5d0383eb2f4a3cb7"
 dependencies = [
  "cosmic-text",
  "image",
