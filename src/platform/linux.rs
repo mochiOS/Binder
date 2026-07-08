@@ -27,6 +27,7 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct ManagedChild {
     application: ApplicationId,
+    bundle_id: String,
     child: Child,
 
     launched_at: Instant,
@@ -248,6 +249,52 @@ impl LinuxPlatform {
 
         Ok(())
     }
+
+    fn spawn_managed_child(
+        &mut self,
+        application: ApplicationId,
+        bundle_id: String,
+        mut command: Command,
+    ) -> Result<ProcessId, PlatformError> {
+        if let Some(process_id) = self
+            .children
+            .iter()
+            .find_map(|(process_id, child)| (child.bundle_id == bundle_id).then_some(*process_id))
+        {
+            return Ok(process_id);
+        }
+
+        let child = command
+            .env(BINDER_SOCKET_ENV, self.transport.socket_path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|_| PlatformError::ProcessLaunchFailed)?;
+
+        let process_id = ProcessId(child.id());
+
+        self.children.insert(
+            process_id,
+            ManagedChild {
+                application,
+                bundle_id,
+
+                child,
+
+                launched_at: Instant::now(),
+
+                registered_at: None,
+                disconnected_at: None,
+
+                windows: HashSet::new(),
+
+                close_deadlines: HashMap::new(),
+            },
+        );
+
+        Ok(process_id)
+    }
 }
 
 impl Default for LinuxPlatform {
@@ -273,47 +320,17 @@ impl DesktopPlatform for LinuxPlatform {
         &mut self,
         application: ApplicationId,
     ) -> Result<ProcessId, PlatformError> {
-        if let Some(process_id) = self.children.iter().find_map(|(process_id, child)| {
-            (child.application == application).then_some(*process_id)
-        }) {
-            return Ok(process_id);
-        }
-
         let executable = std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
 
         let argument = match application {
             ApplicationId::About => "--role=about",
         };
 
-        let child = Command::new(executable)
-            .arg(argument)
-            .env(BINDER_SOCKET_ENV, self.transport.socket_path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|_| PlatformError::ProcessLaunchFailed)?;
+        let mut command = Command::new(executable);
 
-        let process_id = ProcessId(child.id());
+        command.arg(argument);
 
-        self.children.insert(
-            process_id,
-            ManagedChild {
-                application,
-                child,
-
-                launched_at: Instant::now(),
-
-                registered_at: None,
-                disconnected_at: None,
-
-                windows: HashSet::new(),
-
-                close_deadlines: HashMap::new(),
-            },
-        );
-
-        Ok(process_id)
+        self.spawn_managed_child(application, String::from("com.mochi.binder.about"), command)
     }
 
     fn register_window(
@@ -474,11 +491,28 @@ impl DesktopPlatform for LinuxPlatform {
     }
 
     fn launch_app(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
-        if app.bundle_id == "com.mochi.binder" {
-            return self.launch_application(ApplicationId::About);
+        if app.entry == "self:about" || app.bundle_id == "com.mochi.binder" {
+            let executable =
+                std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
+
+            let mut command = Command::new(executable);
+
+            command.arg("--role=about");
+
+            return self.spawn_managed_child(ApplicationId::About, app.bundle_id.clone(), command);
         }
 
-        Err(PlatformError::UnsupportedOperation)
+        let executable = app.entry_path();
+
+        if !executable.is_file() {
+            return Err(PlatformError::ProcessLaunchFailed);
+        }
+
+        let mut command = Command::new(executable);
+
+        command.current_dir(&app.root);
+
+        self.spawn_managed_child(ApplicationId::About, app.bundle_id.clone(), command)
     }
 }
 

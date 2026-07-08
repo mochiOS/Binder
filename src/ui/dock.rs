@@ -55,6 +55,7 @@ pub(crate) struct DockLayer<C> {
     hovered: State<Option<usize>>,
     pressed: State<Option<usize>>,
     pointer: State<Option<Point>>,
+    running_apps: State<Vec<String>>,
 }
 
 impl<C> DockLayer<C>
@@ -68,6 +69,7 @@ where
         hovered: State<Option<usize>>,
         pressed: State<Option<usize>>,
         pointer: State<Option<Point>>,
+        running_apps: State<Vec<String>>,
     ) -> Self {
         Self {
             content,
@@ -76,6 +78,7 @@ where
             hovered,
             pressed,
             pointer,
+            running_apps,
         }
     }
 
@@ -215,7 +218,15 @@ where
 
         if let Err(error) = self.platform.borrow_mut().launch_app(&app) {
             eprintln!("failed to launch app {}: {error:?}", app.bundle_id,);
+
+            return;
         }
+
+        self.running_apps.update(|running| {
+            if !running.iter().any(|bundle_id| bundle_id == &app.bundle_id) {
+                running.push(app.bundle_id.clone());
+            }
+        });
     }
 
     fn paint_app_icon(app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
@@ -285,6 +296,25 @@ where
             .color(DOCK_TOOLTIP_TEXT)
             .paint(tooltip, context);
     }
+
+    fn is_running(&self, app: &AppInfo) -> bool {
+        self.running_apps
+            .get()
+            .iter()
+            .any(|bundle_id| bundle_id == &app.bundle_id)
+    }
+
+    fn paint_running_indicator(icon: Rect, context: &mut PaintContext<'_>) {
+        let size = 4.0;
+
+        let x = icon.origin.x + icon.size.width / 2.0 - size / 2.0;
+
+        let y = icon.origin.y + icon.size.height + 5.0;
+
+        Ellipse::new()
+            .color(EllipseColor::Custom(Color::rgba(45, 45, 45, 210)))
+            .paint(Rect::new(x, y, size, size), context);
+    }
 }
 
 impl<C> View for DockLayer<C>
@@ -346,6 +376,10 @@ where
             let icon = snap_rect(visual.icon);
 
             Self::paint_app_icon(app, icon, context);
+
+            if self.is_running(app) {
+                Self::paint_running_indicator(icon, context);
+            }
 
             if hovered == Some(index) {
                 tooltip = Some((app, icon));

@@ -30,6 +30,7 @@ pub(crate) fn view(
     dock_hovered: State<Option<usize>>,
     dock_pressed: State<Option<usize>>,
     dock_pointer: State<Option<Point>>,
+    dock_running_apps: State<Vec<String>>,
 ) -> Box<dyn View + 'static> {
     let refresh_driver =
         PlatformRefreshView::new(Rc::clone(&platform), system_bar.clone(), windows.clone());
@@ -60,6 +61,7 @@ pub(crate) fn view(
         dock_hovered,
         dock_pressed,
         dock_pointer,
+        dock_running_apps,
     );
 
     let menu = super::menu::view(platform, menu_open.clone(), windows);
