@@ -61,6 +61,7 @@ pub(crate) fn view(
     let docked_desktop = dock::DockLayer::new(
         windowed_desktop,
         Rc::clone(&platform),
+        windows.clone(),
         apps,
         dock_hovered,
         dock_pressed,

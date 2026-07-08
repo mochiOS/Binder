@@ -444,6 +444,20 @@ impl DesktopWindows {
             .find(|window| !window.minimized)
             .map(|window| window.id);
     }
+
+    pub fn focus_process(&mut self, process_id: ProcessId) {
+        let Some(window_id) = self
+            .windows
+            .iter()
+            .rev()
+            .find(|window| window.process_id == Some(process_id))
+            .map(|window| window.id)
+        else {
+            return;
+        };
+
+        self.focus(window_id);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

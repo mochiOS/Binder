@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use crate::platform::{AppInfo, DesktopPlatform};
 
+use crate::window::DesktopWindows;
 use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
@@ -51,6 +52,7 @@ struct DockItemVisual {
 pub(crate) struct DockLayer<C> {
     content: C,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
+    windows: State<DesktopWindows>,
     apps: State<Vec<AppInfo>>,
     hovered: State<Option<usize>>,
     pressed: State<Option<usize>>,
@@ -65,6 +67,7 @@ where
     pub(crate) fn new(
         content: C,
         platform: Rc<RefCell<dyn DesktopPlatform>>,
+        windows: State<DesktopWindows>,
         apps: State<Vec<AppInfo>>,
         hovered: State<Option<usize>>,
         pressed: State<Option<usize>>,
@@ -74,6 +77,7 @@ where
         Self {
             content,
             platform,
+            windows,
             apps,
             hovered,
             pressed,
@@ -216,11 +220,19 @@ where
             return;
         };
 
-        if let Err(error) = self.platform.borrow_mut().launch_app(&app) {
-            eprintln!("failed to launch app {}: {error:?}", app.bundle_id,);
+        let process_id = match self.platform.borrow_mut().launch_app(&app) {
+            Ok(process_id) => process_id,
 
-            return;
-        }
+            Err(error) => {
+                eprintln!("failed to launch app {}: {error:?}", app.bundle_id,);
+
+                return;
+            }
+        };
+
+        self.windows.update(|desktop| {
+            desktop.focus_process(process_id);
+        });
     }
 
     fn paint_app_icon(app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
