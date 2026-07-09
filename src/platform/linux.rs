@@ -26,6 +26,28 @@ const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InternalAppLaunch {
+    entry: &'static str,
+    role_argument: &'static str,
+    default_bundle_id: &'static str,
+    content: WindowContent,
+}
+
+const INTERNAL_ABOUT_APP: InternalAppLaunch = InternalAppLaunch {
+    entry: "internal:about",
+    role_argument: "--role=about",
+    default_bundle_id: "com.mochi.binder.about",
+    content: WindowContent::About,
+};
+
+const INTERNAL_TEST_APP: InternalAppLaunch = InternalAppLaunch {
+    entry: "internal:test",
+    role_argument: "--role=test",
+    default_bundle_id: "com.mochi.binder.test",
+    content: WindowContent::Test,
+};
+
 struct ManagedChild {
     content: WindowContent,
     bundle_id: String,
@@ -288,6 +310,35 @@ impl LinuxPlatform {
 
         Ok(process_id)
     }
+
+    fn internal_app_for_entry(entry: &str) -> Option<InternalAppLaunch> {
+        match entry {
+            "internal:about" => Some(INTERNAL_ABOUT_APP),
+            "internal:test" => Some(INTERNAL_TEST_APP),
+            _ => None,
+        }
+    }
+
+    fn internal_app_for_content(content: WindowContent) -> InternalAppLaunch {
+        match content {
+            WindowContent::About => INTERNAL_ABOUT_APP,
+            WindowContent::Test => INTERNAL_TEST_APP,
+        }
+    }
+
+    fn spawn_internal_app(
+        &mut self,
+        internal_app: InternalAppLaunch,
+        bundle_id: String,
+    ) -> Result<ProcessId, PlatformError> {
+        let executable = std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
+
+        let mut command = Command::new(executable);
+
+        command.arg(internal_app.role_argument);
+
+        self.spawn_managed_child(internal_app.content, bundle_id, command)
+    }
 }
 
 impl Default for LinuxPlatform {
@@ -313,18 +364,9 @@ impl DesktopPlatform for LinuxPlatform {
         &mut self,
         content: WindowContent,
     ) -> Result<ProcessId, PlatformError> {
-        let executable = std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
+        let internal_app = Self::internal_app_for_content(content);
 
-        let (argument, bundle_id) = match content {
-            WindowContent::About => ("--role=about", "com.mochi.binder.about"),
-            WindowContent::Test => ("--role=test", "com.mochi.binder.test"),
-        };
-
-        let mut command = Command::new(executable);
-
-        command.arg(argument);
-
-        self.spawn_managed_child(content, String::from(bundle_id), command)
+        self.spawn_internal_app(internal_app, String::from(internal_app.default_bundle_id))
     }
 
     fn register_window(
@@ -385,49 +427,6 @@ impl DesktopPlatform for LinuxPlatform {
         Ok(())
     }
 
-    fn synchronize_applications(
-        &mut self,
-        active_processes: &[ProcessId],
-    ) -> Result<(), PlatformError> {
-        let active_processes: HashSet<ProcessId> = active_processes.iter().copied().collect();
-
-        self.process_lifecycle(&active_processes)
-    }
-
-    fn take_create_window_requests(&mut self) -> Vec<CreateWindowRequest> {
-        std::mem::take(&mut self.create_window_requests)
-    }
-
-    fn take_close_window_requests(&mut self) -> Vec<CloseWindowRequest> {
-        std::mem::take(&mut self.close_window_requests)
-    }
-
-    fn take_exited_processes(&mut self) -> Vec<ProcessId> {
-        std::mem::take(&mut self.exited_processes)
-    }
-
-    fn refresh(&mut self) -> Result<bool, PlatformError> {
-        self.reap_exited_children()?;
-
-        let allowed_processes: HashSet<ProcessId> = self.children.keys().copied().collect();
-
-        let events = self.transport.poll(&allowed_processes)?;
-
-        for event in events {
-            self.handle_transport_event(event);
-        }
-
-        let next = read_system_bar_state()?;
-
-        let changed = next != self.system_bar;
-
-        if changed {
-            self.system_bar = next;
-        }
-
-        Ok(changed)
-    }
-
     fn notify_window_resized(
         &mut self,
         notification: WindowResizedNotification,
@@ -480,31 +479,62 @@ impl DesktopPlatform for LinuxPlatform {
         )
     }
 
+    fn synchronize_applications(
+        &mut self,
+        active_processes: &[ProcessId],
+    ) -> Result<(), PlatformError> {
+        let active_processes: HashSet<ProcessId> = active_processes.iter().copied().collect();
+
+        self.process_lifecycle(&active_processes)
+    }
+
+    fn take_create_window_requests(&mut self) -> Vec<CreateWindowRequest> {
+        std::mem::take(&mut self.create_window_requests)
+    }
+
+    fn take_close_window_requests(&mut self) -> Vec<CloseWindowRequest> {
+        std::mem::take(&mut self.close_window_requests)
+    }
+
+    fn take_exited_processes(&mut self) -> Vec<ProcessId> {
+        std::mem::take(&mut self.exited_processes)
+    }
+
+    fn refresh(&mut self) -> Result<bool, PlatformError> {
+        self.reap_exited_children()?;
+
+        let allowed_processes: HashSet<ProcessId> = self.children.keys().copied().collect();
+
+        let events = self.transport.poll(&allowed_processes)?;
+
+        for event in events {
+            self.handle_transport_event(event);
+        }
+
+        let next = read_system_bar_state()?;
+
+        let changed = next != self.system_bar;
+
+        if changed {
+            self.system_bar = next;
+        }
+
+        Ok(changed)
+    }
+
     fn get_apps(&self) -> Vec<AppInfo> {
         read_apps()
     }
 
     fn launch_app(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
-        if app.entry == "self:test" || app.bundle_id == "com.mochi.binder.test" {
-            let executable =
-                std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
-
-            let mut command = Command::new(executable);
-
-            command.arg("--role=test");
-
-            return self.spawn_managed_child(WindowContent::Test, app.bundle_id.clone(), command);
+        if let Some(internal_app) = Self::internal_app_for_entry(&app.entry) {
+            return self.spawn_internal_app(internal_app, app.bundle_id.clone());
         }
 
-        if app.entry == "self:about" || app.bundle_id == "com.mochi.binder" {
-            let executable =
-                std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
+        let executable = app.entry_path();
 
-            let mut command = Command::new(executable);
-
-            command.arg("--role=about");
-
-            return self.spawn_managed_child(WindowContent::About, app.bundle_id.clone(), command);
+        if !executable.is_file() {
+            return Err(PlatformError::ProcessLaunchFailed);
         }
 
         Err(PlatformError::UnsupportedOperation)
