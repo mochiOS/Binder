@@ -1,11 +1,13 @@
 use super::{DesktopPlatform, PlatformError, ProcessId, SystemAction, SystemBarState};
 use crate::window::WindowContent;
 
+#[allow(unused)]
 pub struct MochiOsPlatform {
     system_bar: SystemBarState,
 }
 
 impl MochiOsPlatform {
+    #[allow(unused)]
     pub fn new() -> Self {
         Self {
             system_bar: SystemBarState::default(),
@@ -32,6 +34,13 @@ impl DesktopPlatform for MochiOsPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
+    fn launch_internal_window(
+        &mut self,
+        _content: WindowContent,
+    ) -> Result<ProcessId, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
     fn refresh(&mut self) -> Result<bool, PlatformError> {
         // TODO
         // time.service
@@ -43,15 +52,9 @@ impl DesktopPlatform for MochiOsPlatform {
         // から状態を取得またはイベントを受信する。
         Ok(false)
     }
-
-    fn launch_internal_window(
-        &mut self,
-        _content: WindowContent,
-    ) -> Result<ProcessId, PlatformError> {
-        Err(PlatformError::UnsupportedOperation)
-    }
 }
 
+#[allow(unused)]
 pub(super) fn run_internal_process(_content: WindowContent) -> Result<(), PlatformError> {
     Err(PlatformError::UnsupportedOperation)
 }

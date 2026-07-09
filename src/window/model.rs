@@ -146,10 +146,6 @@ impl DesktopWindows {
             .collect()
     }
 
-    pub fn has_pending_close_requests(&self) -> bool {
-        !self.pending_close_requests.is_empty()
-    }
-
     pub fn take_pending_close_requests(&mut self) -> Vec<CloseWindowRequest> {
         std::mem::take(&mut self.pending_close_requests)
     }

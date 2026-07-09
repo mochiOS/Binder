@@ -59,6 +59,7 @@ pub struct NotificationState {
     pub unread_count: u32,
 }
 
+#[allow(unused)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemAction {
     Sleep,
@@ -68,6 +69,7 @@ pub enum SystemAction {
     LogOut,
 }
 
+#[allow(unused)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetworkState {
     Unavailable,
