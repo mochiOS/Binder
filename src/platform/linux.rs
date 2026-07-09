@@ -7,7 +7,7 @@ use std::process::{Child, Command, Stdio};
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::ipc::{ApplicationId, ClientRequest, RemoteWindowId, ServerEvent};
+use crate::ipc::{ClientRequest, RemoteWindowId, ServerEvent};
 
 use super::{
     AppInfo, ClockState, CloseWindowRequest, CreateWindowRequest, DesktopPlatform, PlatformError,
@@ -15,6 +15,7 @@ use super::{
     WindowResizedNotification,
 };
 
+use crate::window::WindowContent;
 use transport::{BINDER_SOCKET_ENV, LinuxIpcServer, TransportEvent};
 
 const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -26,7 +27,7 @@ const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct ManagedChild {
-    application: ApplicationId,
+    content: WindowContent,
     bundle_id: String,
     child: Child,
 
@@ -156,7 +157,6 @@ impl LinuxPlatform {
     fn handle_client_request(&mut self, process_id: ProcessId, request: ClientRequest) {
         match request {
             ClientRequest::CreateWindow {
-                application,
                 title,
                 width,
                 height,
@@ -166,10 +166,6 @@ impl LinuxPlatform {
                     return;
                 };
 
-                if child.application != application {
-                    return;
-                }
-
                 if child.registered_at.is_none() {
                     child.registered_at = Some(Instant::now());
                 }
@@ -178,7 +174,7 @@ impl LinuxPlatform {
 
                 self.create_window_requests.push(CreateWindowRequest {
                     process_id,
-                    application,
+                    content: child.content,
                     title,
                     width,
                     height,
@@ -250,7 +246,7 @@ impl LinuxPlatform {
 
     fn spawn_managed_child(
         &mut self,
-        application: ApplicationId,
+        content: WindowContent,
         bundle_id: String,
         mut command: Command,
     ) -> Result<ProcessId, PlatformError> {
@@ -275,13 +271,12 @@ impl LinuxPlatform {
         self.children.insert(
             process_id,
             ManagedChild {
-                application,
+                content,
                 bundle_id,
 
                 child,
 
                 launched_at: Instant::now(),
-
                 registered_at: None,
                 disconnected_at: None,
 
@@ -314,22 +309,22 @@ impl DesktopPlatform for LinuxPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
-    fn launch_application(
+    fn launch_internal_window(
         &mut self,
-        application: ApplicationId,
+        content: WindowContent,
     ) -> Result<ProcessId, PlatformError> {
         let executable = std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
 
-        let (argument, bundle_id) = match application {
-            ApplicationId::About => ("--role=about", "com.mochi.binder.about"),
-            ApplicationId::Test => ("--role=test", "com.mochi.binder.test"),
+        let (argument, bundle_id) = match content {
+            WindowContent::About => ("--role=about", "com.mochi.binder.about"),
+            WindowContent::Test => ("--role=test", "com.mochi.binder.test"),
         };
 
         let mut command = Command::new(executable);
 
         command.arg(argument);
 
-        self.spawn_managed_child(application, String::from(bundle_id), command)
+        self.spawn_managed_child(content, String::from(bundle_id), command)
     }
 
     fn register_window(
@@ -498,7 +493,7 @@ impl DesktopPlatform for LinuxPlatform {
 
             command.arg("--role=test");
 
-            return self.spawn_managed_child(ApplicationId::Test, app.bundle_id.clone(), command);
+            return self.spawn_managed_child(WindowContent::Test, app.bundle_id.clone(), command);
         }
 
         if app.entry == "self:about" || app.bundle_id == "com.mochi.binder" {
@@ -509,20 +504,10 @@ impl DesktopPlatform for LinuxPlatform {
 
             command.arg("--role=about");
 
-            return self.spawn_managed_child(ApplicationId::About, app.bundle_id.clone(), command);
+            return self.spawn_managed_child(WindowContent::About, app.bundle_id.clone(), command);
         }
 
-        let executable = app.entry_path();
-
-        if !executable.is_file() {
-            return Err(PlatformError::ProcessLaunchFailed);
-        }
-
-        let mut command = Command::new(executable);
-
-        command.current_dir(&app.root);
-
-        self.spawn_managed_child(ApplicationId::About, app.bundle_id.clone(), command)
+        Err(PlatformError::UnsupportedOperation)
     }
 
     fn running_app_bundle_ids(&self) -> Vec<String> {
@@ -543,8 +528,8 @@ impl Drop for LinuxPlatform {
     }
 }
 
-pub(super) fn run_application_process(application: ApplicationId) -> Result<(), PlatformError> {
-    transport::run_application_process(application)
+pub(super) fn run_internal_process(content: WindowContent) -> Result<(), PlatformError> {
+    transport::run_internal_process(content)
 }
 
 fn read_system_bar_state() -> Result<SystemBarState, PlatformError> {

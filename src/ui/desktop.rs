@@ -7,11 +7,9 @@ use super::{dock, top_bar};
 
 use crate::desktop::WindowResize;
 
-use crate::platform::{
-    AppInfo, ApplicationId, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState,
-};
+use crate::platform::{AppInfo, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState};
 
-use crate::window::{DesktopWindows, WindowDrag};
+use crate::window::{DesktopWindows, WindowContent, WindowDrag};
 
 use viewkit::{prelude::*, view::PaintContext};
 
@@ -218,8 +216,8 @@ impl View for PlatformRefreshView {
         if has_window_changes {
             self.windows.update(|desktop| {
                 for request in create_requests {
-                    match request.application {
-                        ApplicationId::About => {
+                    match request.content {
+                        WindowContent::About => {
                             let (_window_id, remote_window) = desktop.open_about(
                                 request.process_id,
                                 request.title,
@@ -231,7 +229,7 @@ impl View for PlatformRefreshView {
                             registrations.push((request.process_id, remote_window));
                         }
 
-                        ApplicationId::Test => {
+                        WindowContent::Test => {
                             let (_window_id, remote_window) = desktop.open_test(
                                 request.process_id,
                                 request.title,

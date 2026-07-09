@@ -7,10 +7,12 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-pub use crate::ipc::{ApplicationId, RemoteWindowId};
+pub use crate::ipc::RemoteWindowId;
 
 #[cfg(not(target_os = "linux"))]
 pub use mochios::MochiOsPlatform;
+
+use crate::window::WindowContent;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProcessId(pub u32);
@@ -18,7 +20,7 @@ pub struct ProcessId(pub u32);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreateWindowRequest {
     pub process_id: ProcessId,
-    pub application: ApplicationId,
+    pub content: WindowContent,
     pub title: String,
     pub width: u32,
     pub height: u32,
@@ -150,9 +152,9 @@ pub trait DesktopPlatform {
 
     fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError>;
 
-    fn launch_application(
+    fn launch_internal_window(
         &mut self,
-        _application: ApplicationId,
+        _content: WindowContent,
     ) -> Result<ProcessId, PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }
@@ -233,14 +235,14 @@ pub fn current() -> Rc<RefCell<dyn DesktopPlatform>> {
     }
 }
 
-pub fn run_application_process(application: ApplicationId) -> Result<(), PlatformError> {
+pub fn run_internal_process(content: WindowContent) -> Result<(), PlatformError> {
     #[cfg(target_os = "linux")]
     {
-        linux::run_application_process(application)
+        linux::run_internal_process(content)
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        mochios::run_application_process(application)
+        mochios::run_internal_process(content)
     }
 }

@@ -14,11 +14,12 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ipc::{
-    ApplicationId, ClientRequest, ServerEvent, encode_client_request, encode_server_event,
+    ClientRequest, ServerEvent, encode_client_request, encode_server_event,
     try_decode_client_request, try_decode_server_event,
 };
 
 use crate::platform::{PlatformError, ProcessId};
+use crate::window::WindowContent;
 
 pub(super) const BINDER_SOCKET_ENV: &str = "BINDER_SOCKET";
 
@@ -316,32 +317,32 @@ fn flush_writes(connection: &mut ClientConnection) -> Result<bool, PlatformError
     }
 }
 
-pub(super) fn run_application_process(application: ApplicationId) -> Result<(), PlatformError> {
+pub(super) fn run_internal_process(content: WindowContent) -> Result<(), PlatformError> {
     let socket_path =
         std::env::var_os(BINDER_SOCKET_ENV).ok_or(PlatformError::ServiceUnavailable)?;
 
     let mut stream =
         UnixStream::connect(socket_path).map_err(|_| PlatformError::TransportFailure)?;
 
-    let request = create_window_request(application);
+    let requests = create_window_requests(content);
 
-    let frame = encode_client_request(&request).map_err(|_| PlatformError::InvalidResponse)?;
+    let expected_windows = requests.len();
 
-    stream
-        .write_all(&frame)
-        .map_err(|_| PlatformError::TransportFailure)?;
+    for request in requests {
+        let frame = encode_client_request(&request).map_err(|_| PlatformError::InvalidResponse)?;
 
-    stream
-        .flush()
-        .map_err(|_| PlatformError::TransportFailure)?;
+        stream
+            .write_all(&frame)
+            .map_err(|_| PlatformError::TransportFailure)?;
+
+        stream
+            .flush()
+            .map_err(|_| PlatformError::TransportFailure)?;
+    }
 
     let mut read_buffer = Vec::new();
 
-    let mut created_window = None;
-
-    let mut _window_size = None;
-
-    let mut _focused = false;
+    let mut created_windows = HashSet::new();
 
     loop {
         let mut buffer = [0_u8; 1024];
@@ -366,11 +367,11 @@ pub(super) fn run_application_process(application: ApplicationId) -> Result<(), 
 
             match event {
                 ServerEvent::WindowCreated { window } => {
-                    created_window = Some(window);
+                    created_windows.insert(window);
                 }
 
                 ServerEvent::CloseRequested { window } => {
-                    if created_window != Some(window) {
+                    if !created_windows.contains(&window) {
                         continue;
                     }
 
@@ -387,50 +388,62 @@ pub(super) fn run_application_process(application: ApplicationId) -> Result<(), 
                         .flush()
                         .map_err(|_| PlatformError::TransportFailure)?;
 
-                    return Ok(());
+                    created_windows.remove(&window);
+
+                    if created_windows.is_empty() && expected_windows != 0 {
+                        return Ok(());
+                    }
                 }
 
-                ServerEvent::Resized {
-                    window,
-                    width,
-                    height,
-                } => {
-                    if created_window != Some(window) {
+                ServerEvent::Resized { window, .. } => {
+                    if !created_windows.contains(&window) {
                         continue;
                     }
-
-                    _window_size = Some((width, height));
                 }
 
-                ServerEvent::FocusChanged { window, focused } => {
-                    if created_window != Some(window) {
+                ServerEvent::FocusChanged { window, .. } => {
+                    if !created_windows.contains(&window) {
                         continue;
                     }
-
-                    _focused = focused;
                 }
             }
         }
     }
 }
 
-fn create_window_request(application: ApplicationId) -> ClientRequest {
-    match application {
-        ApplicationId::About => ClientRequest::CreateWindow {
-            application,
-            title: String::from("About mochiOS"),
-            width: 420,
-            height: 300,
-            resizable: true,
-        },
+fn create_window_requests(content: WindowContent) -> Vec<ClientRequest> {
+    match content {
+        WindowContent::About => {
+            vec![ClientRequest::CreateWindow {
+                title: String::from("About mochiOS"),
+                width: 420,
+                height: 300,
+                resizable: true,
+            }]
+        }
 
-        ApplicationId::Test => ClientRequest::CreateWindow {
-            application,
-            title: String::from("Test Window"),
-            width: 360,
-            height: 220,
-            resizable: true,
-        },
+        WindowContent::Test => {
+            vec![
+                ClientRequest::CreateWindow {
+                    title: String::from("Test Window 1"),
+                    width: 360,
+                    height: 220,
+                    resizable: true,
+                },
+                ClientRequest::CreateWindow {
+                    title: String::from("Test Window 2"),
+                    width: 360,
+                    height: 220,
+                    resizable: true,
+                },
+                ClientRequest::CreateWindow {
+                    title: String::from("Test Window 3"),
+                    width: 360,
+                    height: 220,
+                    resizable: true,
+                },
+            ]
+        }
     }
 }
 
