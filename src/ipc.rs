@@ -29,7 +29,6 @@ pub struct RemoteWindowId(pub u64);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientRequest {
     CreateWindow {
-        application: ApplicationId,
         title: String,
         width: u32,
         height: u32,
@@ -79,7 +78,6 @@ pub enum ProtocolError {
 pub fn encode_client_request(request: &ClientRequest) -> Result<Vec<u8>, ProtocolError> {
     match request {
         ClientRequest::CreateWindow {
-            application,
             title,
             width,
             height,
@@ -93,18 +91,12 @@ pub fn encode_client_request(request: &ClientRequest) -> Result<Vec<u8>, Protoco
                 return Err(ProtocolError::InvalidTitle);
             }
 
-            let mut payload = Vec::with_capacity(12 + title_bytes.len());
-
-            payload.push(encode_application(*application));
+            let mut payload = Vec::with_capacity(11 + title_bytes.len());
 
             payload.push(u8::from(*resizable));
-
             payload.extend_from_slice(&width.to_le_bytes());
-
             payload.extend_from_slice(&height.to_le_bytes());
-
             payload.extend_from_slice(&(title_bytes.len() as u16).to_le_bytes());
-
             payload.extend_from_slice(title_bytes);
 
             encode_frame(CLIENT_CREATE_WINDOW, &payload)
@@ -260,8 +252,6 @@ pub fn try_decode_server_event(buffer: &mut Vec<u8>) -> Result<Option<ServerEven
 fn decode_create_window(payload: &[u8]) -> Result<ClientRequest, ProtocolError> {
     let mut reader = PayloadReader::new(payload);
 
-    let application = decode_application(reader.read_u8()?)?;
-
     let resizable = match reader.read_u8()? {
         0 => false,
         1 => true,
@@ -292,7 +282,6 @@ fn decode_create_window(payload: &[u8]) -> Result<ClientRequest, ProtocolError> 
     reader.finish()?;
 
     Ok(ClientRequest::CreateWindow {
-        application,
         title,
         width,
         height,

@@ -88,9 +88,6 @@ dependencies = [
 [[package]]
 name = "binder_client"
 version = "0.1.0"
-dependencies = [
- "viewkit",
-]
 
 [[package]]
 name = "binder_protocol"
