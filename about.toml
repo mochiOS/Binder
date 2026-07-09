@@ -1,0 +1,15 @@
+name = "Binder"
+bundle_id = "org.mochios.binder"
+version = "0.1.0"
+developer = "mochiOS"
+entry = "entry.elf"
+description = "Desktop shell and application launcher for mochiOS"
+icon = "appicon.svg"
+
+resources = [
+    "appicon.svg",
+    "close.svg",
+    "maximize.svg",
+    "minimize.svg",
+    "mochios.svg",
+]
