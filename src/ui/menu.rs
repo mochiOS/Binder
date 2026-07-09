@@ -1,11 +1,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::apps;
+use crate::platform::{DesktopPlatform, SystemAction};
 use viewkit::prelude::*;
 
-use crate::platform::{DesktopPlatform, SystemAction};
-
-use crate::window::{DesktopWindows, WindowContent};
+use crate::window::DesktopWindows;
 
 pub(crate) fn view(
     platform: Rc<RefCell<dyn DesktopPlatform>>,
@@ -68,7 +68,7 @@ pub(crate) fn view(
 
             let result = about_platform
                 .borrow_mut()
-                .launch_internal_window(WindowContent::About);
+                .launch_internal_window(apps::ABOUT_ENTRY);
 
             if let Err(error) = result {
                 eprintln!("failed to launch About: {error:?}",);

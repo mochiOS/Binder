@@ -15,7 +15,7 @@ use super::{
     WindowResizedNotification,
 };
 
-use crate::window::WindowContent;
+use crate::apps;
 use transport::{BINDER_SOCKET_ENV, LinuxIpcServer, TransportEvent};
 
 const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -31,25 +31,22 @@ struct InternalAppLaunch {
     entry: &'static str,
     role_argument: &'static str,
     default_bundle_id: &'static str,
-    content: WindowContent,
 }
 
 const INTERNAL_ABOUT_APP: InternalAppLaunch = InternalAppLaunch {
-    entry: "internal:about",
-    role_argument: "--role=about",
-    default_bundle_id: "com.mochi.binder.about",
-    content: WindowContent::About,
+    entry: apps::ABOUT_ENTRY,
+    role_argument: apps::ABOUT_ROLE,
+    default_bundle_id: apps::ABOUT_BUNDLE_ID,
 };
 
 const INTERNAL_TEST_APP: InternalAppLaunch = InternalAppLaunch {
-    entry: "internal:test",
-    role_argument: "--role=test",
-    default_bundle_id: "com.mochi.binder.test",
-    content: WindowContent::Test,
+    entry: apps::TEST_ENTRY,
+    role_argument: apps::TEST_ROLE,
+    default_bundle_id: apps::TEST_BUNDLE_ID,
 };
 
 struct ManagedChild {
-    content: WindowContent,
+    renderer: String,
     bundle_id: String,
     child: Child,
 
@@ -61,7 +58,6 @@ struct ManagedChild {
 
     close_deadlines: HashMap<RemoteWindowId, Instant>,
 }
-
 pub struct LinuxPlatform {
     system_bar: SystemBarState,
 
@@ -196,7 +192,7 @@ impl LinuxPlatform {
 
                 self.create_window_requests.push(CreateWindowRequest {
                     process_id,
-                    content: child.content,
+                    renderer: child.renderer.clone(),
                     title,
                     width,
                     height,
@@ -268,7 +264,7 @@ impl LinuxPlatform {
 
     fn spawn_managed_child(
         &mut self,
-        content: WindowContent,
+        renderer: String,
         bundle_id: String,
         mut command: Command,
     ) -> Result<ProcessId, PlatformError> {
@@ -293,17 +289,13 @@ impl LinuxPlatform {
         self.children.insert(
             process_id,
             ManagedChild {
-                content,
+                renderer,
                 bundle_id,
-
                 child,
-
                 launched_at: Instant::now(),
                 registered_at: None,
                 disconnected_at: None,
-
                 windows: HashSet::new(),
-
                 close_deadlines: HashMap::new(),
             },
         );
@@ -319,25 +311,15 @@ impl LinuxPlatform {
         }
     }
 
-    fn internal_app_for_content(content: WindowContent) -> InternalAppLaunch {
-        match content {
-            WindowContent::About => INTERNAL_ABOUT_APP,
-            WindowContent::Test => INTERNAL_TEST_APP,
-        }
-    }
-
     fn spawn_internal_app(
         &mut self,
         internal_app: InternalAppLaunch,
         bundle_id: String,
     ) -> Result<ProcessId, PlatformError> {
         let executable = std::env::current_exe().map_err(|_| PlatformError::ProcessLaunchFailed)?;
-
         let mut command = Command::new(executable);
-
         command.arg(internal_app.role_argument);
-
-        self.spawn_managed_child(internal_app.content, bundle_id, command)
+        self.spawn_managed_child(String::from(internal_app.entry), bundle_id, command)
     }
 }
 
@@ -360,11 +342,10 @@ impl DesktopPlatform for LinuxPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
-    fn launch_internal_window(
-        &mut self,
-        content: WindowContent,
-    ) -> Result<ProcessId, PlatformError> {
-        let internal_app = Self::internal_app_for_content(content);
+    fn launch_internal_window(&mut self, entry: &str) -> Result<ProcessId, PlatformError> {
+        let Some(internal_app) = Self::internal_app_for_entry(entry) else {
+            return Err(PlatformError::UnsupportedOperation);
+        };
 
         self.spawn_internal_app(internal_app, String::from(internal_app.default_bundle_id))
     }
@@ -558,8 +539,8 @@ impl Drop for LinuxPlatform {
     }
 }
 
-pub(super) fn run_internal_process(content: WindowContent) -> Result<(), PlatformError> {
-    transport::run_internal_process(content)
+pub(super) fn run_internal_process(entry: &str) -> Result<(), PlatformError> {
+    transport::run_internal_process(entry)
 }
 
 fn read_system_bar_state() -> Result<SystemBarState, PlatformError> {

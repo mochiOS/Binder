@@ -11,15 +11,14 @@ use std::os::unix::net::{UnixListener, UnixStream};
 
 use std::path::{Path, PathBuf};
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
+use crate::apps;
 use crate::ipc::{
     ClientRequest, ServerEvent, encode_client_request, encode_server_event,
     try_decode_client_request, try_decode_server_event,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::platform::{PlatformError, ProcessId};
-use crate::window::WindowContent;
 
 pub(super) const BINDER_SOCKET_ENV: &str = "BINDER_SOCKET";
 
@@ -317,14 +316,14 @@ fn flush_writes(connection: &mut ClientConnection) -> Result<bool, PlatformError
     }
 }
 
-pub(super) fn run_internal_process(content: WindowContent) -> Result<(), PlatformError> {
+pub(super) fn run_internal_process(entry: &str) -> Result<(), PlatformError> {
     let socket_path =
         std::env::var_os(BINDER_SOCKET_ENV).ok_or(PlatformError::ServiceUnavailable)?;
 
     let mut stream =
         UnixStream::connect(socket_path).map_err(|_| PlatformError::TransportFailure)?;
 
-    let requests = create_window_requests(content);
+    let requests = create_window_requests(entry);
 
     let expected_windows = requests.len();
 
@@ -341,7 +340,6 @@ pub(super) fn run_internal_process(content: WindowContent) -> Result<(), Platfor
     }
 
     let mut read_buffer = Vec::new();
-
     let mut created_windows = HashSet::new();
 
     loop {
@@ -411,9 +409,9 @@ pub(super) fn run_internal_process(content: WindowContent) -> Result<(), Platfor
     }
 }
 
-fn create_window_requests(content: WindowContent) -> Vec<ClientRequest> {
-    match content {
-        WindowContent::About => {
+fn create_window_requests(entry: &str) -> Vec<ClientRequest> {
+    match entry {
+        apps::ABOUT_ENTRY => {
             vec![ClientRequest::CreateWindow {
                 title: String::from("About mochiOS"),
                 width: 420,
@@ -422,7 +420,7 @@ fn create_window_requests(content: WindowContent) -> Vec<ClientRequest> {
             }]
         }
 
-        WindowContent::Test => {
+        apps::TEST_ENTRY => {
             vec![
                 ClientRequest::CreateWindow {
                     title: String::from("Test Window 1"),
@@ -444,6 +442,8 @@ fn create_window_requests(content: WindowContent) -> Vec<ClientRequest> {
                 },
             ]
         }
+
+        _ => Vec::new(),
     }
 }
 

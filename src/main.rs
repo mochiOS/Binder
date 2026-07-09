@@ -1,3 +1,4 @@
+mod apps;
 mod desktop;
 mod ipc;
 mod platform;
@@ -7,23 +8,22 @@ mod window;
 use desktop::BinderApp;
 use std::ffi::OsStr;
 use viewkit::prelude::{ViewKitError, run};
-use window::WindowContent;
 
 fn run_desktop() -> Result<(), ViewKitError> {
     run::<BinderApp>()
 }
 
 fn run_process_role(role: &OsStr) {
-    if role == OsStr::new("--role=about") {
-        if let Err(error) = platform::run_internal_process(WindowContent::About) {
+    if role == OsStr::new(apps::ABOUT_ROLE) {
+        if let Err(error) = platform::run_internal_process(apps::ABOUT_ENTRY) {
             eprintln!("Binder About process failed: {error:?}",);
         }
 
         return;
     }
 
-    if role == OsStr::new("--role=test") {
-        if let Err(error) = platform::run_internal_process(WindowContent::Test) {
+    if role == OsStr::new(apps::TEST_ROLE) {
+        if let Err(error) = platform::run_internal_process(apps::TEST_ENTRY) {
             eprintln!("Binder Test process failed: {error:?}",);
         }
 

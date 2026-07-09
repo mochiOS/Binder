@@ -1,5 +1,6 @@
 use super::{about, test, window_decoration};
-use crate::window::{DesktopWindow, WindowContent};
+use crate::apps;
+use crate::window::DesktopWindow;
 use viewkit::theme::{Shadow, ShadowSet};
 use viewkit::{
     draw_command::DrawCommand,
@@ -119,9 +120,10 @@ impl View for WindowView {
 }
 
 pub(crate) fn view(window: &DesktopWindow, focused: bool) -> impl View + 'static {
-    let content: Box<dyn View + 'static> = match window.content {
-        WindowContent::About => Box::new(about::view()),
-        WindowContent::Test => Box::new(test::view()),
+    let content: Box<dyn View + 'static> = match window.renderer.as_str() {
+        apps::ABOUT_ENTRY => Box::new(about::view()),
+        apps::TEST_ENTRY => Box::new(test::view()),
+        _ => Box::new(remote_placeholder_view()),
     };
 
     WindowView {
@@ -187,4 +189,26 @@ pub(crate) fn contains(bounds: Rect, point: Point) -> bool {
     let delta_y = point.y - center_y;
 
     delta_x * delta_x + delta_y * delta_y <= radius * radius
+}
+
+fn remote_placeholder_view() -> impl View + 'static {
+    VStack::new()
+        .alignment(StackAlignment::Center)
+        .distribution(StackDistribution::Center)
+        .gap(StackGap::Small)
+        .child(
+            Text::new("RemoteSurface")
+                .font_size(24.0)
+                .line_height(32.0)
+                .weight(750)
+                .alignment(TextAlignment::Center)
+                .color(Color::from_rgb_hex(0x202020)),
+        )
+        .child(
+            Text::new("No compositor surface attached")
+                .font_size(13.0)
+                .line_height(18.0)
+                .alignment(TextAlignment::Center)
+                .color(Color::rgba(60, 60, 60, 170)),
+        )
 }

@@ -4,35 +4,24 @@ use crate::platform::{
 };
 use std::collections::{HashMap, HashSet};
 
+use crate::apps;
 use viewkit::prelude::{Point, Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WindowContent {
-    About,
-    Test,
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DesktopWindow {
     pub id: WindowId,
     pub title: String,
     pub frame: Rect,
-
     pub resizable: bool,
     pub minimized: bool,
     pub close_requested: bool,
-
-    pub content: WindowContent,
-
+    pub renderer: String,
     pub process_id: Option<ProcessId>,
-
     pub remote_window: Option<RemoteWindowId>,
-
     pub interaction: WindowInteraction,
-
     pub restore_frame: Option<Rect>,
 }
 
@@ -77,7 +66,7 @@ impl DesktopWindows {
     pub fn about_window(&self) -> Option<WindowId> {
         self.windows
             .iter()
-            .find(|window| window.content == WindowContent::About)
+            .find(|window| window.renderer == apps::ABOUT_ENTRY)
             .map(|window| window.id)
     }
 
@@ -92,7 +81,7 @@ impl DesktopWindows {
         if let Some((id, remote_window)) = self
             .windows
             .iter()
-            .find(|window| window.content == WindowContent::About)
+            .find(|window| window.renderer == apps::ABOUT_ENTRY)
             .map(|window| {
                 (
                     window.id,
@@ -123,7 +112,7 @@ impl DesktopWindows {
             minimized: false,
             close_requested: false,
 
-            content: WindowContent::About,
+            renderer: String::from(apps::ABOUT_ENTRY),
 
             process_id: Some(process_id),
 
@@ -505,7 +494,7 @@ impl DesktopWindows {
             resizable,
             minimized: false,
             close_requested: false,
-            content: WindowContent::Test,
+            renderer: String::from(apps::TEST_ENTRY),
             process_id: Some(process_id),
             remote_window: Some(remote_window),
             interaction: WindowInteraction::default(),
@@ -513,6 +502,38 @@ impl DesktopWindows {
         });
 
         self.focused = Some(id);
+        (id, remote_window)
+    }
+
+    pub fn open_window(
+        &mut self,
+        process_id: ProcessId,
+        renderer: String,
+        title: String,
+        width: u32,
+        height: u32,
+        resizable: bool,
+    ) -> (WindowId, RemoteWindowId) {
+        let id = self.allocate_id();
+        let remote_window = RemoteWindowId(id.0);
+        let offset = ((id.0.saturating_sub(1) % 6) as f32) * 28.0;
+
+        self.windows.push(DesktopWindow {
+            id,
+            title,
+            frame: Rect::new(320.0 + offset, 150.0 + offset, width as f32, height as f32),
+            resizable,
+            minimized: false,
+            close_requested: false,
+            renderer,
+            process_id: Some(process_id),
+            remote_window: Some(remote_window),
+            interaction: WindowInteraction::default(),
+            restore_frame: None,
+        });
+
+        self.focused = Some(id);
+
         (id, remote_window)
     }
 }

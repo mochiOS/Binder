@@ -9,8 +9,9 @@ use crate::desktop::WindowResize;
 
 use crate::platform::{AppInfo, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState};
 
-use crate::window::{DesktopWindows, WindowContent, WindowDrag};
+use crate::window::{DesktopWindows, WindowDrag};
 
+use crate::apps;
 use viewkit::{prelude::*, view::PaintContext};
 
 const DESKTOP_BACKGROUND: Color = Color::rgba(200, 200, 200, 255);
@@ -216,8 +217,8 @@ impl View for PlatformRefreshView {
         if has_window_changes {
             self.windows.update(|desktop| {
                 for request in create_requests {
-                    match request.content {
-                        WindowContent::About => {
+                    match request.renderer.as_str() {
+                        apps::ABOUT_ENTRY => {
                             let (_window_id, remote_window) = desktop.open_about(
                                 request.process_id,
                                 request.title,
@@ -229,9 +230,22 @@ impl View for PlatformRefreshView {
                             registrations.push((request.process_id, remote_window));
                         }
 
-                        WindowContent::Test => {
+                        apps::TEST_ENTRY => {
                             let (_window_id, remote_window) = desktop.open_test(
                                 request.process_id,
+                                request.title,
+                                request.width,
+                                request.height,
+                                request.resizable,
+                            );
+
+                            registrations.push((request.process_id, remote_window));
+                        }
+
+                        _ => {
+                            let (_window_id, remote_window) = desktop.open_window(
+                                request.process_id,
+                                request.renderer,
                                 request.title,
                                 request.width,
                                 request.height,
