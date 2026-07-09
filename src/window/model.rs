@@ -446,28 +446,48 @@ impl DesktopWindows {
             .map(|window| window.id);
     }
 
-    pub fn focus_process(&mut self, process_id: ProcessId) {
-        let Some(window_id) = self
-            .windows
-            .iter()
-            .rev()
-            .find(|window| window.process_id == Some(process_id))
-            .map(|window| window.id)
-        else {
+    pub fn activate_process(&mut self, process_id: ProcessId) {
+        let Some(target) = self.activation_target_for_process(process_id) else {
             return;
         };
 
-        if self.focused == Some(window_id) {
-            let Some(window) = self.windows.iter().find(|window| window.id == window_id) else {
-                return;
-            };
+        self.focus(target);
+    }
 
-            if !window.minimized {
-                return;
+    fn activation_target_for_process(&self, process_id: ProcessId) -> Option<WindowId> {
+        let focused_window = self
+            .focused
+            .and_then(|focused| self.windows.iter().find(|window| window.id == focused));
+
+        let focused_process_visible = focused_window
+            .is_some_and(|window| window.process_id == Some(process_id) && !window.minimized);
+
+        if focused_process_visible {
+            let visible_windows: Vec<WindowId> = self
+                .windows
+                .iter()
+                .filter(|window| window.process_id == Some(process_id) && !window.minimized)
+                .map(|window| window.id)
+                .collect();
+
+            if visible_windows.len() > 1 {
+                return visible_windows.first().copied();
             }
+
+            return visible_windows.first().copied();
         }
 
-        self.focus(window_id);
+        self.windows
+            .iter()
+            .rev()
+            .find(|window| window.process_id == Some(process_id) && !window.minimized)
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .rev()
+                    .find(|window| window.process_id == Some(process_id))
+            })
+            .map(|window| window.id)
     }
 
     pub fn open_test(

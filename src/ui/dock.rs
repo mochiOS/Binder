@@ -231,7 +231,7 @@ where
         };
 
         self.windows.update(|desktop| {
-            desktop.focus_process(process_id);
+            desktop.activate_process(process_id);
         });
     }
 
