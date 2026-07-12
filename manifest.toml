@@ -19,4 +19,5 @@ requires = [
     "ipc.server",
     "process.spawn",
     "window.create",
+    "window.overlay",
 ]

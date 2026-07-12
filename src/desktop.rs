@@ -66,6 +66,7 @@ impl App for BinderApp {
         WindowOptions::new("Binder")
             .size(1280.0, 800.0)
             .resizable(false)
+            .fullscreen(true)
     }
 
     fn body(&self, _context: &ViewContext) -> Self::Body {
