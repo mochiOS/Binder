@@ -73,7 +73,16 @@ pub(crate) fn view(
 
     let root = super::popup_menu::PopupMenu::new(docked_desktop, menu, menu_open);
 
-    Box::new(super::cursor::CursorLayer::new(root, cursor_pointer))
+    #[cfg(target_os = "mochios")]
+    {
+        let _ = cursor_pointer;
+        Box::new(root)
+    }
+
+    #[cfg(not(target_os = "mochios"))]
+    {
+        Box::new(super::cursor::CursorLayer::new(root, cursor_pointer))
+    }
 }
 
 struct PlatformRefreshView {
