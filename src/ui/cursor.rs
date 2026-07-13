@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::OnceLock;
 
 use viewkit::{
@@ -19,15 +20,18 @@ const CURSOR_HOTSPOT_Y: f32 = 1.0;
 
 pub(crate) struct CursorLayer<C> {
     content: C,
-    pointer: State<Option<Point>>,
+    pointer: Cell<Option<Point>>,
 }
 
 impl<C> CursorLayer<C>
 where
     C: View,
 {
-    pub(crate) fn new(content: C, pointer: State<Option<Point>>) -> Self {
-        Self { content, pointer }
+    pub(crate) fn new(content: C) -> Self {
+        Self {
+            content,
+            pointer: Cell::new(None),
+        }
     }
 
     fn cursor_image() -> Option<ImageData> {

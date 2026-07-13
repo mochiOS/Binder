@@ -17,7 +17,6 @@ pub struct BinderApp {
     dock_pressed_app: State<Option<usize>>,
     dock_pointer: State<Option<Point>>,
     dock_running_apps: State<Vec<String>>,
-    cursor_pointer: State<Option<Point>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +59,6 @@ impl App for BinderApp {
             dock_pressed_app: State::new(None),
             dock_pointer: State::new(None),
             dock_running_apps: State::new(Vec::new()),
-            cursor_pointer: State::new(None),
         }
     }
 
@@ -84,7 +82,6 @@ impl App for BinderApp {
             self.dock_pressed_app.clone(),
             self.dock_pointer.clone(),
             self.dock_running_apps.clone(),
-            self.cursor_pointer.clone(),
         )
     }
 }
