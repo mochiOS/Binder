@@ -33,7 +33,7 @@ impl MochiOsPlatform {
     pub fn new() -> Self {
         Self {
             system_bar: SystemBarState::default(),
-            apps: read_apps(),
+            apps: builtin_apps(),
             children: HashMap::new(),
             create_window_requests: Vec::new(),
             close_window_requests: Vec::new(),
@@ -336,6 +336,34 @@ fn applications_root() -> PathBuf {
     PathBuf::from("/applications")
 }
 
+fn builtin_apps() -> Vec<AppInfo> {
+    vec![
+        AppInfo {
+            root: PathBuf::from("/applications/Binder.app"),
+            name: String::from("About mochiOS"),
+            bundle_id: String::from(apps::ABOUT_BUNDLE_ID),
+            version: String::from("0.1.0"),
+            developer: String::from("mochiOS"),
+            entry: String::from(apps::ABOUT_ENTRY),
+            description: String::from("System information"),
+            icon: None,
+            resources: Vec::new(),
+        },
+        AppInfo {
+            root: PathBuf::from("/applications/Binder.app"),
+            name: String::from("Test Window"),
+            bundle_id: String::from(apps::TEST_BUNDLE_ID),
+            version: String::from("0.1.0"),
+            developer: String::from("mochiOS"),
+            entry: String::from(apps::TEST_ENTRY),
+            description: String::from("ViewKit window test"),
+            icon: None,
+            resources: Vec::new(),
+        },
+    ]
+}
+
+#[allow(dead_code)]
 fn read_apps() -> Vec<AppInfo> {
     let Ok(entries) = fs::read_dir(applications_root()) else {
         return Vec::new();
