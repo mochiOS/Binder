@@ -44,11 +44,9 @@ impl App for BinderApp {
     type Body = Box<dyn View + 'static>;
 
     fn new() -> Self {
-        eprintln!("Binder.app: app init begin");
         let platform = platform::current();
         let system_bar = platform.borrow().system_bar_state().unwrap_or_default();
         let apps = platform.borrow().get_apps();
-        eprintln!("Binder.app: app init done apps={}", apps.len());
 
         Self {
             platform,
