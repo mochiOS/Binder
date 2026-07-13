@@ -14,8 +14,8 @@ const CURSOR_SVG_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../resources/system/icons/cursor.svg"
 ));
-const CURSOR_WIDTH: f32 = 35.0;
-const CURSOR_HEIGHT: f32 = 60.0;
+const CURSOR_WIDTH: f32 = 12.0;
+const CURSOR_HEIGHT: f32 = 20.0;
 const CURSOR_HOTSPOT_X: f32 = 1.0;
 const CURSOR_HOTSPOT_Y: f32 = 1.0;
 
