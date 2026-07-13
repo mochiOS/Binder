@@ -30,6 +30,7 @@ pub(crate) fn view(
     dock_pressed: State<Option<usize>>,
     dock_pointer: State<Option<Point>>,
     dock_running_apps: State<Vec<String>>,
+    cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
 ) -> Box<dyn View + 'static> {
     let refresh_driver = PlatformRefreshView::new(
         Rc::clone(&platform),
@@ -72,7 +73,7 @@ pub(crate) fn view(
 
     let root = super::popup_menu::PopupMenu::new(docked_desktop, menu, menu_open);
 
-    Box::new(super::cursor::CursorLayer::new(root))
+    Box::new(super::cursor::CursorLayer::new(root, cursor_pointer))
 }
 
 struct PlatformRefreshView {
