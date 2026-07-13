@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 use viewkit::{
+    draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
     prelude::*,
     view::{Constraints, MeasureContext, PaintContext},
@@ -8,8 +9,8 @@ use viewkit::{
 
 const CURSOR_SVG_PATH: &str = "/system/icons/cursor.svg";
 const CURSOR_SVG_BYTES: &[u8] = include_bytes!(concat!(
-env!("CARGO_MANIFEST_DIR"),
-"/../../resources/system/icons/cursor.svg"
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../resources/system/icons/cursor.svg"
 ));
 const CURSOR_WIDTH: f32 = 35.0;
 const CURSOR_HEIGHT: f32 = 60.0;
@@ -29,14 +30,15 @@ where
         Self { content, pointer }
     }
 
-    fn cursor_svg() -> Option<SvgData> {
-        static CURSOR: OnceLock<Option<SvgData>> = OnceLock::new();
+    fn cursor_image() -> Option<ImageData> {
+        static CURSOR: OnceLock<Option<ImageData>> = OnceLock::new();
 
         CURSOR
             .get_or_init(|| {
-                SvgData::from_path(CURSOR_SVG_PATH)
+                let svg = SvgData::from_path(CURSOR_SVG_PATH)
                     .or_else(|_| SvgData::decode(CURSOR_SVG_BYTES))
-                    .ok()
+                    .ok()?;
+                ImageData::from_svg(&svg, CURSOR_WIDTH as u32, CURSOR_HEIGHT as u32).ok()
             })
             .clone()
     }
@@ -62,7 +64,7 @@ where
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.content.paint(bounds, context);
 
-        let Some(svg) = Self::cursor_svg() else {
+        let Some(image) = Self::cursor_image() else {
             return;
         };
 
@@ -75,8 +77,9 @@ where
 
         let cursor_bounds = Self::cursor_bounds(pointer);
 
-        Svg::new(svg)
-            .content_mode(SvgContentMode::Stretch)
+        Image::new(image)
+            .content_mode(ImageContentMode::Stretch)
+            .sampling(ImageSampling::Nearest)
             .paint(cursor_bounds, context);
     }
 

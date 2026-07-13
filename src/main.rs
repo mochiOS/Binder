@@ -7,7 +7,7 @@ mod window;
 
 use desktop::BinderApp;
 use std::ffi::OsStr;
-use viewkit::prelude::{run, ViewKitError};
+use viewkit::prelude::{ViewKitError, run};
 
 fn run_desktop() -> Result<(), ViewKitError> {
     run::<BinderApp>()
