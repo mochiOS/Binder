@@ -16,7 +16,7 @@ use viewkit::{prelude::*, view::PaintContext};
 
 const DESKTOP_BACKGROUND: Color = Color::rgba(200, 200, 200, 255);
 
-const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
@@ -30,6 +30,7 @@ pub(crate) fn view(
     dock_pressed: State<Option<usize>>,
     dock_pointer: State<Option<Point>>,
     dock_running_apps: State<Vec<String>>,
+    cursor_pointer: State<Option<Point>>,
 ) -> Box<dyn View + 'static> {
     let refresh_driver = PlatformRefreshView::new(
         Rc::clone(&platform),
@@ -70,11 +71,9 @@ pub(crate) fn view(
 
     let menu = super::menu::view(platform, menu_open.clone(), windows);
 
-    Box::new(super::popup_menu::PopupMenu::new(
-        docked_desktop,
-        menu,
-        menu_open,
-    ))
+    let root = super::popup_menu::PopupMenu::new(docked_desktop, menu, menu_open);
+
+    Box::new(super::cursor::CursorLayer::new(root, cursor_pointer))
 }
 
 struct PlatformRefreshView {
@@ -108,8 +107,6 @@ impl PlatformRefreshView {
 
 impl View for PlatformRefreshView {
     fn paint(&self, _bounds: Rect, context: &mut PaintContext<'_>) {
-        context.request_redraw_at(Instant::now() + PLATFORM_REFRESH_INTERVAL);
-
         let needs_notifications = {
             let desktop = self.windows.get();
 
@@ -205,6 +202,7 @@ impl View for PlatformRefreshView {
 
         if self.dock_running_apps.get() != running_apps {
             self.dock_running_apps.set(running_apps);
+            context.request_redraw_at(Instant::now());
         }
 
         let has_window_changes = !create_requests.is_empty()
@@ -291,9 +289,11 @@ impl View for PlatformRefreshView {
                     desktop.close_process(process_id);
                 }
             });
+            context.request_redraw_at(Instant::now());
         }
 
         if !system_bar_changed {
+            context.request_redraw_at(Instant::now() + PLATFORM_REFRESH_INTERVAL);
             return;
         }
 
@@ -309,6 +309,9 @@ impl View for PlatformRefreshView {
 
         if self.system_bar.get() != next_state {
             self.system_bar.set(next_state);
+            context.request_redraw_at(Instant::now());
         }
+
+        context.request_redraw_at(Instant::now() + PLATFORM_REFRESH_INTERVAL);
     }
 }

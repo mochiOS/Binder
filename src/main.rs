@@ -7,10 +7,17 @@ mod window;
 
 use desktop::BinderApp;
 use std::ffi::OsStr;
-use viewkit::prelude::{ViewKitError, run};
+use viewkit::prelude::{run, ViewKitError};
 
 fn run_desktop() -> Result<(), ViewKitError> {
-    run::<BinderApp>()
+    eprintln!("Binder.app: desktop start");
+    let result = run::<BinderApp>();
+    if let Err(error) = &result {
+        eprintln!("Binder.app: desktop exited with error: {error:?}");
+    } else {
+        eprintln!("Binder.app: desktop exited");
+    }
+    result
 }
 
 fn run_process_role(role: &OsStr) {
