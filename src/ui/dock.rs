@@ -411,15 +411,17 @@ where
                     None
                 };
 
-                let changed =
-                    self.hovered.get() != hit || self.pointer.get() != inside.then_some(*position);
+                let next_pointer = inside.then_some(*position);
+                let previous_hovered = self.hovered.get();
+                let previous_pointer = self.pointer.get();
+                let changed = previous_hovered != hit || previous_pointer != next_pointer;
 
-                self.hovered.set(hit);
+                if previous_hovered != hit {
+                    self.hovered.set(hit);
+                }
 
-                if inside {
-                    self.pointer.set(Some(*position));
-                } else {
-                    self.pointer.set(None);
+                if previous_pointer != next_pointer {
+                    self.pointer.set(next_pointer);
                 }
 
                 if changed {
@@ -484,9 +486,15 @@ where
                     || self.pressed.get().is_some()
                     || self.pointer.get().is_some();
 
-                self.hovered.set(None);
-                self.pressed.set(None);
-                self.pointer.set(None);
+                if self.hovered.get().is_some() {
+                    self.hovered.set(None);
+                }
+                if self.pressed.get().is_some() {
+                    self.pressed.set(None);
+                }
+                if self.pointer.get().is_some() {
+                    self.pointer.set(None);
+                }
 
                 if changed {
                     context.request_redraw();
