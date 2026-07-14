@@ -287,7 +287,7 @@ dependencies = [
  "skrifa 0.40.0",
  "smol_str 0.3.6",
  "swash",
-    "sys-locale",
+ "sys-locale",
  "unicode-bidi",
  "unicode-linebreak",
  "unicode-script",
@@ -436,7 +436,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "457e789b3d1202543297a350643cf459f836cade38934e7a4cf6a39e7cde2905"
 dependencies = [
  "log",
-    "memmap2",
+ "memmap2",
  "slotmap",
  "tinyvec",
  "ttf-parser",
@@ -1646,7 +1646,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
 dependencies = [
-    "libc",
+ "libc",
 ]
 
 [[package]]
