@@ -36,6 +36,7 @@ pub(crate) fn view(
         Rc::clone(&platform),
         system_bar.clone(),
         windows.clone(),
+        apps.clone(),
         dock_running_apps.clone(),
     );
 
@@ -92,6 +93,8 @@ struct PlatformRefreshView {
 
     windows: State<DesktopWindows>,
 
+    apps: State<Vec<AppInfo>>,
+
     dock_running_apps: State<Vec<String>>,
 }
 
@@ -103,12 +106,15 @@ impl PlatformRefreshView {
 
         windows: State<DesktopWindows>,
 
+        apps: State<Vec<AppInfo>>,
+
         dock_running_apps: State<Vec<String>>,
     ) -> Self {
         Self {
             platform,
             system_bar,
             windows,
+            apps,
             dock_running_apps,
         }
     }
@@ -154,6 +160,7 @@ impl View for PlatformRefreshView {
             exited_processes,
             failed_close_requests,
             running_apps,
+            discovered_apps,
         ) = {
             let mut platform = self.platform.borrow_mut();
 
@@ -193,6 +200,8 @@ impl View for PlatformRefreshView {
 
             let running_apps = platform.running_app_bundle_ids();
 
+            let discovered_apps = platform.get_apps();
+
             let create_requests = platform.take_create_window_requests();
 
             let close_requests = platform.take_close_window_requests();
@@ -206,8 +215,14 @@ impl View for PlatformRefreshView {
                 exited_processes,
                 failed_close_requests,
                 running_apps,
+                discovered_apps,
             )
         };
+
+        if self.apps.get() != discovered_apps {
+            self.apps.set(discovered_apps);
+            context.request_redraw_at(Instant::now());
+        }
 
         if self.dock_running_apps.get() != running_apps {
             self.dock_running_apps.set(running_apps);

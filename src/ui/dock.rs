@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -6,6 +8,7 @@ use crate::platform::{AppInfo, DesktopPlatform};
 
 use crate::window::DesktopWindows;
 use viewkit::{
+    draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
     prelude::*,
@@ -26,6 +29,7 @@ const DOCK_PRESS_DROP: f32 = 5.0;
 const DOCK_RADIUS: f32 = 48.0;
 const DOCK_ITEM_RADIUS: f32 = 16.0;
 const DOCK_INTERACTION_TOP_OVERFLOW: f32 = 26.0;
+const DOCK_REDRAW_MARGIN: f32 = 20.0;
 
 const DOCK_TOOLTIP_HEIGHT: f32 = 30.0;
 const DOCK_TOOLTIP_MARGIN: f32 = 10.0;
@@ -33,11 +37,21 @@ const DOCK_TOOLTIP_HORIZONTAL_PADDING: f32 = 12.0;
 const DOCK_TOOLTIP_RADIUS: f32 = 12.0;
 const DOCK_TOOLTIP_BACKGROUND: Color = Color::rgba(38, 38, 38, 230);
 const DOCK_TOOLTIP_TEXT: Color = Color::rgba(255, 255, 255, 255);
+const DOCK_TOOLTIP_FONT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../binaries/msh/resources/ter-u12b.bdf"
+));
+const DOCK_TOOLTIP_GLYPH_WIDTH: usize = 6;
+const DOCK_TOOLTIP_GLYPH_HEIGHT: usize = 12;
 
 const DOCK_BACKGROUND: Color = Color::rgba(255, 255, 255, 190);
 
 const DOCK_BORDER: Color = Color::rgba(0, 0, 0, 28);
 
+#[cfg(target_os = "mochios")]
+const FALLBACK_APP_ICON: &str = "/applications/Binder.app/appicon.svg";
+
+#[cfg(not(target_os = "mochios"))]
 const FALLBACK_APP_ICON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/appicon.svg",);
 
 const DOCK_SHADOW: ShadowSet =
@@ -49,6 +63,12 @@ struct DockItemVisual {
     influence: f32,
 }
 
+#[derive(Clone)]
+enum DockIcon {
+    Image(ImageData),
+    Missing,
+}
+
 pub(crate) struct DockLayer<C> {
     content: C,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
@@ -58,6 +78,9 @@ pub(crate) struct DockLayer<C> {
     pressed: State<Option<usize>>,
     pointer: State<Option<Point>>,
     running_apps: State<Vec<String>>,
+    icon_cache: RefCell<HashMap<PathBuf, DockIcon>>,
+    tooltip_cache: RefCell<HashMap<String, Option<ImageData>>>,
+    tooltip_glyphs: [Option<[u8; DOCK_TOOLTIP_GLYPH_HEIGHT]>; 128],
 }
 
 impl<C> DockLayer<C>
@@ -83,6 +106,9 @@ where
             pressed,
             pointer,
             running_apps,
+            icon_cache: RefCell::new(HashMap::new()),
+            tooltip_cache: RefCell::new(HashMap::new()),
+            tooltip_glyphs: parse_tooltip_glyphs(),
         }
     }
 
@@ -116,6 +142,19 @@ where
         )
     }
 
+    fn request_dock_redraw(&self, bounds: Rect, context: &mut EventContext<'_>) {
+        let Some(dock) = self.dock_rect(bounds) else {
+            return;
+        };
+        let top = DOCK_ICON_LIFT + DOCK_TOOLTIP_MARGIN + DOCK_TOOLTIP_HEIGHT + DOCK_REDRAW_MARGIN;
+        context.request_redraw_in(Rect::new(
+            dock.origin.x - DOCK_REDRAW_MARGIN,
+            dock.origin.y - top,
+            dock.size.width + DOCK_REDRAW_MARGIN * 2.0,
+            dock.size.height + top + DOCK_REDRAW_MARGIN,
+        ));
+    }
+
     fn item_rect(dock: Rect, index: usize) -> Rect {
         let x = dock.origin.x
             + DOCK_HORIZONTAL_PADDING
@@ -144,6 +183,15 @@ where
         }
 
         None
+    }
+
+    fn pointer_for_hit(&self, bounds: Rect, hit: Option<usize>) -> Option<Point> {
+        let dock = self.dock_rect(bounds)?;
+        let item = Self::item_rect(dock, hit?);
+        Some(Point::new(
+            item.origin.x + item.size.width / 2.0,
+            item.origin.y + item.size.height / 2.0,
+        ))
     }
 
     fn is_inside_dock(&self, bounds: Rect, position: Point) -> bool {
@@ -235,37 +283,53 @@ where
         });
     }
 
-    fn paint_app_icon(app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
+    fn load_icon(&self, path: &Path) -> DockIcon {
+        if let Some(icon) = self.icon_cache.borrow().get(path) {
+            return icon.clone();
+        }
+
+        let icon = if path.extension().and_then(|extension| extension.to_str()) == Some("svg") {
+            SvgData::from_path(path)
+                .ok()
+                .and_then(|svg| {
+                    ImageData::from_svg(&svg, DOCK_ICON_MAX_SIZE as u32, DOCK_ICON_MAX_SIZE as u32)
+                        .ok()
+                })
+                .map_or(DockIcon::Missing, DockIcon::Image)
+        } else {
+            ImageData::thumbnail_from_path(
+                path,
+                DOCK_ICON_MAX_SIZE as u32,
+                DOCK_ICON_MAX_SIZE as u32,
+            )
+            .map_or(DockIcon::Missing, DockIcon::Image)
+        };
+
+        self.icon_cache
+            .borrow_mut()
+            .insert(path.to_path_buf(), icon.clone());
+        icon
+    }
+
+    fn paint_app_icon(&self, app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
         if let Some(icon) = &app.icon {
-            if icon.exists() {
-                if icon.extension().and_then(|extension| extension.to_str()) == Some("svg") {
-                    if let Ok(svg) = SvgData::from_path(icon) {
-                        Svg::new(svg)
-                            .content_mode(SvgContentMode::Fit)
-                            .radius(CornerRadius::Custom(10.0))
-                            .paint(bounds, context);
+            if let DockIcon::Image(image) = self.load_icon(icon) {
+                Image::new(image)
+                    .content_mode(ImageContentMode::Fit)
+                    .radius(CornerRadius::Custom(10.0))
+                    .sampling(ImageSampling::Nearest)
+                    .paint(bounds, context);
 
-                        return;
-                    }
-                }
-
-                if let Ok(image) = ImageData::from_path(icon) {
-                    Image::new(image)
-                        .content_mode(ImageContentMode::Fit)
-                        .radius(CornerRadius::Custom(10.0))
-                        .paint(bounds, context);
-
-                    return;
-                }
+                return;
             }
         }
 
         let fallback = PathBuf::from(FALLBACK_APP_ICON);
-
-        if let Ok(svg) = SvgData::from_path(fallback) {
-            Svg::new(svg)
-                .content_mode(SvgContentMode::Fit)
+        if let DockIcon::Image(image) = self.load_icon(&fallback) {
+            Image::new(image)
+                .content_mode(ImageContentMode::Fit)
                 .radius(CornerRadius::Custom(10.0))
+                .sampling(ImageSampling::Nearest)
                 .paint(bounds, context);
         }
     }
@@ -295,12 +359,17 @@ where
             .radius(CornerRadius::Custom(DOCK_TOOLTIP_RADIUS))
             .paint(tooltip, context);
 
-        Text::new(app.name.clone())
-            .font_size(13.0)
-            .line_height(DOCK_TOOLTIP_HEIGHT)
-            .alignment(TextAlignment::Center)
-            .color(DOCK_TOOLTIP_TEXT)
-            .paint(tooltip, context);
+    }
+
+    fn tooltip_label(&self, text: &str) -> Option<ImageData> {
+        if let Some(label) = self.tooltip_cache.borrow().get(text) {
+            return label.clone();
+        }
+        let label = render_tooltip_label(text, &self.tooltip_glyphs);
+        self.tooltip_cache
+            .borrow_mut()
+            .insert(text.to_owned(), label.clone());
+        label
     }
 
     fn is_running(&self, app: &AppInfo) -> bool {
@@ -365,6 +434,7 @@ where
 
             if hovered == Some(index) || pressed == Some(index) {
                 let opacity = 120.0 + 50.0 * visual.influence;
+                let item = snap_rect(visual.item);
 
                 Rectangle::new()
                     .color(RectangleColor::Custom(Color::rgba(
@@ -374,12 +444,12 @@ where
                         opacity as u8,
                     )))
                     .radius(CornerRadius::Custom(DOCK_ITEM_RADIUS))
-                    .paint(visual.item, context);
+                    .paint(item, context);
             }
 
             let icon = snap_rect(visual.icon);
 
-            Self::paint_app_icon(app, icon, context);
+            self.paint_app_icon(app, icon, context);
 
             if self.is_running(app) {
                 Self::paint_running_indicator(icon, context);
@@ -392,6 +462,16 @@ where
 
         if let Some((app, icon)) = tooltip {
             Self::paint_tooltip(app, icon, context);
+            if let Some(label) = self.tooltip_label(&app.name) {
+                let width = label.width() as f32;
+                let height = label.height() as f32;
+                let center_x = icon.origin.x + icon.size.width / 2.0;
+                let y = icon.origin.y - DOCK_TOOLTIP_MARGIN - DOCK_TOOLTIP_HEIGHT
+                    + (DOCK_TOOLTIP_HEIGHT - height) / 2.0;
+                Image::new(label)
+                    .sampling(ImageSampling::Nearest)
+                    .paint(Rect::new(center_x - width / 2.0, y, width, height), context);
+            }
         }
     }
 
@@ -411,21 +491,16 @@ where
                     None
                 };
 
-                let next_pointer = inside.then_some(*position);
                 let previous_hovered = self.hovered.get();
-                let previous_pointer = self.pointer.get();
-                let changed = previous_hovered != hit || previous_pointer != next_pointer;
+                let changed = previous_hovered != hit;
 
-                if previous_hovered != hit {
+                if changed {
                     self.hovered.set(hit);
-                }
-
-                if previous_pointer != next_pointer {
-                    self.pointer.set(next_pointer);
+                    self.pointer.set(self.pointer_for_hit(bounds, hit));
                 }
 
                 if changed {
-                    context.request_redraw();
+                    self.request_dock_redraw(bounds, context);
                 }
 
                 if inside {
@@ -444,7 +519,7 @@ where
                 if self.is_inside_dock(bounds, *position) {
                     self.pressed.set(self.hit_index(bounds, *position));
 
-                    context.request_redraw();
+                    self.request_dock_redraw(bounds, context);
 
                     return EventResult::Consumed;
                 }
@@ -469,7 +544,7 @@ where
                         }
                     }
 
-                    context.request_redraw();
+                    self.request_dock_redraw(bounds, context);
 
                     return EventResult::Consumed;
                 }
@@ -497,7 +572,7 @@ where
                 }
 
                 if changed {
-                    context.request_redraw();
+                    self.request_dock_redraw(bounds, context);
                 }
 
                 self.content.handle_event(bounds, event, context)
@@ -524,4 +599,76 @@ fn snap_rect(rect: Rect) -> Rect {
     let height = rect.size.height.round().max(1.0);
 
     Rect::new(x, y, width, height)
+}
+
+fn render_tooltip_label(
+    text: &str,
+    glyphs: &[Option<[u8; DOCK_TOOLTIP_GLYPH_HEIGHT]>; 128],
+) -> Option<ImageData> {
+    let characters: Vec<char> = text.chars().collect();
+    let width = characters.len().checked_mul(DOCK_TOOLTIP_GLYPH_WIDTH)?;
+    let pixel_len = width.checked_mul(DOCK_TOOLTIP_GLYPH_HEIGHT)?.checked_mul(4)?;
+    if width == 0 || width > u32::MAX as usize {
+        return None;
+    }
+    let mut pixels = vec![0u8; pixel_len];
+    for (character_index, character) in characters.into_iter().enumerate() {
+        let index = if character.is_ascii() {
+            character as usize
+        } else {
+            '?' as usize
+        };
+        let rows = glyphs[index].or(glyphs['?' as usize])?;
+        for (y, row) in rows.into_iter().enumerate() {
+            for x in 0..DOCK_TOOLTIP_GLYPH_WIDTH {
+                if row & (0x80 >> x) == 0 {
+                    continue;
+                }
+                let pixel = (y * width + character_index * DOCK_TOOLTIP_GLYPH_WIDTH + x) * 4;
+                pixels[pixel..pixel + 4].copy_from_slice(&[
+                    DOCK_TOOLTIP_TEXT.red,
+                    DOCK_TOOLTIP_TEXT.green,
+                    DOCK_TOOLTIP_TEXT.blue,
+                    DOCK_TOOLTIP_TEXT.alpha,
+                ]);
+            }
+        }
+    }
+    ImageData::from_rgba8(width as u32, DOCK_TOOLTIP_GLYPH_HEIGHT as u32, pixels).ok()
+}
+
+fn parse_tooltip_glyphs() -> [Option<[u8; DOCK_TOOLTIP_GLYPH_HEIGHT]>; 128] {
+    let mut glyphs = [None; 128];
+    let mut lines = DOCK_TOOLTIP_FONT.lines();
+    while let Some(line) = lines.next() {
+        let Some(encoding) = line.strip_prefix("ENCODING ") else {
+            continue;
+        };
+        let Some(encoding) = encoding
+            .parse::<usize>()
+            .ok()
+            .filter(|encoding| *encoding < glyphs.len())
+        else {
+            continue;
+        };
+        if !lines.by_ref().any(|line| line == "BITMAP") {
+            break;
+        }
+        let mut rows = [0u8; DOCK_TOOLTIP_GLYPH_HEIGHT];
+        let mut valid = true;
+        for row in &mut rows {
+            let Some(value) = lines
+                .next()
+                .and_then(|line| u8::from_str_radix(line, 16).ok())
+            else {
+                valid = false;
+                break;
+            };
+            *row = value;
+        }
+        if valid {
+            glyphs[encoding] = Some(rows);
+        }
+    }
+    glyphs
 }

@@ -80,6 +80,7 @@ version = "0.1.0"
 dependencies = [
  "binder_client",
  "libc",
+ "mochi-user-syscall 0.1.0",
  "viewkit",
 ]
 
@@ -763,6 +764,13 @@ name = "mnu-abi"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "522a13d1239f1c600ea0cb0c871d48a98986ba36d5802417fe37c177a1245324"
+
+[[package]]
+name = "mochi-user-syscall"
+version = "0.1.0"
+dependencies = [
+ "mnu-abi",
+]
 
 [[package]]
 name = "mochi-user-syscall"
@@ -1885,7 +1893,7 @@ checksum = "522b921671daa0a2b9cacf5f562acc57743f042e2e29fe444ef608e511482aad"
 dependencies = [
  "cosmic-text",
  "image",
- "mochi-user-syscall",
+ "mochi-user-syscall 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "resvg",
  "softbuffer",
  "thiserror 2.0.19",

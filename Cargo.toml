@@ -21,3 +21,6 @@ binder_client = { path = "crates/binder_client" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "mochios")'.dependencies]
+mochi-user-syscall = { path = "../../user/crates/syscall" }

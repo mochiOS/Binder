@@ -1,7 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+
+#[cfg(not(target_os = "mochios"))]
+use std::process::{Command, Stdio};
 
 use crate::apps;
 
@@ -33,7 +37,7 @@ impl MochiOsPlatform {
     pub fn new() -> Self {
         Self {
             system_bar: SystemBarState::default(),
-            apps: builtin_apps(),
+            apps: read_apps(),
             children: HashMap::new(),
             create_window_requests: Vec::new(),
             close_window_requests: Vec::new(),
@@ -79,26 +83,12 @@ impl MochiOsPlatform {
             return Ok(process_id);
         }
 
-        let executable = app.entry_path();
-        if !executable.is_file() {
-            return Err(PlatformError::ProcessLaunchFailed);
-        }
-
-        let child = Command::new(&executable)
-            .env("MOCHI_EXECUTABLE_PATH", executable.as_os_str())
-            .env("MOCHI_APP_BUNDLE_PATH", app.root.as_os_str())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|_| PlatformError::ProcessLaunchFailed)?;
-
-        let process_id = ProcessId(child.id());
+        let (process_id, child) = spawn_application(app)?;
         self.children.insert(
             process_id,
             ManagedApp {
                 bundle_id: app.bundle_id.clone(),
-                child: Some(child),
+                child,
                 windows: HashSet::new(),
             },
         );
@@ -135,6 +125,127 @@ impl MochiOsPlatform {
 
         Ok(changed)
     }
+}
+
+#[cfg(target_os = "mochios")]
+fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), PlatformError> {
+    const CAPABILITY_SERVICE_NAME: &str = "capability.service";
+    use mochi_user_syscall as syscall;
+
+    let executable = app.entry_path();
+    let executable = executable
+        .to_str()
+        .ok_or(PlatformError::ProcessLaunchFailed)?;
+    let request = encode_spawn_app_request(
+        executable,
+        shell_endpoint_from_environment(),
+        prompt_is_interactive(),
+    )?;
+    let endpoint = syscall::call2(
+        syscall::SyscallNumber::FindProcessByName,
+        CAPABILITY_SERVICE_NAME.as_ptr() as u64,
+        CAPABILITY_SERVICE_NAME.len() as u64,
+    )
+    .map_err(|error| {
+        eprintln!("failed to find capability.service: {error:?}");
+        PlatformError::ProcessLaunchFailed
+    })?;
+    if endpoint == 0 {
+        eprintln!("failed to find capability.service: invalid endpoint");
+        return Err(PlatformError::ProcessLaunchFailed);
+    }
+
+    let mut reply = [0u8; 16];
+    let message = syscall::call5(
+        syscall::SyscallNumber::IpcCall,
+        endpoint,
+        request.as_ptr() as u64,
+        request.len() as u64,
+        reply.as_mut_ptr() as u64,
+        reply.len() as u64,
+    )
+    .map_err(|error| {
+        eprintln!("capability.service app launch request failed: {error:?}");
+        PlatformError::ProcessLaunchFailed
+    })?;
+    let reply_len = (message & 0xffff_ffff) as usize;
+    if reply_len < reply.len() {
+        eprintln!("capability.service returned a short app launch reply");
+        return Err(PlatformError::ProcessLaunchFailed);
+    }
+
+    let status = u64::from_le_bytes(
+        reply[..8]
+            .try_into()
+            .map_err(|_| PlatformError::InvalidResponse)?,
+    );
+    if status != 0 {
+        eprintln!("capability.service rejected app launch: errno={status}");
+        return Err(PlatformError::ProcessLaunchFailed);
+    }
+    let pid = u64::from_le_bytes(
+        reply[8..]
+            .try_into()
+            .map_err(|_| PlatformError::InvalidResponse)?,
+    );
+    if pid == 0 || pid > u32::MAX as u64 {
+        eprintln!("capability.service returned an invalid app pid");
+        return Err(PlatformError::InvalidResponse);
+    }
+
+    Ok((ProcessId(pid as u32), None))
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), PlatformError> {
+    let executable = app.entry_path();
+    if !executable.is_file() {
+        return Err(PlatformError::ProcessLaunchFailed);
+    }
+
+    let child = Command::new(&executable)
+        .env("MOCHI_EXECUTABLE_PATH", executable.as_os_str())
+        .env("MOCHI_APP_BUNDLE_PATH", app.root.as_os_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|_| PlatformError::ProcessLaunchFailed)?;
+    Ok((ProcessId(child.id()), Some(child)))
+}
+
+const SPAWN_APP_OPCODE: u32 = 0x4150_5053;
+const SPAWN_APP_HEADER_LEN: usize = 24;
+
+fn encode_spawn_app_request(
+    executable: &str,
+    shell_endpoint: u64,
+    interactive: bool,
+) -> Result<Vec<u8>, PlatformError> {
+    if executable.is_empty() || !executable.starts_with('/') || executable.as_bytes().contains(&0) {
+        return Err(PlatformError::ProcessLaunchFailed);
+    }
+
+    let mut request = vec![0u8; SPAWN_APP_HEADER_LEN + executable.len() + 1];
+    request[0..4].copy_from_slice(&SPAWN_APP_OPCODE.to_le_bytes());
+    request[8..16].copy_from_slice(&shell_endpoint.to_le_bytes());
+    request[16] = u8::from(interactive);
+    request[SPAWN_APP_HEADER_LEN..SPAWN_APP_HEADER_LEN + executable.len()]
+        .copy_from_slice(executable.as_bytes());
+    Ok(request)
+}
+
+#[cfg(target_os = "mochios")]
+fn shell_endpoint_from_environment() -> u64 {
+    std::env::var("MOCHI_SHELL_ENDPOINT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
+#[cfg(target_os = "mochios")]
+fn prompt_is_interactive() -> bool {
+    std::env::var("MOCHI_PROMPT_MODE").as_deref() == Ok("interactive")
 }
 
 impl Default for MochiOsPlatform {
@@ -336,47 +447,20 @@ fn applications_root() -> PathBuf {
     PathBuf::from("/applications")
 }
 
-fn builtin_apps() -> Vec<AppInfo> {
-    vec![
-        AppInfo {
-            root: PathBuf::from("/applications/Binder.app"),
-            name: String::from("About mochiOS"),
-            bundle_id: String::from(apps::ABOUT_BUNDLE_ID),
-            version: String::from("0.1.0"),
-            developer: String::from("mochiOS"),
-            entry: String::from(apps::ABOUT_ENTRY),
-            description: String::from("System information"),
-            icon: None,
-            resources: Vec::new(),
-        },
-        AppInfo {
-            root: PathBuf::from("/applications/Binder.app"),
-            name: String::from("Test Window"),
-            bundle_id: String::from(apps::TEST_BUNDLE_ID),
-            version: String::from("0.1.0"),
-            developer: String::from("mochiOS"),
-            entry: String::from(apps::TEST_ENTRY),
-            description: String::from("ViewKit window test"),
-            icon: None,
-            resources: Vec::new(),
-        },
-    ]
+fn read_apps() -> Vec<AppInfo> {
+    read_apps_from(&applications_root())
 }
 
-#[allow(dead_code)]
-fn read_apps() -> Vec<AppInfo> {
-    let Ok(entries) = fs::read_dir(applications_root()) else {
+fn read_apps_from(root: &Path) -> Vec<AppInfo> {
+    let Ok(entries) = read_directory_entries(root) else {
         return Vec::new();
     };
 
     let mut apps = Vec::new();
 
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("app") {
-            continue;
-        }
-        if !path.is_dir() {
             continue;
         }
         if let Some(app) = read_app_about(&path) {
@@ -384,12 +468,65 @@ fn read_apps() -> Vec<AppInfo> {
         }
     }
 
-    apps.sort_by(|left, right| left.name.cmp(&right.name));
+    apps.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.bundle_id.cmp(&right.bundle_id))
+    });
     apps
 }
 
+fn read_directory_entries(root: &Path) -> io::Result<Vec<fs::DirEntry>> {
+    let mut last_error = None;
+    for _ in 0..8 {
+        match fs::read_dir(root) {
+            Ok(entries) => return collect_directory_entries(entries),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                last_error = Some(error);
+                transient_pause();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    match fs::read_dir(root) {
+        Ok(entries) => collect_directory_entries(entries),
+        Err(error) => Err(last_error.unwrap_or(error)),
+    }
+}
+
+fn collect_directory_entries(entries: fs::ReadDir) -> io::Result<Vec<fs::DirEntry>> {
+    let mut collected = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => collected.push(entry),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                transient_pause();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(collected)
+}
+
+fn transient_pause() {
+    for _ in 0..256 {
+        core::hint::spin_loop();
+    }
+}
+
 fn read_app_about(app_root: &Path) -> Option<AppInfo> {
-    let content = fs::read_to_string(app_root.join("about.toml")).ok()?;
+    let content = read_to_string(app_root.join("about.toml")).ok()?;
 
     let name = parse_string_field(&content, "name")?;
     let bundle_id = parse_string_field(&content, "bundle_id")?;
@@ -414,6 +551,28 @@ fn read_app_about(app_root: &Path) -> Option<AppInfo> {
         icon,
         resources,
     })
+}
+
+fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
+    let path = path.as_ref();
+    let mut last_error = None;
+    for _ in 0..8 {
+        match fs::read_to_string(path) {
+            Ok(content) => return Ok(content),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                last_error = Some(error);
+                transient_pause();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    fs::read_to_string(path).or_else(|error| Err(last_error.unwrap_or(error)))
 }
 
 fn resolve_app_path(app_root: &Path, path: &str) -> PathBuf {
@@ -510,4 +669,83 @@ fn parse_string_literals(text: &str) -> Vec<String> {
     }
 
     values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn encodes_capability_service_app_launch_request() {
+        let executable = "/applications/test.app/entry.elf";
+        let request = encode_spawn_app_request(executable, u64::MAX, true);
+        assert!(request.is_ok());
+        let request = request.unwrap_or_default();
+        assert_eq!(request.len(), SPAWN_APP_HEADER_LEN + executable.len() + 1);
+        assert_eq!(&request[0..4], &SPAWN_APP_OPCODE.to_le_bytes());
+        assert_eq!(&request[4..8], &[0; 4]);
+        assert_eq!(&request[8..16], &u64::MAX.to_le_bytes());
+        assert_eq!(request[16], 1);
+        assert_eq!(&request[17..24], &[0; 7]);
+        assert_eq!(&request[24..], b"/applications/test.app/entry.elf\0");
+    }
+
+    fn temporary_app_root() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "binder-app-discovery-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn discovers_valid_app_bundles_in_stable_order() {
+        let root = temporary_app_root();
+        let alpha = root.join("Alpha.app");
+        let zeta = root.join("Zeta.app");
+        let broken = root.join("Broken.app");
+        assert!(fs::create_dir_all(&alpha).is_ok());
+        assert!(fs::create_dir_all(&zeta).is_ok());
+        assert!(fs::create_dir_all(&broken).is_ok());
+        assert!(
+            fs::write(
+                alpha.join("about.toml"),
+                "name = \"Alpha\"\nbundle_id = \"org.test.alpha\"\nentry = \"entry.elf\"\nicon = \"icon.png\"\n",
+            )
+            .is_ok()
+        );
+        assert!(
+            fs::write(
+                zeta.join("about.toml"),
+                "name = \"Zeta\"\nbundle_id = \"org.test.zeta\"\nentry = \"internal:test\"\n",
+            )
+            .is_ok()
+        );
+        assert!(
+            fs::write(
+                broken.join("about.toml"),
+                "name = \"Broken\"\nbundle_id = \"org.test.broken\"\n",
+            )
+            .is_ok()
+        );
+
+        let apps = read_apps_from(&root);
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[0].name, "Alpha");
+        assert_eq!(apps[0].icon, Some(alpha.join("icon.png")));
+        assert_eq!(apps[1].name, "Zeta");
+        assert_eq!(apps[1].entry, apps::TEST_ENTRY);
+
+        assert!(fs::remove_dir_all(root).is_ok());
+    }
+
+    #[test]
+    fn missing_applications_root_is_an_empty_catalog() {
+        let root = temporary_app_root();
+        assert!(read_apps_from(&root).is_empty());
+    }
 }
