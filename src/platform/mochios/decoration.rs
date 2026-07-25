@@ -12,20 +12,22 @@ use crate::window::WindowInteraction;
 const COMPOSITOR_SERVICE_NAME: &str = "compositor.service";
 const OP_ATTACH_BUFFER: u32 = 2;
 const OP_DAMAGE: u32 = 3;
+const OP_COMMIT: u32 = 4;
 const OP_DECOR_SUBSCRIBE: u32 = 100;
 const OP_DECOR_CREATE_SURFACE: u32 = 101;
 const OP_DECOR_ATTACH: u32 = 102;
+const OP_DECOR_BEGIN_MOVE: u32 = 105;
 const OP_DECOR_MINIMIZE: u32 = 107;
 const OP_DECOR_TOGGLE_MAXIMIZE: u32 = 108;
 const OP_DECOR_CLOSE_REQUEST: u32 = 109;
 const DECOR_EVENT_WINDOW: u32 = 0x5749_4e44;
-const EVENT_POINTER_BUTTON: u32 = 5;
+const DECOR_EVENT_POINTER_BUTTON: u32 = 0x4e54_4244;
 const PIXEL_FORMAT_XRGB8888: u32 = 1;
 const TITLE_BAR_HEIGHT: u32 = VIEW_TITLE_BAR_HEIGHT as u32;
 const CONTROL_WIDTH: u32 = 44;
 const PAGE_SIZE: usize = 4096;
 const MAX_WINDOW_DIMENSION: u32 = 4096;
-const EAGAIN: u64 = 11;
+const POINTER_FLAG_PRESS: u32 = 1;
 
 #[derive(Debug)]
 pub(super) struct DecorationError(u64);
@@ -40,9 +42,8 @@ struct Decoration {
     window: u64,
     endpoint: u64,
     width: u32,
-    pointer_pressed: bool,
-    _surface: u64,
-    _buffer_virt: u64,
+    surface: u64,
+    buffer_virt: u64,
 }
 
 pub(super) struct DecorationManager {
@@ -66,24 +67,50 @@ impl DecorationManager {
         })
     }
 
-    pub(super) fn poll(&mut self) -> Result<(), DecorationError> {
-        while let Some(event) = try_receive(self.metadata_endpoint)? {
-            if let Some((window, width, title)) = parse_window_event(&event)
-                && !self
+    pub(super) fn handle_message(&mut self, event: &[u8]) -> Result<bool, DecorationError> {
+        match read_u32(event, 0) {
+            Some(DECOR_EVENT_WINDOW) => {
+                if let Some((window, width, title)) = parse_window_event(event) {
+                    if let Some(decoration) = self
+                        .decorations
+                        .iter_mut()
+                        .find(|decoration| decoration.window == window)
+                    {
+                        if decoration.width != width {
+                            decoration.buffer_virt = attach_title_bar_buffer(
+                                self.compositor,
+                                decoration.surface,
+                                width,
+                                title,
+                            )?;
+                            token_request(self.compositor, OP_DAMAGE, decoration.surface)?;
+                            token_request(self.compositor, OP_COMMIT, decoration.surface)?;
+                            decoration.width = width;
+                        }
+                    } else {
+                        self.decorations.push(create_decoration(
+                            self.compositor,
+                            window,
+                            width,
+                            title,
+                        )?);
+                    }
+                }
+                Ok(true)
+            }
+            Some(DECOR_EVENT_POINTER_BUTTON) => {
+                let window = read_u64(event, 16).ok_or(DecorationError(5))?;
+                if let Some(decoration) = self
                     .decorations
-                    .iter()
-                    .any(|decoration| decoration.window == window)
-            {
-                self.decorations
-                    .push(create_decoration(self.compositor, window, width, title)?);
+                    .iter_mut()
+                    .find(|decoration| decoration.window == window)
+                {
+                    handle_decoration_event(self.compositor, decoration, event)?;
+                }
+                Ok(true)
             }
+            _ => Ok(false),
         }
-        for decoration in &mut self.decorations {
-            while let Some(event) = try_receive(decoration.endpoint)? {
-                handle_decoration_event(self.compositor, decoration, &event)?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -104,23 +131,6 @@ fn ipc_create() -> Result<u64, DecorationError> {
     (endpoint != 0)
         .then_some(endpoint)
         .ok_or(DecorationError(5))
-}
-
-fn try_receive(endpoint: u64) -> Result<Option<Vec<u8>>, DecorationError> {
-    let mut event = [0u8; 128];
-    let message = match syscall::call3(
-        syscall::SyscallNumber::IpcWait,
-        event.as_mut_ptr() as u64,
-        event.len() as u64,
-        endpoint,
-    ) {
-        Ok(message) => message,
-        Err(error) if error.errno() == Some(EAGAIN) => return Ok(None),
-        Err(error) => return Err(DecorationError(error.errno().unwrap_or(5))),
-    };
-    let length = (message & 0xffff_ffff) as usize;
-    let bytes = event.get(..length).ok_or(DecorationError(5))?;
-    Ok(Some(bytes.to_vec()))
 }
 
 fn parse_window_event(event: &[u8]) -> Option<(u64, u32, String)> {
@@ -170,9 +180,8 @@ fn create_decoration(
         window,
         endpoint,
         width,
-        pointer_pressed: false,
-        _surface: surface,
-        _buffer_virt: buffer_virt,
+        surface,
+        buffer_virt,
     })
 }
 
@@ -248,26 +257,32 @@ fn handle_decoration_event(
     decoration: &mut Decoration,
     event: &[u8],
 ) -> Result<(), DecorationError> {
-    if read_u32(event, 0) != Some(EVENT_POINTER_BUTTON) {
+    if read_u32(event, 0) != Some(DECOR_EVENT_POINTER_BUTTON) {
         return Ok(());
     }
-    decoration.pointer_pressed = !decoration.pointer_pressed;
-    if !decoration.pointer_pressed {
+    let detail = read_u32(event, 12).ok_or(DecorationError(5))?;
+    if (detail >> 16) & POINTER_FLAG_PRESS == 0 {
         return Ok(());
     }
     let Some(x) = read_i32(event, 4).filter(|x| *x >= 0).map(|x| x as u32) else {
         return Ok(());
     };
-    let opcode = if x >= decoration.width.saturating_sub(CONTROL_WIDTH) {
-        OP_DECOR_CLOSE_REQUEST
+    if x >= decoration.width.saturating_sub(CONTROL_WIDTH) {
+        token_request(compositor, OP_DECOR_CLOSE_REQUEST, decoration.window)
     } else if x >= decoration.width.saturating_sub(CONTROL_WIDTH * 2) {
-        OP_DECOR_TOGGLE_MAXIMIZE
+        token_request(compositor, OP_DECOR_TOGGLE_MAXIMIZE, decoration.window)
     } else if x >= decoration.width.saturating_sub(CONTROL_WIDTH * 3) {
-        OP_DECOR_MINIMIZE
+        token_request(compositor, OP_DECOR_MINIMIZE, decoration.window)
     } else {
-        return Ok(());
-    };
-    token_request(compositor, opcode, decoration.window)
+        let serial = read_u64(event, 24)
+            .filter(|serial| *serial != 0)
+            .ok_or(DecorationError(5))?;
+        let mut request = [0u8; 28];
+        put_u32(&mut request, 0, OP_DECOR_BEGIN_MOVE)?;
+        put_u64(&mut request, 4, decoration.window)?;
+        put_u64(&mut request, 12, serial)?;
+        ipc_call_status(compositor, &request)
+    }
 }
 
 fn token_request(compositor: u64, opcode: u32, token: u64) -> Result<(), DecorationError> {

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -14,7 +15,7 @@ use crate::window::{DesktopWindows, WindowDrag};
 use crate::apps;
 use viewkit::{prelude::*, view::PaintContext};
 
-const DESKTOP_BACKGROUND: Color = Color::rgba(200, 200, 200, 255);
+const DESKTOP_BACKGROUND: Color = Color::TRANSPARENT;
 
 const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -26,9 +27,9 @@ pub(crate) fn view(
     window_drag: State<Option<WindowDrag>>,
     resize: State<Option<WindowResize>>,
     apps: State<Vec<AppInfo>>,
-    dock_hovered: State<Option<usize>>,
-    dock_pressed: State<Option<usize>>,
-    dock_pointer: State<Option<Point>>,
+    dock_hovered: Rc<Cell<Option<usize>>>,
+    dock_pressed: Rc<Cell<Option<usize>>>,
+    dock_pointer: Rc<Cell<Option<Point>>>,
     dock_running_apps: State<Vec<String>>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
 ) -> Box<dyn View + 'static> {

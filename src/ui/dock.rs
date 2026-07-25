@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -68,9 +68,9 @@ pub(crate) struct DockLayer<C> {
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     windows: State<DesktopWindows>,
     apps: State<Vec<AppInfo>>,
-    hovered: State<Option<usize>>,
-    pressed: State<Option<usize>>,
-    pointer: State<Option<Point>>,
+    hovered: Rc<Cell<Option<usize>>>,
+    pressed: Rc<Cell<Option<usize>>>,
+    pointer: Rc<Cell<Option<Point>>>,
     running_apps: State<Vec<String>>,
     icon_cache: RefCell<HashMap<PathBuf, DockIcon>>,
 }
@@ -84,9 +84,9 @@ where
         platform: Rc<RefCell<dyn DesktopPlatform>>,
         windows: State<DesktopWindows>,
         apps: State<Vec<AppInfo>>,
-        hovered: State<Option<usize>>,
-        pressed: State<Option<usize>>,
-        pointer: State<Option<Point>>,
+        hovered: Rc<Cell<Option<usize>>>,
+        pressed: Rc<Cell<Option<usize>>>,
+        pointer: Rc<Cell<Option<Point>>>,
         running_apps: State<Vec<String>>,
     ) -> Self {
         Self {

@@ -14,9 +14,9 @@ pub struct BinderApp {
     window_drag: State<Option<WindowDrag>>,
     window_resize: State<Option<WindowResize>>,
     apps: State<Vec<AppInfo>>,
-    dock_hovered_app: State<Option<usize>>,
-    dock_pressed_app: State<Option<usize>>,
-    dock_pointer: State<Option<Point>>,
+    dock_hovered_app: Rc<Cell<Option<usize>>>,
+    dock_pressed_app: Rc<Cell<Option<usize>>>,
+    dock_pointer: Rc<Cell<Option<Point>>>,
     dock_running_apps: State<Vec<String>>,
     cursor_pointer: Rc<Cell<Option<Point>>>,
 }
@@ -57,9 +57,9 @@ impl App for BinderApp {
             window_drag: State::new(None),
             window_resize: State::new(None),
             apps: State::new(apps),
-            dock_hovered_app: State::new(None),
-            dock_pressed_app: State::new(None),
-            dock_pointer: State::new(None),
+            dock_hovered_app: Rc::new(Cell::new(None)),
+            dock_pressed_app: Rc::new(Cell::new(None)),
+            dock_pointer: Rc::new(Cell::new(None)),
             dock_running_apps: State::new(Vec::new()),
             cursor_pointer: Rc::new(Cell::new(None)),
         }
@@ -81,11 +81,15 @@ impl App for BinderApp {
             self.window_drag.clone(),
             self.window_resize.clone(),
             self.apps.clone(),
-            self.dock_hovered_app.clone(),
-            self.dock_pressed_app.clone(),
-            self.dock_pointer.clone(),
+            Rc::clone(&self.dock_hovered_app),
+            Rc::clone(&self.dock_pressed_app),
+            Rc::clone(&self.dock_pointer),
             self.dock_running_apps.clone(),
             Rc::clone(&self.cursor_pointer),
         )
+    }
+
+    fn handle_platform_message(&mut self, message: &[u8]) -> bool {
+        self.platform.borrow_mut().handle_platform_message(message)
     }
 }

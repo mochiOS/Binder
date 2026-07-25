@@ -35,6 +35,8 @@ pub struct MochiOsPlatform {
     next_internal_pid: u32,
     #[cfg(target_os = "mochios")]
     decoration_manager: Option<decoration::DecorationManager>,
+    #[cfg(target_os = "mochios")]
+    decoration_connect_attempted: bool,
 }
 
 impl MochiOsPlatform {
@@ -49,9 +51,9 @@ impl MochiOsPlatform {
             exited_processes: Vec::new(),
             next_internal_pid: 0x4000_0000,
             #[cfg(target_os = "mochios")]
-            decoration_manager: decoration::DecorationManager::connect()
-                .map_err(|error| eprintln!("Binder decoration manager unavailable: {error}"))
-                .ok(),
+            decoration_manager: None,
+            #[cfg(target_os = "mochios")]
+            decoration_connect_attempted: false,
         }
     }
 
@@ -334,6 +336,22 @@ impl DesktopPlatform for MochiOsPlatform {
         std::mem::take(&mut self.exited_processes)
     }
 
+    fn handle_platform_message(&mut self, message: &[u8]) -> bool {
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = self.decoration_manager.as_mut() {
+            return match manager.handle_message(message) {
+                Ok(handled) => handled,
+                Err(error) => {
+                    eprintln!("Binder decoration manager failed: {error}");
+                    false
+                }
+            };
+        }
+        #[cfg(not(target_os = "mochios"))]
+        let _ = message;
+        false
+    }
+
     fn refresh(&mut self) -> Result<bool, PlatformError> {
         // TODO
         // time.service
@@ -344,11 +362,12 @@ impl DesktopPlatform for MochiOsPlatform {
         //
         // から状態を取得またはイベントを受信する。
         #[cfg(target_os = "mochios")]
-        if let Some(manager) = self.decoration_manager.as_mut()
-            && let Err(error) = manager.poll()
-        {
-            eprintln!("Binder decoration manager failed: {error}");
-            self.decoration_manager = None;
+        if !self.decoration_connect_attempted {
+            self.decoration_connect_attempted = true;
+            match decoration::DecorationManager::connect() {
+                Ok(manager) => self.decoration_manager = Some(manager),
+                Err(error) => eprintln!("Binder decoration manager unavailable: {error}"),
+            }
         }
 
         self.reap_exited_children()

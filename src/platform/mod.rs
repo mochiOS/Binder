@@ -204,6 +204,10 @@ pub trait DesktopPlatform {
         Vec::new()
     }
 
+    fn handle_platform_message(&mut self, _message: &[u8]) -> bool {
+        false
+    }
+
     fn refresh(&mut self) -> Result<bool, PlatformError>;
 
     fn get_apps(&self) -> Vec<AppInfo> {
