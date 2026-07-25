@@ -9,6 +9,9 @@ use std::process::{Command, Stdio};
 
 use crate::apps;
 
+#[cfg(target_os = "mochios")]
+mod decoration;
+
 use super::{
     AppInfo, CloseWindowRequest, CreateWindowRequest, DesktopPlatform, PlatformError, ProcessId,
     RemoteWindowId, SystemAction, SystemBarState,
@@ -30,6 +33,8 @@ pub struct MochiOsPlatform {
     close_window_requests: Vec<CloseWindowRequest>,
     exited_processes: Vec<ProcessId>,
     next_internal_pid: u32,
+    #[cfg(target_os = "mochios")]
+    decoration_manager: Option<decoration::DecorationManager>,
 }
 
 impl MochiOsPlatform {
@@ -43,6 +48,10 @@ impl MochiOsPlatform {
             close_window_requests: Vec::new(),
             exited_processes: Vec::new(),
             next_internal_pid: 0x4000_0000,
+            #[cfg(target_os = "mochios")]
+            decoration_manager: decoration::DecorationManager::connect()
+                .map_err(|error| eprintln!("Binder decoration manager unavailable: {error}"))
+                .ok(),
         }
     }
 
@@ -334,6 +343,14 @@ impl DesktopPlatform for MochiOsPlatform {
         // power.service
         //
         // から状態を取得またはイベントを受信する。
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = self.decoration_manager.as_mut()
+            && let Err(error) = manager.poll()
+        {
+            eprintln!("Binder decoration manager failed: {error}");
+            self.decoration_manager = None;
+        }
+
         self.reap_exited_children()
     }
 

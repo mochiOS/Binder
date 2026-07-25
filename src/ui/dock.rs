@@ -37,12 +37,6 @@ const DOCK_TOOLTIP_HORIZONTAL_PADDING: f32 = 12.0;
 const DOCK_TOOLTIP_RADIUS: f32 = 12.0;
 const DOCK_TOOLTIP_BACKGROUND: Color = Color::rgba(38, 38, 38, 230);
 const DOCK_TOOLTIP_TEXT: Color = Color::rgba(255, 255, 255, 255);
-const DOCK_TOOLTIP_FONT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../binaries/msh/resources/ter-u12b.bdf"
-));
-const DOCK_TOOLTIP_GLYPH_WIDTH: usize = 6;
-const DOCK_TOOLTIP_GLYPH_HEIGHT: usize = 12;
 
 const DOCK_BACKGROUND: Color = Color::rgba(255, 255, 255, 190);
 
@@ -79,8 +73,6 @@ pub(crate) struct DockLayer<C> {
     pointer: State<Option<Point>>,
     running_apps: State<Vec<String>>,
     icon_cache: RefCell<HashMap<PathBuf, DockIcon>>,
-    tooltip_cache: RefCell<HashMap<String, Option<ImageData>>>,
-    tooltip_glyphs: [Option<[u8; DOCK_TOOLTIP_GLYPH_HEIGHT]>; 128],
 }
 
 impl<C> DockLayer<C>
@@ -107,8 +99,6 @@ where
             pointer,
             running_apps,
             icon_cache: RefCell::new(HashMap::new()),
-            tooltip_cache: RefCell::new(HashMap::new()),
-            tooltip_glyphs: parse_tooltip_glyphs(),
         }
     }
 
@@ -359,17 +349,12 @@ where
             .radius(CornerRadius::Custom(DOCK_TOOLTIP_RADIUS))
             .paint(tooltip, context);
 
-    }
-
-    fn tooltip_label(&self, text: &str) -> Option<ImageData> {
-        if let Some(label) = self.tooltip_cache.borrow().get(text) {
-            return label.clone();
-        }
-        let label = render_tooltip_label(text, &self.tooltip_glyphs);
-        self.tooltip_cache
-            .borrow_mut()
-            .insert(text.to_owned(), label.clone());
-        label
+        Text::new(app.name.clone())
+            .font_size(13.0)
+            .line_height(DOCK_TOOLTIP_HEIGHT)
+            .alignment(TextAlignment::Center)
+            .color(DOCK_TOOLTIP_TEXT)
+            .paint(tooltip, context);
     }
 
     fn is_running(&self, app: &AppInfo) -> bool {
@@ -462,16 +447,6 @@ where
 
         if let Some((app, icon)) = tooltip {
             Self::paint_tooltip(app, icon, context);
-            if let Some(label) = self.tooltip_label(&app.name) {
-                let width = label.width() as f32;
-                let height = label.height() as f32;
-                let center_x = icon.origin.x + icon.size.width / 2.0;
-                let y = icon.origin.y - DOCK_TOOLTIP_MARGIN - DOCK_TOOLTIP_HEIGHT
-                    + (DOCK_TOOLTIP_HEIGHT - height) / 2.0;
-                Image::new(label)
-                    .sampling(ImageSampling::Nearest)
-                    .paint(Rect::new(center_x - width / 2.0, y, width, height), context);
-            }
         }
     }
 
@@ -599,76 +574,4 @@ fn snap_rect(rect: Rect) -> Rect {
     let height = rect.size.height.round().max(1.0);
 
     Rect::new(x, y, width, height)
-}
-
-fn render_tooltip_label(
-    text: &str,
-    glyphs: &[Option<[u8; DOCK_TOOLTIP_GLYPH_HEIGHT]>; 128],
-) -> Option<ImageData> {
-    let characters: Vec<char> = text.chars().collect();
-    let width = characters.len().checked_mul(DOCK_TOOLTIP_GLYPH_WIDTH)?;
-    let pixel_len = width.checked_mul(DOCK_TOOLTIP_GLYPH_HEIGHT)?.checked_mul(4)?;
-    if width == 0 || width > u32::MAX as usize {
-        return None;
-    }
-    let mut pixels = vec![0u8; pixel_len];
-    for (character_index, character) in characters.into_iter().enumerate() {
-        let index = if character.is_ascii() {
-            character as usize
-        } else {
-            '?' as usize
-        };
-        let rows = glyphs[index].or(glyphs['?' as usize])?;
-        for (y, row) in rows.into_iter().enumerate() {
-            for x in 0..DOCK_TOOLTIP_GLYPH_WIDTH {
-                if row & (0x80 >> x) == 0 {
-                    continue;
-                }
-                let pixel = (y * width + character_index * DOCK_TOOLTIP_GLYPH_WIDTH + x) * 4;
-                pixels[pixel..pixel + 4].copy_from_slice(&[
-                    DOCK_TOOLTIP_TEXT.red,
-                    DOCK_TOOLTIP_TEXT.green,
-                    DOCK_TOOLTIP_TEXT.blue,
-                    DOCK_TOOLTIP_TEXT.alpha,
-                ]);
-            }
-        }
-    }
-    ImageData::from_rgba8(width as u32, DOCK_TOOLTIP_GLYPH_HEIGHT as u32, pixels).ok()
-}
-
-fn parse_tooltip_glyphs() -> [Option<[u8; DOCK_TOOLTIP_GLYPH_HEIGHT]>; 128] {
-    let mut glyphs = [None; 128];
-    let mut lines = DOCK_TOOLTIP_FONT.lines();
-    while let Some(line) = lines.next() {
-        let Some(encoding) = line.strip_prefix("ENCODING ") else {
-            continue;
-        };
-        let Some(encoding) = encoding
-            .parse::<usize>()
-            .ok()
-            .filter(|encoding| *encoding < glyphs.len())
-        else {
-            continue;
-        };
-        if !lines.by_ref().any(|line| line == "BITMAP") {
-            break;
-        }
-        let mut rows = [0u8; DOCK_TOOLTIP_GLYPH_HEIGHT];
-        let mut valid = true;
-        for row in &mut rows {
-            let Some(value) = lines
-                .next()
-                .and_then(|line| u8::from_str_radix(line, 16).ok())
-            else {
-                valid = false;
-                break;
-            };
-            *row = value;
-        }
-        if valid {
-            glyphs[encoding] = Some(rows);
-        }
-    }
-    glyphs
 }
