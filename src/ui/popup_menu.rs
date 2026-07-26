@@ -5,6 +5,8 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
+const MENU_REDRAW_MARGIN: f32 = 12.0;
+
 pub(crate) struct PopupMenu<C, M> {
     content: C,
     menu: M,
@@ -40,6 +42,11 @@ where
             frame.size.height,
         )
     }
+
+    fn redraw_frame(&self, bounds: Rect) -> Rect {
+        Self::absolute_frame(bounds, self.trigger_frame)
+            .union(Self::absolute_frame(bounds, self.menu_frame).expanded(MENU_REDRAW_MARGIN))
+    }
 }
 
 impl<C, M> View for PopupMenu<C, M>
@@ -70,7 +77,11 @@ where
         context: &mut EventContext<'_>,
     ) -> EventResult {
         if !self.open.get() {
-            return self.content.handle_event(bounds, event, context);
+            let result = self.content.handle_event(bounds, event, context);
+            if self.open.get() {
+                context.request_redraw_in(self.redraw_frame(bounds));
+            }
+            return result;
         }
 
         let menu_bounds = Self::absolute_frame(bounds, self.menu_frame);

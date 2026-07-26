@@ -7,7 +7,7 @@ use viewkit::typography::{TextMeasurer, Typography};
 use viewkit::view::PaintContext;
 
 use crate::ui::window_decoration::{TITLE_BAR_HEIGHT as VIEW_TITLE_BAR_HEIGHT, WindowDecoration};
-use crate::window::WindowInteraction;
+use crate::window::{WindowControl, WindowInteraction};
 
 const COMPOSITOR_SERVICE_NAME: &str = "compositor.service";
 const OP_ATTACH_BUFFER: u32 = 2;
@@ -22,12 +22,15 @@ const OP_DECOR_TOGGLE_MAXIMIZE: u32 = 108;
 const OP_DECOR_CLOSE_REQUEST: u32 = 109;
 const DECOR_EVENT_WINDOW: u32 = 0x5749_4e44;
 const DECOR_EVENT_POINTER_BUTTON: u32 = 0x4e54_4244;
+const DECOR_EVENT_POINTER_MOTION: u32 = 0x544f_4d50;
+const DECOR_EVENT_POINTER_LEAVE: u32 = 0x5641_454c;
 const PIXEL_FORMAT_XRGB8888: u32 = 1;
 const TITLE_BAR_HEIGHT: u32 = VIEW_TITLE_BAR_HEIGHT as u32;
 const CONTROL_WIDTH: u32 = 44;
 const PAGE_SIZE: usize = 4096;
 const MAX_WINDOW_DIMENSION: u32 = 4096;
 const POINTER_FLAG_PRESS: u32 = 1;
+const POINTER_FLAG_RELEASE: u32 = 2;
 
 #[derive(Debug)]
 pub(super) struct DecorationError(u64);
@@ -44,6 +47,8 @@ struct Decoration {
     width: u32,
     surface: u64,
     buffer_virt: u64,
+    title: String,
+    interaction: WindowInteraction,
 }
 
 pub(super) struct DecorationManager {
@@ -81,11 +86,16 @@ impl DecorationManager {
                                 self.compositor,
                                 decoration.surface,
                                 width,
-                                title,
+                                title.clone(),
+                                decoration.interaction,
                             )?;
                             token_request(self.compositor, OP_DAMAGE, decoration.surface)?;
                             token_request(self.compositor, OP_COMMIT, decoration.surface)?;
                             decoration.width = width;
+                            decoration.title = title;
+                        } else if decoration.title != title {
+                            decoration.title = title;
+                            redraw_title_bar(self.compositor, decoration)?;
                         }
                     } else {
                         self.decorations.push(create_decoration(
@@ -105,7 +115,31 @@ impl DecorationManager {
                     .iter_mut()
                     .find(|decoration| decoration.window == window)
                 {
-                    handle_decoration_event(self.compositor, decoration, event)?;
+                    handle_decoration_button(self.compositor, decoration, event)?;
+                }
+                Ok(true)
+            }
+            Some(DECOR_EVENT_POINTER_MOTION) => {
+                let window = read_u64(event, 16).ok_or(DecorationError(5))?;
+                if let Some(decoration) = self
+                    .decorations
+                    .iter_mut()
+                    .find(|decoration| decoration.window == window)
+                {
+                    handle_decoration_motion(self.compositor, decoration, event)?;
+                }
+                Ok(true)
+            }
+            Some(DECOR_EVENT_POINTER_LEAVE) => {
+                let window = read_u64(event, 16).ok_or(DecorationError(5))?;
+                if let Some(decoration) = self
+                    .decorations
+                    .iter_mut()
+                    .find(|decoration| decoration.window == window)
+                    && decoration.interaction != WindowInteraction::default()
+                {
+                    decoration.interaction = WindowInteraction::default();
+                    redraw_title_bar(self.compositor, decoration)?;
                 }
                 Ok(true)
             }
@@ -167,7 +201,9 @@ fn create_decoration(
     put_u64(&mut create, 20, endpoint)?;
     let reply = ipc_call(compositor, &create)?;
     let surface = read_u64(&reply, 4).ok_or(DecorationError(5))?;
-    let buffer_virt = attach_title_bar_buffer(compositor, surface, width, title)?;
+    let interaction = WindowInteraction::default();
+    let buffer_virt =
+        attach_title_bar_buffer(compositor, surface, width, title.clone(), interaction)?;
     token_request(compositor, OP_DAMAGE, surface)?;
 
     let mut attach = [0u8; 36];
@@ -182,6 +218,8 @@ fn create_decoration(
         width,
         surface,
         buffer_virt,
+        title,
+        interaction,
     })
 }
 
@@ -190,6 +228,7 @@ fn attach_title_bar_buffer(
     surface: u64,
     width: u32,
     title: String,
+    interaction: WindowInteraction,
 ) -> Result<u64, DecorationError> {
     let pixel_count = (width as usize)
         .checked_mul(TITLE_BAR_HEIGHT as usize)
@@ -209,7 +248,7 @@ fn attach_title_bar_buffer(
     if virt == 0 || virt & (PAGE_SIZE as u64 - 1) != 0 {
         return Err(DecorationError(5));
     }
-    let rendered = render_title_bar(title, width)?;
+    let rendered = render_title_bar(title, width, interaction)?;
     if rendered.len() != pixel_count {
         return Err(DecorationError(5));
     }
@@ -234,8 +273,12 @@ fn attach_title_bar_buffer(
     Ok(virt)
 }
 
-fn render_title_bar(title: String, width: u32) -> Result<Vec<u32>, DecorationError> {
-    let decoration = WindowDecoration::new(title, WindowInteraction::default());
+fn render_title_bar(
+    title: String,
+    width: u32,
+    interaction: WindowInteraction,
+) -> Result<Vec<u32>, DecorationError> {
+    let decoration = WindowDecoration::new(title, interaction);
     let mut display_list = DisplayList::new();
     let mut text_measurer = TextMeasurer::new();
     let mut context = PaintContext::new(
@@ -252,7 +295,57 @@ fn render_title_bar(title: String, width: u32) -> Result<Vec<u32>, DecorationErr
         .map_err(|_| DecorationError(5))
 }
 
-fn handle_decoration_event(
+fn redraw_title_bar(compositor: u64, decoration: &Decoration) -> Result<(), DecorationError> {
+    let rendered = render_title_bar(
+        decoration.title.clone(),
+        decoration.width,
+        decoration.interaction,
+    )?;
+    let pixel_count = (decoration.width as usize)
+        .checked_mul(TITLE_BAR_HEIGHT as usize)
+        .ok_or(DecorationError(22))?;
+    if decoration.buffer_virt == 0 || rendered.len() != pixel_count {
+        return Err(DecorationError(5));
+    }
+    let pixels =
+        unsafe { std::slice::from_raw_parts_mut(decoration.buffer_virt as *mut u32, pixel_count) };
+    pixels.copy_from_slice(&rendered);
+    token_request(compositor, OP_DAMAGE, decoration.surface)?;
+    token_request(compositor, OP_COMMIT, decoration.surface)
+}
+
+fn control_at(decoration: &Decoration, x: i32, y: i32) -> Option<WindowControl> {
+    if x < 0 || y < 0 || y >= TITLE_BAR_HEIGHT as i32 || x >= decoration.width as i32 {
+        return None;
+    }
+    let x = x as u32;
+    if x >= decoration.width.saturating_sub(CONTROL_WIDTH) {
+        Some(WindowControl::Close)
+    } else if x >= decoration.width.saturating_sub(CONTROL_WIDTH * 2) {
+        Some(WindowControl::Maximize)
+    } else if x >= decoration.width.saturating_sub(CONTROL_WIDTH * 3) {
+        Some(WindowControl::Minimize)
+    } else {
+        None
+    }
+}
+
+fn handle_decoration_motion(
+    compositor: u64,
+    decoration: &mut Decoration,
+    event: &[u8],
+) -> Result<(), DecorationError> {
+    let x = read_i32(event, 4).ok_or(DecorationError(5))?;
+    let y = read_i32(event, 8).ok_or(DecorationError(5))?;
+    let hovered = control_at(decoration, x, y);
+    if decoration.interaction.hovered != hovered {
+        decoration.interaction.hovered = hovered;
+        redraw_title_bar(compositor, decoration)?;
+    }
+    Ok(())
+}
+
+fn handle_decoration_button(
     compositor: u64,
     decoration: &mut Decoration,
     event: &[u8],
@@ -261,19 +354,16 @@ fn handle_decoration_event(
         return Ok(());
     }
     let detail = read_u32(event, 12).ok_or(DecorationError(5))?;
-    if (detail >> 16) & POINTER_FLAG_PRESS == 0 {
-        return Ok(());
-    }
-    let Some(x) = read_i32(event, 4).filter(|x| *x >= 0).map(|x| x as u32) else {
-        return Ok(());
-    };
-    if x >= decoration.width.saturating_sub(CONTROL_WIDTH) {
-        token_request(compositor, OP_DECOR_CLOSE_REQUEST, decoration.window)
-    } else if x >= decoration.width.saturating_sub(CONTROL_WIDTH * 2) {
-        token_request(compositor, OP_DECOR_TOGGLE_MAXIMIZE, decoration.window)
-    } else if x >= decoration.width.saturating_sub(CONTROL_WIDTH * 3) {
-        token_request(compositor, OP_DECOR_MINIMIZE, decoration.window)
-    } else {
+    let flags = detail >> 16;
+    let x = read_i32(event, 4).ok_or(DecorationError(5))?;
+    let y = read_i32(event, 8).ok_or(DecorationError(5))?;
+    let control = control_at(decoration, x, y);
+    if flags & POINTER_FLAG_PRESS != 0 {
+        if let Some(control) = control {
+            decoration.interaction.hovered = Some(control);
+            decoration.interaction.pressed = Some(control);
+            return redraw_title_bar(compositor, decoration);
+        }
         let serial = read_u64(event, 24)
             .filter(|serial| *serial != 0)
             .ok_or(DecorationError(5))?;
@@ -281,7 +371,31 @@ fn handle_decoration_event(
         put_u32(&mut request, 0, OP_DECOR_BEGIN_MOVE)?;
         put_u64(&mut request, 4, decoration.window)?;
         put_u64(&mut request, 12, serial)?;
-        ipc_call_status(compositor, &request)
+        return ipc_call_status(compositor, &request);
+    }
+    if flags & POINTER_FLAG_RELEASE == 0 {
+        return Ok(());
+    }
+    let pressed = decoration.interaction.pressed;
+    decoration.interaction.hovered = control;
+    decoration.interaction.pressed = None;
+    if pressed.is_some() {
+        redraw_title_bar(compositor, decoration)?;
+    }
+    if pressed != control {
+        return Ok(());
+    }
+    match control {
+        Some(WindowControl::Close) => {
+            token_request(compositor, OP_DECOR_CLOSE_REQUEST, decoration.window)
+        }
+        Some(WindowControl::Maximize) => {
+            token_request(compositor, OP_DECOR_TOGGLE_MAXIMIZE, decoration.window)
+        }
+        Some(WindowControl::Minimize) => {
+            token_request(compositor, OP_DECOR_MINIMIZE, decoration.window)
+        }
+        None => Ok(()),
     }
 }
 
