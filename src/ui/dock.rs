@@ -34,6 +34,7 @@ const DOCK_REDRAW_MARGIN: f32 = 20.0;
 const DOCK_TOOLTIP_HEIGHT: f32 = 30.0;
 const DOCK_TOOLTIP_MARGIN: f32 = 10.0;
 const DOCK_TOOLTIP_HORIZONTAL_PADDING: f32 = 12.0;
+const DOCK_TOOLTIP_MAX_WIDTH: f32 = 220.0;
 const DOCK_TOOLTIP_RADIUS: f32 = 12.0;
 const DOCK_TOOLTIP_BACKGROUND: Color = Color::rgba(38, 38, 38, 230);
 const DOCK_TOOLTIP_TEXT: Color = Color::rgba(255, 255, 255, 255);
@@ -132,17 +133,43 @@ where
         )
     }
 
-    fn request_dock_redraw(&self, bounds: Rect, context: &mut EventContext<'_>) {
+    fn request_dock_redraw(
+        &self,
+        bounds: Rect,
+        first: Option<usize>,
+        second: Option<usize>,
+        context: &mut EventContext<'_>,
+    ) {
         let Some(dock) = self.dock_rect(bounds) else {
             return;
         };
         let top = DOCK_ICON_LIFT + DOCK_TOOLTIP_MARGIN + DOCK_TOOLTIP_HEIGHT + DOCK_REDRAW_MARGIN;
-        context.request_redraw_in(Rect::new(
-            dock.origin.x - DOCK_REDRAW_MARGIN,
+        let side_margin = DOCK_TOOLTIP_HORIZONTAL_PADDING + DOCK_TOOLTIP_MAX_WIDTH / 2.0;
+        let vertical = Rect::new(
+            dock.origin.x - side_margin,
             dock.origin.y - top,
-            dock.size.width + DOCK_REDRAW_MARGIN * 2.0,
+            dock.size.width + side_margin * 2.0,
             dock.size.height + top + DOCK_REDRAW_MARGIN,
-        ));
+        );
+        let horizontal_radius =
+            DOCK_MAGNIFICATION_RADIUS + DOCK_ICON_MAX_SIZE / 2.0 + DOCK_REDRAW_MARGIN;
+        let mut dirty = None;
+        for index in [first, second].into_iter().flatten() {
+            let item = Self::item_rect(dock, index);
+            let center_x = item.origin.x + item.size.width / 2.0;
+            let affected = Rect::new(
+                center_x - horizontal_radius,
+                vertical.origin.y,
+                horizontal_radius * 2.0,
+                vertical.size.height,
+            )
+            .intersection(vertical)
+            .unwrap_or(vertical);
+            dirty = Some(dirty.map_or(affected, |current: Rect| current.union(affected)));
+        }
+        if let Some(dirty) = dirty {
+            context.request_redraw_in(dirty);
+        }
     }
 
     fn item_rect(dock: Rect, index: usize) -> Rect {
@@ -329,7 +356,7 @@ where
 
         let text_width = character_count * 7.5;
 
-        (text_width + DOCK_TOOLTIP_HORIZONTAL_PADDING * 2.0).clamp(48.0, 220.0)
+        (text_width + DOCK_TOOLTIP_HORIZONTAL_PADDING * 2.0).clamp(48.0, DOCK_TOOLTIP_MAX_WIDTH)
     }
 
     fn paint_tooltip(app: &AppInfo, icon: Rect, context: &mut PaintContext<'_>) {
@@ -472,10 +499,7 @@ where
                 if changed {
                     self.hovered.set(hit);
                     self.pointer.set(self.pointer_for_hit(bounds, hit));
-                }
-
-                if changed {
-                    self.request_dock_redraw(bounds, context);
+                    self.request_dock_redraw(bounds, previous_hovered, hit, context);
                 }
 
                 if inside {
@@ -492,9 +516,10 @@ where
                 button: PointerButton::Primary,
             } => {
                 if self.is_inside_dock(bounds, *position) {
-                    self.pressed.set(self.hit_index(bounds, *position));
+                    let hit = self.hit_index(bounds, *position);
+                    self.pressed.set(hit);
 
-                    self.request_dock_redraw(bounds, context);
+                    self.request_dock_redraw(bounds, hit, None, context);
 
                     return EventResult::Consumed;
                 }
@@ -519,7 +544,7 @@ where
                         }
                     }
 
-                    self.request_dock_redraw(bounds, context);
+                    self.request_dock_redraw(bounds, pressed, hit, context);
 
                     return EventResult::Consumed;
                 }
@@ -532,6 +557,8 @@ where
             }
 
             ViewEvent::PointerLeft | ViewEvent::FocusChanged { focused: false } => {
+                let previous_hovered = self.hovered.get();
+                let previous_pressed = self.pressed.get();
                 let changed = self.hovered.get().is_some()
                     || self.pressed.get().is_some()
                     || self.pointer.get().is_some();
@@ -547,7 +574,7 @@ where
                 }
 
                 if changed {
-                    self.request_dock_redraw(bounds, context);
+                    self.request_dock_redraw(bounds, previous_hovered, previous_pressed, context);
                 }
 
                 self.content.handle_event(bounds, event, context)
