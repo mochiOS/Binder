@@ -80,13 +80,14 @@ version = "0.1.0"
 dependencies = [
  "binder_client",
  "libc",
- "mochi-user-syscall 0.1.0",
+ "mochi-user-syscall 0.1.0 (git+https://github.com/mochiOS/syscalls)",
  "viewkit",
 ]
 
 [[package]]
 name = "binder_client"
 version = "0.1.0"
+source = "git+https://github.com/mochiOS/Binder#9d52bcf598c3a95dcd0bac064182faea2e1e2a88"
 
 [[package]]
 name = "binder_protocol"
@@ -768,6 +769,8 @@ checksum = "522a13d1239f1c600ea0cb0c871d48a98986ba36d5802417fe37c177a1245324"
 [[package]]
 name = "mochi-user-syscall"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0376e9ab8b688115c41562c6887b1d240f40919b20cf87ca7e9f6841982c940a"
 dependencies = [
  "mnu-abi",
 ]
@@ -775,8 +778,7 @@ dependencies = [
 [[package]]
 name = "mochi-user-syscall"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0376e9ab8b688115c41562c6887b1d240f40919b20cf87ca7e9f6841982c940a"
+source = "git+https://github.com/mochiOS/syscalls#e41ac7909a7ee11e9f89172d2e18db9a5a171f6f"
 dependencies = [
  "mnu-abi",
 ]
