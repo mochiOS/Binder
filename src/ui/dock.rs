@@ -278,11 +278,11 @@ where
         }
     }
 
-    fn launch(&self, index: usize) {
+    fn launch(&self, index: usize) -> bool {
         let apps = self.apps.get();
 
         let Some(app) = apps.get(index).cloned() else {
-            return;
+            return false;
         };
 
         let process_id = match self.platform.borrow_mut().launch_app(&app) {
@@ -291,13 +291,15 @@ where
             Err(error) => {
                 eprintln!("failed to launch app {}: {error:?}", app.bundle_id,);
 
-                return;
+                return false;
             }
         };
 
+        let mut activated = false;
         self.windows.update(|desktop| {
-            desktop.activate_process(process_id);
+            activated = desktop.activate_process(process_id);
         });
+        activated
     }
 
     fn load_icon(&self, path: &Path) -> DockIcon {
@@ -540,7 +542,9 @@ where
 
                     if pressed == hit {
                         if let Some(index) = hit {
-                            self.launch(index);
+                            if self.launch(index) {
+                                context.request_redraw();
+                            }
                         }
                     }
 

@@ -431,12 +431,13 @@ impl DesktopWindows {
             .map(|window| window.id);
     }
 
-    pub fn activate_process(&mut self, process_id: ProcessId) {
+    pub fn activate_process(&mut self, process_id: ProcessId) -> bool {
         let Some(target) = self.activation_target_for_process(process_id) else {
-            return;
+            return false;
         };
 
         self.focus(target);
+        true
     }
 
     fn activation_target_for_process(&self, process_id: ProcessId) -> Option<WindowId> {
@@ -543,4 +544,40 @@ pub struct WindowDrag {
     pub window: WindowId,
     pub pointer_origin: Point,
     pub window_origin: Point,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activating_process_restores_its_topmost_minimized_window() {
+        let mut desktop = DesktopWindows::default();
+        let process = ProcessId(7);
+        let (first, _) = desktop.open_test(process, String::from("First"), 640, 480, true);
+        let (second, _) = desktop.open_test(process, String::from("Second"), 640, 480, true);
+
+        desktop.minimize(second);
+        desktop.minimize(first);
+
+        assert!(desktop.activate_process(process));
+        assert_eq!(desktop.focused, Some(second));
+        assert_eq!(
+            desktop
+                .windows
+                .last()
+                .map(|window| (window.id, window.minimized)),
+            Some((second, false))
+        );
+    }
+
+    #[test]
+    fn activating_unknown_process_does_not_change_windows() {
+        let mut desktop = DesktopWindows::default();
+        desktop.open_test(ProcessId(7), String::from("Window"), 640, 480, true);
+        let before = desktop.clone();
+
+        assert!(!desktop.activate_process(ProcessId(8)));
+        assert_eq!(desktop, before);
+    }
 }
