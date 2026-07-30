@@ -386,6 +386,10 @@ impl DesktopPlatform for MochiOsPlatform {
         }
     }
 
+    fn process_id_for_bundle(&self, bundle_id: &str) -> Option<ProcessId> {
+        self.process_for_bundle(bundle_id)
+    }
+
     fn running_app_bundle_ids(&self) -> Vec<String> {
         self.children
             .values()

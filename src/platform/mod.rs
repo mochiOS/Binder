@@ -218,6 +218,10 @@ pub trait DesktopPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
+    fn process_id_for_bundle(&self, _bundle_id: &str) -> Option<ProcessId> {
+        None
+    }
+
     fn running_app_bundle_ids(&self) -> Vec<String> {
         Vec::new()
     }

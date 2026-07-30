@@ -1,4 +1,8 @@
-use crate::platform::SystemBarState;
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use crate::platform::{AppInfo, DesktopPlatform, SystemBarState};
+use crate::window::DesktopWindows;
 use viewkit::prelude::*;
 use viewkit::view::PaintContext;
 
@@ -17,6 +21,9 @@ const SECONDARY_TEXT: Color = Color::from_rgb_hex(0x626262);
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
     menu_open: State<bool>,
+    platform: Rc<RefCell<dyn DesktopPlatform>>,
+    windows: State<DesktopWindows>,
+    apps: State<Vec<AppInfo>>,
 ) -> impl View + 'static {
     let menu_open_on_click = menu_open.clone();
 
@@ -41,6 +48,7 @@ pub(crate) fn view(
         .alignment(StackAlignment::Center)
         .gap(StackGap::None)
         .child(menu_button)
+        .child(ActiveApplicationName::new(platform, windows, apps).width(180.0))
         .child(Spacer::new());
 
     let clock = SystemBarClock::new(system_bar);
@@ -66,6 +74,51 @@ pub(crate) fn view(
                 .height(BAR_CONTENT_HEIGHT),
         )
         .child(Divider::new())
+}
+
+struct ActiveApplicationName {
+    platform: Rc<RefCell<dyn DesktopPlatform>>,
+    windows: State<DesktopWindows>,
+    apps: State<Vec<AppInfo>>,
+}
+
+impl ActiveApplicationName {
+    fn new(
+        platform: Rc<RefCell<dyn DesktopPlatform>>,
+        windows: State<DesktopWindows>,
+        apps: State<Vec<AppInfo>>,
+    ) -> Self {
+        Self {
+            platform,
+            windows,
+            apps,
+        }
+    }
+
+    fn application_name(&self) -> String {
+        let process_id = self.windows.get().focused_process_id();
+        let apps = self.apps.get();
+        let platform = self.platform.borrow();
+
+        process_id
+            .and_then(|process_id| {
+                apps.iter()
+                    .find(|app| platform.process_id_for_bundle(&app.bundle_id) == Some(process_id))
+                    .map(|app| app.name.clone())
+            })
+            .unwrap_or_else(|| String::from("Binder"))
+    }
+}
+
+impl View for ActiveApplicationName {
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        Text::new(self.application_name())
+            .font_size(12.0)
+            .line_height(18.0)
+            .weight(650)
+            .color(PRIMARY_TEXT)
+            .paint(bounds, context);
+    }
 }
 
 struct SystemBarClock {

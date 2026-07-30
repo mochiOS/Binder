@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use crate::platform::{AppInfo, DesktopPlatform};
 
-use crate::window::DesktopWindows;
+use crate::window::{DesktopWindows, ProcessActivation};
 use viewkit::{
     draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
@@ -278,28 +278,32 @@ where
         }
     }
 
-    fn launch(&self, index: usize) -> bool {
+    fn activate_or_launch(&self, index: usize) -> Option<ProcessActivation> {
         let apps = self.apps.get();
 
         let Some(app) = apps.get(index).cloned() else {
-            return false;
+            return None;
         };
 
-        let process_id = match self.platform.borrow_mut().launch_app(&app) {
-            Ok(process_id) => process_id,
+        let running_process = self.platform.borrow().process_id_for_bundle(&app.bundle_id);
+        let process_id = match running_process {
+            Some(process_id) => process_id,
+            None => match self.platform.borrow_mut().launch_app(&app) {
+                Ok(process_id) => process_id,
 
-            Err(error) => {
-                eprintln!("failed to launch app {}: {error:?}", app.bundle_id,);
+                Err(error) => {
+                    eprintln!("failed to launch app {}: {error:?}", app.bundle_id,);
 
-                return false;
-            }
+                    return None;
+                }
+            },
         };
 
-        let mut activated = false;
+        let mut activation = ProcessActivation::NoWindow;
         self.windows.update(|desktop| {
-            activated = desktop.activate_process(process_id);
+            activation = desktop.activate_process(process_id);
         });
-        activated
+        Some(activation)
     }
 
     fn load_icon(&self, path: &Path) -> DockIcon {
@@ -542,7 +546,10 @@ where
 
                     if pressed == hit {
                         if let Some(index) = hit {
-                            if self.launch(index) {
+                            if self
+                                .activate_or_launch(index)
+                                .is_some_and(ProcessActivation::changed_window_state)
+                            {
                                 context.request_redraw();
                             }
                         }

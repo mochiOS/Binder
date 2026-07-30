@@ -46,7 +46,16 @@ pub(crate) fn view(
     let content = VStack::new()
         .alignment(StackAlignment::Stretch)
         .gap(StackGap::None)
-        .child(top_bar::view(system_bar, menu_open.clone()).height(40.0))
+        .child(
+            top_bar::view(
+                system_bar,
+                menu_open.clone(),
+                Rc::clone(&platform),
+                windows.clone(),
+                apps.clone(),
+            )
+            .height(40.0),
+        )
         .child(Spacer::new());
 
     let desktop_content = Background::new().background(refresh_driver).content(

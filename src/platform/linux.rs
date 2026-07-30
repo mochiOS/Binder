@@ -521,6 +521,12 @@ impl DesktopPlatform for LinuxPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
+    fn process_id_for_bundle(&self, bundle_id: &str) -> Option<ProcessId> {
+        self.children
+            .iter()
+            .find_map(|(process_id, child)| (child.bundle_id == bundle_id).then_some(*process_id))
+    }
+
     fn running_app_bundle_ids(&self) -> Vec<String> {
         self.children
             .values()

@@ -32,6 +32,21 @@ pub enum WindowControl {
     Close,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessActivation {
+    NoWindow,
+    AlreadyFocused(WindowId),
+    Focused(WindowId),
+    Restored(WindowId),
+    Cycled(WindowId),
+}
+
+impl ProcessActivation {
+    pub fn changed_window_state(self) -> bool {
+        matches!(self, Self::Focused(_) | Self::Restored(_) | Self::Cycled(_))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WindowInteraction {
     pub hovered: Option<WindowControl>,
@@ -63,6 +78,15 @@ impl Default for DesktopWindows {
 }
 
 impl DesktopWindows {
+    pub fn focused_process_id(&self) -> Option<ProcessId> {
+        let focused = self.focused?;
+
+        self.windows
+            .iter()
+            .find(|window| window.id == focused && !window.minimized)
+            .and_then(|window| window.process_id)
+    }
+
     pub fn about_window(&self) -> Option<WindowId> {
         self.windows
             .iter()
@@ -431,13 +455,39 @@ impl DesktopWindows {
             .map(|window| window.id);
     }
 
-    pub fn activate_process(&mut self, process_id: ProcessId) -> bool {
+    pub fn activate_process(&mut self, process_id: ProcessId) -> ProcessActivation {
         let Some(target) = self.activation_target_for_process(process_id) else {
-            return false;
+            return ProcessActivation::NoWindow;
         };
 
+        let Some(window) = self.windows.iter().find(|window| window.id == target) else {
+            return ProcessActivation::NoWindow;
+        };
+        let was_minimized = window.minimized;
+        let process_was_focused = self.focused.is_some_and(|focused| {
+            self.windows.iter().any(|window| {
+                window.id == focused && window.process_id == Some(process_id) && !window.minimized
+            })
+        });
+        let visible_count = self
+            .windows
+            .iter()
+            .filter(|window| window.process_id == Some(process_id) && !window.minimized)
+            .count();
+
+        if process_was_focused && !was_minimized && visible_count == 1 {
+            return ProcessActivation::AlreadyFocused(target);
+        }
+
         self.focus(target);
-        true
+
+        if was_minimized {
+            ProcessActivation::Restored(target)
+        } else if process_was_focused {
+            ProcessActivation::Cycled(target)
+        } else {
+            ProcessActivation::Focused(target)
+        }
     }
 
     fn activation_target_for_process(&self, process_id: ProcessId) -> Option<WindowId> {
@@ -560,7 +610,10 @@ mod tests {
         desktop.minimize(second);
         desktop.minimize(first);
 
-        assert!(desktop.activate_process(process));
+        assert_eq!(
+            desktop.activate_process(process),
+            ProcessActivation::Restored(second)
+        );
         assert_eq!(desktop.focused, Some(second));
         assert_eq!(
             desktop
@@ -577,7 +630,57 @@ mod tests {
         desktop.open_test(ProcessId(7), String::from("Window"), 640, 480, true);
         let before = desktop.clone();
 
-        assert!(!desktop.activate_process(ProcessId(8)));
+        assert_eq!(
+            desktop.activate_process(ProcessId(8)),
+            ProcessActivation::NoWindow
+        );
         assert_eq!(desktop, before);
+    }
+
+    #[test]
+    fn activating_focused_process_cycles_multiple_visible_windows() {
+        let mut desktop = DesktopWindows::default();
+        let process = ProcessId(7);
+        let (first, _) = desktop.open_test(process, String::from("First"), 640, 480, true);
+        let (second, _) = desktop.open_test(process, String::from("Second"), 640, 480, true);
+
+        assert_eq!(desktop.focused, Some(second));
+        assert_eq!(
+            desktop.activate_process(process),
+            ProcessActivation::Cycled(first)
+        );
+        assert_eq!(desktop.focused, Some(first));
+        assert_eq!(desktop.windows.last().map(|window| window.id), Some(first));
+    }
+
+    #[test]
+    fn activating_single_focused_window_is_stable() {
+        let mut desktop = DesktopWindows::default();
+        let process = ProcessId(7);
+        let (window, _) = desktop.open_test(process, String::from("Window"), 640, 480, true);
+        let before = desktop.clone();
+
+        assert_eq!(
+            desktop.activate_process(process),
+            ProcessActivation::AlreadyFocused(window)
+        );
+        assert_eq!(desktop, before);
+    }
+
+    #[test]
+    fn activating_inactive_process_brings_its_topmost_window_forward() {
+        let mut desktop = DesktopWindows::default();
+        let first_process = ProcessId(7);
+        let second_process = ProcessId(8);
+        let (first, _) = desktop.open_test(first_process, String::from("First"), 640, 480, true);
+        desktop.open_test(second_process, String::from("Second"), 640, 480, true);
+
+        assert_eq!(desktop.focused_process_id(), Some(second_process));
+        assert_eq!(
+            desktop.activate_process(first_process),
+            ProcessActivation::Focused(first)
+        );
+        assert_eq!(desktop.focused_process_id(), Some(first_process));
+        assert_eq!(desktop.windows.last().map(|window| window.id), Some(first));
     }
 }
