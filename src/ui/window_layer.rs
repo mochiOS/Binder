@@ -28,6 +28,13 @@ pub(crate) struct WindowLayer<C> {
     test_window_states: Rc<RefCell<HashMap<crate::window::WindowId, TestWindowState>>>,
 }
 
+#[derive(Clone, Copy)]
+enum WindowKeyboardCommand {
+    Minimize,
+    Close,
+    Cycle,
+}
+
 impl<C> WindowLayer<C>
 where
     C: View,
@@ -493,6 +500,48 @@ where
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
+        if let ViewEvent::KeyPressed { key, modifiers } = event {
+            let command = if modifiers.shortcut() {
+                match key {
+                    Key::Character(character) if character.eq_ignore_ascii_case(&'m') => {
+                        Some(WindowKeyboardCommand::Minimize)
+                    }
+                    Key::Character(character) if character.eq_ignore_ascii_case(&'w') => {
+                        Some(WindowKeyboardCommand::Close)
+                    }
+                    _ => None,
+                }
+            } else if modifiers.alt() && *key == Key::Tab {
+                Some(WindowKeyboardCommand::Cycle)
+            } else {
+                None
+            };
+
+            if let Some(command) = command {
+                let mut changed = false;
+                self.windows.update(|desktop| match command {
+                    WindowKeyboardCommand::Minimize => {
+                        if let Some(window) = desktop.focused {
+                            desktop.minimize(window);
+                            changed = true;
+                        }
+                    }
+                    WindowKeyboardCommand::Close => {
+                        if let Some(window) = desktop.focused {
+                            desktop.close(window);
+                            changed = true;
+                        }
+                    }
+                    WindowKeyboardCommand::Cycle => changed = desktop.focus_next_visible(),
+                });
+
+                if changed {
+                    context.request_redraw();
+                }
+                return EventResult::Consumed;
+            }
+        }
+
         /*
          * リサイズ操作中。
          */

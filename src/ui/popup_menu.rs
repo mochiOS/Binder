@@ -89,6 +89,14 @@ where
         let trigger_bounds = Self::absolute_frame(bounds, self.trigger_frame);
 
         match event {
+            ViewEvent::KeyPressed {
+                key: Key::Escape, ..
+            } => {
+                self.open.set(false);
+                context.request_redraw_in(self.redraw_frame(bounds));
+                EventResult::Consumed
+            }
+
             ViewEvent::FocusChanged { focused: false } => {
                 self.open.set(false);
                 context.request_redraw();

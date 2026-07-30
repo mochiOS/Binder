@@ -490,6 +490,22 @@ impl DesktopWindows {
         }
     }
 
+    pub fn focus_next_visible(&mut self) -> bool {
+        let target = self
+            .windows
+            .iter()
+            .rev()
+            .find(|window| !window.minimized && Some(window.id) != self.focused)
+            .map(|window| window.id);
+
+        let Some(target) = target else {
+            return false;
+        };
+
+        self.focus(target);
+        true
+    }
+
     fn activation_target_for_process(&self, process_id: ProcessId) -> Option<WindowId> {
         let focused_window = self
             .focused
@@ -682,5 +698,20 @@ mod tests {
         );
         assert_eq!(desktop.focused_process_id(), Some(first_process));
         assert_eq!(desktop.windows.last().map(|window| window.id), Some(first));
+    }
+
+    #[test]
+    fn focus_next_visible_cycles_z_order_and_skips_minimized_windows() {
+        let mut desktop = DesktopWindows::default();
+        let (first, _) = desktop.open_test(ProcessId(7), String::from("First"), 640, 480, true);
+        let (second, _) = desktop.open_test(ProcessId(8), String::from("Second"), 640, 480, true);
+        let (third, _) = desktop.open_test(ProcessId(9), String::from("Third"), 640, 480, true);
+        desktop.minimize(second);
+
+        assert_eq!(desktop.focused, Some(third));
+        assert!(desktop.focus_next_visible());
+        assert_eq!(desktop.focused, Some(first));
+        assert!(desktop.focus_next_visible());
+        assert_eq!(desktop.focused, Some(third));
     }
 }
