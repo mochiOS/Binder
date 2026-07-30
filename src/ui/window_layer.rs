@@ -157,50 +157,60 @@ where
         None
     }
 
-    fn update_hovered_control(&self, position: Point) -> bool {
+    fn update_hovered_control(&self, position: Point) -> Option<Rect> {
         let desktop = self.windows.get();
 
         let target = Self::topmost_window_at(&desktop, position).and_then(|window| {
             Self::control_at(window.frame, position).map(|control| (window.id, control))
         });
 
-        let changed = desktop.windows.iter().any(|window| {
-            let expected = match target {
-                Some((id, control)) if id == window.id => Some(control),
+        let damage = desktop
+            .windows
+            .iter()
+            .filter_map(|window| {
+                let expected = match target {
+                    Some((id, control)) if id == window.id => Some(control),
 
-                _ => None,
-            };
+                    _ => None,
+                };
 
-            window.interaction.hovered != expected
-        });
+                (window.interaction.hovered != expected)
+                    .then_some(window.frame.expanded(WINDOW_EFFECT_EXTENT))
+            })
+            .reduce(Rect::union);
 
         drop(desktop);
 
-        if changed {
+        if damage.is_some() {
             self.windows.update(|desktop| {
                 desktop.set_hovered_control(target);
             });
         }
 
-        changed
+        damage
     }
 
-    fn clear_interactions(&self) -> bool {
+    fn clear_interactions(&self) -> Option<Rect> {
         let desktop = self.windows.get();
 
-        let changed = desktop.windows.iter().any(|window| {
-            window.interaction.hovered.is_some() || window.interaction.pressed.is_some()
-        });
+        let damage = desktop
+            .windows
+            .iter()
+            .filter(|window| {
+                window.interaction.hovered.is_some() || window.interaction.pressed.is_some()
+            })
+            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+            .reduce(Rect::union);
 
         drop(desktop);
 
-        if changed {
+        if damage.is_some() {
             self.windows.update(|desktop| {
                 desktop.clear_interactions();
             });
         }
 
-        changed
+        damage
     }
 
     fn desktop_work_area(bounds: Rect) -> Rect {
@@ -583,8 +593,8 @@ where
             ViewEvent::PointerMoved { position } => {
                 let resize_edge = self.update_resize_cursor(*position, context);
 
-                if self.update_hovered_control(*position) {
-                    context.request_redraw();
+                if let Some(dirty) = self.update_hovered_control(*position) {
+                    context.request_redraw_in(dirty);
                 }
 
                 let desktop = self.windows.get();
@@ -767,7 +777,7 @@ where
                         }
                     });
 
-                    self.update_hovered_control(*position);
+                    let _ = self.update_hovered_control(*position);
 
                     self.update_resize_cursor(*position, context);
 
@@ -798,8 +808,8 @@ where
             ViewEvent::PointerLeft | ViewEvent::FocusChanged { focused: false } => {
                 context.set_cursor(CursorIcon::Default);
 
-                if self.clear_interactions() {
-                    context.request_redraw();
+                if let Some(dirty) = self.clear_interactions() {
+                    context.request_redraw_in(dirty);
                 }
 
                 let desktop = self.windows.get();
