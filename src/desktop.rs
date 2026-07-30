@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::platform::{self, AppInfo, DesktopPlatform, SystemBarState};
@@ -19,6 +20,7 @@ pub struct BinderApp {
     dock_pointer: Rc<Cell<Option<Point>>>,
     dock_running_apps: State<Vec<String>>,
     cursor_pointer: Rc<Cell<Option<Point>>>,
+    test_window_states: Rc<RefCell<HashMap<WindowId, crate::ui::test::TestWindowState>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +64,7 @@ impl App for BinderApp {
             dock_pointer: Rc::new(Cell::new(None)),
             dock_running_apps: State::new(Vec::new()),
             cursor_pointer: Rc::new(Cell::new(None)),
+            test_window_states: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -86,6 +89,7 @@ impl App for BinderApp {
             Rc::clone(&self.dock_pointer),
             self.dock_running_apps.clone(),
             Rc::clone(&self.cursor_pointer),
+            Rc::clone(&self.test_window_states),
         )
     }
 

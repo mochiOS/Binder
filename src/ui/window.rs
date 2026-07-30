@@ -119,10 +119,14 @@ impl View for WindowView {
     }
 }
 
-pub(crate) fn view(window: &DesktopWindow, focused: bool) -> impl View + 'static {
+pub(crate) fn view(
+    window: &DesktopWindow,
+    focused: bool,
+    test_state: Option<test::TestWindowState>,
+) -> impl View + 'static {
     let content: Box<dyn View + 'static> = match window.renderer.as_str() {
         apps::ABOUT_ENTRY => Box::new(about::view()),
-        apps::TEST_ENTRY => Box::new(test::view()),
+        apps::TEST_ENTRY => Box::new(test::view(test_state.unwrap_or_default())),
         _ => Box::new(remote_placeholder_view()),
     };
 

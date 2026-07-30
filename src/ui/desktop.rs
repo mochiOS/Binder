@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use std::time::{Duration, Instant};
@@ -10,7 +11,7 @@ use crate::desktop::WindowResize;
 
 use crate::platform::{AppInfo, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState};
 
-use crate::window::{DesktopWindows, WindowDrag};
+use crate::window::{DesktopWindows, WindowDrag, WindowId};
 
 use crate::apps;
 use viewkit::{prelude::*, view::PaintContext};
@@ -32,6 +33,7 @@ pub(crate) fn view(
     dock_pointer: Rc<Cell<Option<Point>>>,
     dock_running_apps: State<Vec<String>>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
+    test_window_states: Rc<RefCell<HashMap<WindowId, super::test::TestWindowState>>>,
 ) -> Box<dyn View + 'static> {
     let refresh_driver = PlatformRefreshView::new(
         Rc::clone(&platform),
@@ -58,6 +60,7 @@ pub(crate) fn view(
         windows.clone(),
         window_drag,
         resize,
+        test_window_states,
     );
 
     let docked_desktop = dock::DockLayer::new(

@@ -443,7 +443,7 @@ impl viewkit::prelude::App for TestProcessApp {
     }
 
     fn body(&self, _context: &viewkit::prelude::ViewContext) -> Self::Body {
-        Box::new(crate::ui::test::view())
+        Box::new(crate::ui::test::view(Default::default()))
     }
 }
 

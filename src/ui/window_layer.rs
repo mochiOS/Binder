@@ -1,5 +1,8 @@
 use crate::desktop::{ResizeEdge, WindowResize};
 use crate::window::{DesktopWindow, DesktopWindows, WindowControl, WindowDrag};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
@@ -7,7 +10,7 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
-use super::{window, window_decoration};
+use super::{test::TestWindowState, window, window_decoration};
 
 const DESKTOP_TOP_INSET: f32 = 40.0;
 const RESIZE_HANDLE_OUTER_SIZE: f32 = 10.0;
@@ -21,6 +24,7 @@ pub(crate) struct WindowLayer<C> {
     windows: State<DesktopWindows>,
     drag: State<Option<WindowDrag>>,
     resize: State<Option<WindowResize>>,
+    test_window_states: Rc<RefCell<HashMap<crate::window::WindowId, TestWindowState>>>,
 }
 
 impl<C> WindowLayer<C>
@@ -32,13 +36,42 @@ where
         windows: State<DesktopWindows>,
         drag: State<Option<WindowDrag>>,
         resize: State<Option<WindowResize>>,
+        test_window_states: Rc<RefCell<HashMap<crate::window::WindowId, TestWindowState>>>,
     ) -> Self {
         Self {
             content,
             windows,
             drag,
             resize,
+            test_window_states,
         }
+    }
+
+    fn test_state(&self, window: &DesktopWindow) -> Option<TestWindowState> {
+        if window.renderer != crate::apps::TEST_ENTRY {
+            return None;
+        }
+        Some(
+            self.test_window_states
+                .borrow_mut()
+                .entry(window.id)
+                .or_default()
+                .clone(),
+        )
+    }
+
+    fn dispatch_window_event(
+        &self,
+        window: &DesktopWindow,
+        focused: bool,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> EventResult {
+        window::view(window, focused, self.test_state(window)).handle_event(
+            window.frame,
+            event,
+            context,
+        )
     }
 
     fn topmost_window_at(desktop: &DesktopWindows, position: Point) -> Option<DesktopWindow> {
@@ -387,6 +420,13 @@ where
 
         let desktop = self.windows.get();
 
+        self.test_window_states.borrow_mut().retain(|id, _| {
+            desktop
+                .windows
+                .iter()
+                .any(|window| window.id == *id && window.renderer == crate::apps::TEST_ENTRY)
+        });
+
         for desktop_window in &desktop.windows {
             if desktop_window.minimized {
                 continue;
@@ -394,7 +434,8 @@ where
 
             let focused = desktop.focused == Some(desktop_window.id);
 
-            window::view(desktop_window, focused).paint(desktop_window.frame, context);
+            window::view(desktop_window, focused, self.test_state(desktop_window))
+                .paint(desktop_window.frame, context);
         }
     }
 
@@ -498,9 +539,14 @@ where
 
                 let desktop = self.windows.get();
 
-                let window_hovered = Self::topmost_window_at(&desktop, *position).is_some();
+                let hovered_window = Self::topmost_window_at(&desktop, *position);
 
-                if resize_edge.is_some() || window_hovered {
+                if resize_edge.is_some() {
+                    EventResult::Consumed
+                } else if let Some(window) = hovered_window {
+                    let focused = desktop.focused == Some(window.id);
+                    drop(desktop);
+                    self.dispatch_window_event(&window, focused, event, context);
                     EventResult::Consumed
                 } else {
                     drop(desktop);
@@ -620,6 +666,10 @@ where
 
                 context.request_redraw();
 
+                if control.is_none() && !in_title_bar {
+                    self.dispatch_window_event(&hit_window, true, event, context);
+                }
+
                 EventResult::Consumed
             }
 
@@ -679,10 +729,14 @@ where
                 let resize_edge = self.update_resize_cursor(*position, context);
 
                 let desktop = self.windows.get();
+                let hovered_window = Self::topmost_window_at(&desktop, *position);
 
-                let window_hovered = Self::topmost_window_at(&desktop, *position).is_some();
-
-                if resize_edge.is_some() || window_hovered {
+                if resize_edge.is_some() {
+                    EventResult::Consumed
+                } else if let Some(window) = hovered_window {
+                    let focused = desktop.focused == Some(window.id);
+                    drop(desktop);
+                    self.dispatch_window_event(&window, focused, event, context);
                     EventResult::Consumed
                 } else {
                     drop(desktop);
@@ -698,6 +752,12 @@ where
                     context.request_redraw();
                 }
 
+                let desktop = self.windows.get();
+                for window in desktop.windows.iter().filter(|window| !window.minimized) {
+                    let focused = desktop.focused == Some(window.id);
+                    self.dispatch_window_event(window, focused, event, context);
+                }
+
                 self.content.handle_event(bounds, event, context)
             }
 
@@ -707,10 +767,27 @@ where
 
                     let resize_hit = Self::topmost_resize_window_at(&desktop, position).is_some();
 
-                    let window_hit = Self::topmost_window_at(&desktop, position).is_some();
+                    let window_hit = Self::topmost_window_at(&desktop, position);
 
-                    if resize_hit || window_hit {
+                    if resize_hit {
                         return EventResult::Consumed;
+                    }
+
+                    if let Some(window) = window_hit {
+                        let focused = desktop.focused == Some(window.id);
+                        drop(desktop);
+                        self.dispatch_window_event(&window, focused, event, context);
+                        return EventResult::Consumed;
+                    }
+                } else {
+                    let desktop = self.windows.get();
+                    if let Some(window) = desktop
+                        .focused
+                        .and_then(|id| desktop.windows.iter().find(|window| window.id == id))
+                        .cloned()
+                    {
+                        drop(desktop);
+                        return self.dispatch_window_event(&window, true, event, context);
                     }
                 }
 
