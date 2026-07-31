@@ -17,6 +17,7 @@ requires = [
     "fs.read.all",
     "ipc.client",
     "ipc.server",
+    "process.inspect",
     "process.spawn",
     "window.create",
     "window.overlay",

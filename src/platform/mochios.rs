@@ -22,7 +22,13 @@ struct ManagedApp {
     bundle_id: String,
     child: Option<Child>,
     windows: HashSet<RemoteWindowId>,
+    track_kernel_lifecycle: bool,
 }
+
+const PROCESS_RECORD_SIZE: usize = 88;
+#[cfg(target_os = "mochios")]
+const MAX_PROCESS_RECORDS: usize = 256;
+const PROCESS_STATE_TERMINATED: u64 = 4;
 
 #[allow(unused)]
 pub struct MochiOsPlatform {
@@ -79,6 +85,7 @@ impl MochiOsPlatform {
                 bundle_id,
                 child: None,
                 windows: HashSet::new(),
+                track_kernel_lifecycle: false,
             },
         );
 
@@ -101,6 +108,7 @@ impl MochiOsPlatform {
                 bundle_id: app.bundle_id.clone(),
                 child,
                 windows: HashSet::new(),
+                track_kernel_lifecycle: true,
             },
         );
 
@@ -134,8 +142,67 @@ impl MochiOsPlatform {
             self.exited_processes.push(process_id);
         }
 
+        #[cfg(target_os = "mochios")]
+        let changed = if self
+            .children
+            .values()
+            .any(|managed| managed.track_kernel_lifecycle)
+        {
+            let live_processes = inspect_live_processes()?;
+            self.remove_exited_kernel_processes(&live_processes) || changed
+        } else {
+            changed
+        };
+
         Ok(changed)
     }
+
+    fn remove_exited_kernel_processes(&mut self, live_processes: &HashSet<ProcessId>) -> bool {
+        let exited: Vec<ProcessId> = self
+            .children
+            .iter()
+            .filter_map(|(process_id, managed)| {
+                (managed.track_kernel_lifecycle && !live_processes.contains(process_id))
+                    .then_some(*process_id)
+            })
+            .collect();
+        let changed = !exited.is_empty();
+        for process_id in exited {
+            self.children.remove(&process_id);
+            self.exited_processes.push(process_id);
+        }
+        changed
+    }
+}
+
+fn decode_live_process_ids(buffer: &[u8], record_count: usize) -> HashSet<ProcessId> {
+    buffer
+        .chunks_exact(PROCESS_RECORD_SIZE)
+        .take(record_count)
+        .filter_map(|record| {
+            let pid = u64::from_ne_bytes(record.get(0..8)?.try_into().ok()?);
+            let state = u64::from_ne_bytes(record.get(16..24)?.try_into().ok()?);
+            (pid != 0 && pid <= u32::MAX as u64 && state != PROCESS_STATE_TERMINATED)
+                .then_some(ProcessId(pid as u32))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "mochios")]
+fn inspect_live_processes() -> Result<HashSet<ProcessId>, PlatformError> {
+    use mochi_user_syscall as syscall;
+
+    let mut records = vec![0u8; PROCESS_RECORD_SIZE * MAX_PROCESS_RECORDS];
+    let count = syscall::call2(
+        syscall::SyscallNumber::ListProcesses,
+        records.as_mut_ptr() as u64,
+        records.len() as u64,
+    )
+    .map_err(|_| PlatformError::ProcessTerminationFailed)?;
+    let count = usize::try_from(count)
+        .unwrap_or(MAX_PROCESS_RECORDS)
+        .min(MAX_PROCESS_RECORDS);
+    Ok(decode_live_process_ids(&records, count))
 }
 
 #[cfg(target_os = "mochios")]
@@ -787,5 +854,52 @@ mod tests {
     fn missing_applications_root_is_an_empty_catalog() {
         let root = temporary_app_root();
         assert!(read_apps_from(&root).is_empty());
+    }
+
+    #[test]
+    fn process_snapshot_excludes_terminated_processes() {
+        let mut records = vec![0u8; PROCESS_RECORD_SIZE * 3];
+        records[0..8].copy_from_slice(&7u64.to_ne_bytes());
+        records[16..24].copy_from_slice(&1u64.to_ne_bytes());
+        records[PROCESS_RECORD_SIZE..PROCESS_RECORD_SIZE + 8].copy_from_slice(&8u64.to_ne_bytes());
+        records[PROCESS_RECORD_SIZE + 16..PROCESS_RECORD_SIZE + 24]
+            .copy_from_slice(&PROCESS_STATE_TERMINATED.to_ne_bytes());
+        records[PROCESS_RECORD_SIZE * 2..PROCESS_RECORD_SIZE * 2 + 8]
+            .copy_from_slice(&9u64.to_ne_bytes());
+        records[PROCESS_RECORD_SIZE * 2 + 16..PROCESS_RECORD_SIZE * 2 + 24]
+            .copy_from_slice(&3u64.to_ne_bytes());
+
+        let live = decode_live_process_ids(&records, 3);
+
+        assert_eq!(live, HashSet::from([ProcessId(7), ProcessId(9)]));
+    }
+
+    #[test]
+    fn exited_kernel_process_is_removed_from_running_apps() {
+        let mut platform = MochiOsPlatform::new();
+        platform.children.clear();
+        platform.children.insert(
+            ProcessId(7),
+            ManagedApp {
+                bundle_id: String::from("org.test.terminal"),
+                child: None,
+                windows: HashSet::new(),
+                track_kernel_lifecycle: true,
+            },
+        );
+        platform.children.insert(
+            ProcessId(0x4000_0000),
+            ManagedApp {
+                bundle_id: String::from("org.test.internal"),
+                child: None,
+                windows: HashSet::new(),
+                track_kernel_lifecycle: false,
+            },
+        );
+
+        assert!(platform.remove_exited_kernel_processes(&HashSet::new()));
+        assert!(platform.process_for_bundle("org.test.terminal").is_none());
+        assert!(platform.process_for_bundle("org.test.internal").is_some());
+        assert_eq!(platform.exited_processes, vec![ProcessId(7)]);
     }
 }
