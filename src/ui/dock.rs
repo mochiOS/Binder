@@ -32,6 +32,11 @@ const DOCK_INTERACTION_TOP_OVERFLOW: f32 = 26.0;
 const DOCK_REDRAW_MARGIN: f32 = 20.0;
 const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 
+const DOCK_MENU_WIDTH: f32 = 180.0;
+const DOCK_MENU_HEIGHT: f32 = 46.0;
+const DOCK_MENU_GAP: f32 = 10.0;
+const DOCK_MENU_REDRAW_MARGIN: f32 = 16.0;
+
 const DOCK_TOOLTIP_HEIGHT: f32 = 30.0;
 const DOCK_TOOLTIP_MARGIN: f32 = 10.0;
 const DOCK_TOOLTIP_HORIZONTAL_PADDING: f32 = 12.0;
@@ -75,6 +80,9 @@ pub(crate) struct DockLayer<C> {
     pointer: Rc<Cell<Option<Point>>>,
     running_apps: State<Vec<String>>,
     icon_cache: RefCell<HashMap<PathBuf, DockIcon>>,
+    menu: Menu,
+    menu_index: Rc<Cell<Option<usize>>>,
+    menu_action_requested: Rc<Cell<bool>>,
 }
 
 impl<C> DockLayer<C>
@@ -91,6 +99,9 @@ where
         pointer: Rc<Cell<Option<Point>>>,
         running_apps: State<Vec<String>>,
     ) -> Self {
+        let menu_action_requested = Rc::new(Cell::new(false));
+        let action = Rc::clone(&menu_action_requested);
+
         Self {
             content,
             platform,
@@ -101,6 +112,11 @@ where
             pointer,
             running_apps,
             icon_cache: RefCell::new(HashMap::new()),
+            menu: Menu::new().item(MenuItem::new("Open").on_select(move || {
+                action.set(true);
+            })),
+            menu_index: Rc::new(Cell::new(None)),
+            menu_action_requested,
         }
     }
 
@@ -215,6 +231,65 @@ where
     fn is_inside_dock(&self, bounds: Rect, position: Point) -> bool {
         self.dock_rect(bounds)
             .is_some_and(|dock| Self::dock_interaction_rect(dock).contains(position))
+    }
+
+    fn menu_bounds(&self, bounds: Rect) -> Option<Rect> {
+        let index = self.menu_index.get()?;
+        let dock = self.dock_rect(bounds)?;
+        let item = Self::item_rect(dock, index);
+        let center_x = item.origin.x + item.size.width / 2.0;
+        let minimum_x = bounds.origin.x;
+        let maximum_x = (bounds.origin.x + bounds.size.width - DOCK_MENU_WIDTH).max(minimum_x);
+        let x = (center_x - DOCK_MENU_WIDTH / 2.0).clamp(minimum_x, maximum_x);
+        let y = (dock.origin.y - DOCK_MENU_GAP - DOCK_MENU_HEIGHT).max(bounds.origin.y);
+
+        Some(Rect::new(x, y, DOCK_MENU_WIDTH, DOCK_MENU_HEIGHT))
+    }
+
+    fn request_menu_redraw(&self, bounds: Rect, context: &mut EventContext<'_>) {
+        if let Some(menu) = self.menu_bounds(bounds) {
+            context.request_redraw_in(menu.expanded(DOCK_MENU_REDRAW_MARGIN));
+        }
+    }
+
+    fn close_menu(&self, bounds: Rect, context: &mut EventContext<'_>) {
+        let previous_hovered = self.hovered.get();
+        self.request_menu_redraw(bounds, context);
+        self.menu_index.set(None);
+        self.menu_action_requested.set(false);
+        self.hovered.set(None);
+        self.pointer.set(None);
+        self.pressed.set(None);
+        self.request_dock_redraw(bounds, previous_hovered, None, context);
+    }
+
+    fn open_menu(&self, bounds: Rect, index: usize, context: &mut EventContext<'_>) {
+        let previous_hovered = self.hovered.get();
+        self.request_menu_redraw(bounds, context);
+        self.menu_index.set(Some(index));
+        self.menu_action_requested.set(false);
+        self.hovered.set(Some(index));
+        self.pointer.set(self.pointer_for_hit(bounds, Some(index)));
+        self.pressed.set(None);
+        self.request_menu_redraw(bounds, context);
+        self.request_dock_redraw(bounds, previous_hovered, Some(index), context);
+    }
+
+    fn activate_with_redraw(&self, index: usize, context: &mut EventContext<'_>) {
+        let before = self.visible_windows_damage();
+        if self
+            .activate_or_launch(index)
+            .is_some_and(ProcessActivation::changed_window_state)
+        {
+            let dirty = match (before, self.visible_windows_damage()) {
+                (Some(before), Some(after)) => Some(before.union(after)),
+                (Some(dirty), None) | (None, Some(dirty)) => Some(dirty),
+                (None, None) => None,
+            };
+            if let Some(dirty) = dirty {
+                context.request_redraw_in(dirty);
+            }
+        }
     }
 
     fn magnification_influence(item: Rect, pointer: Option<Point>) -> f32 {
@@ -489,8 +564,14 @@ where
             }
         }
 
-        if let Some((app, icon)) = tooltip {
+        if self.menu_index.get().is_none()
+            && let Some((app, icon)) = tooltip
+        {
             Self::paint_tooltip(app, icon, context);
+        }
+
+        if let Some(menu_bounds) = self.menu_bounds(bounds) {
+            self.menu.paint(menu_bounds, context);
         }
     }
 
@@ -500,6 +581,85 @@ where
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
+        if let Some(menu_bounds) = self.menu_bounds(bounds) {
+            match event {
+                ViewEvent::KeyPressed {
+                    key: Key::Escape, ..
+                }
+                | ViewEvent::FocusChanged { focused: false } => {
+                    self.menu
+                        .handle_event(menu_bounds, &ViewEvent::PointerLeft, context);
+                    self.close_menu(bounds, context);
+                    return EventResult::Consumed;
+                }
+                ViewEvent::PointerMoved { position } => {
+                    if menu_bounds.contains(*position) {
+                        context.set_cursor(CursorIcon::Default);
+                        return self
+                            .menu
+                            .handle_event(menu_bounds, event, context)
+                            .merge(EventResult::Consumed);
+                    }
+
+                    self.menu
+                        .handle_event(menu_bounds, &ViewEvent::PointerLeft, context);
+                    return EventResult::Consumed;
+                }
+                ViewEvent::PointerPressed {
+                    position,
+                    button: PointerButton::Primary,
+                } => {
+                    if menu_bounds.contains(*position) {
+                        return self
+                            .menu
+                            .handle_event(menu_bounds, event, context)
+                            .merge(EventResult::Consumed);
+                    }
+
+                    self.close_menu(bounds, context);
+                    return EventResult::Consumed;
+                }
+                ViewEvent::PointerReleased {
+                    position,
+                    button: PointerButton::Primary,
+                } => {
+                    if !menu_bounds.contains(*position) {
+                        return EventResult::Consumed;
+                    }
+
+                    let index = self.menu_index.get();
+                    let result = self.menu.handle_event(menu_bounds, event, context);
+                    if self.menu_action_requested.replace(false) {
+                        self.close_menu(bounds, context);
+                        if let Some(index) = index {
+                            self.activate_with_redraw(index, context);
+                        }
+                    }
+                    return result.merge(EventResult::Consumed);
+                }
+                ViewEvent::PointerPressed {
+                    position,
+                    button: PointerButton::Secondary,
+                } => {
+                    self.menu
+                        .handle_event(menu_bounds, &ViewEvent::PointerLeft, context);
+                    if let Some(index) = self.hit_index(bounds, *position) {
+                        self.open_menu(bounds, index, context);
+                    } else {
+                        self.close_menu(bounds, context);
+                    }
+                    return EventResult::Consumed;
+                }
+                ViewEvent::PointerLeft => {
+                    return self
+                        .menu
+                        .handle_event(menu_bounds, event, context)
+                        .merge(EventResult::Consumed);
+                }
+                _ => return EventResult::Consumed,
+            }
+        }
+
         match event {
             ViewEvent::PointerMoved { position } => {
                 let inside = self.is_inside_dock(bounds, *position);
@@ -544,6 +704,18 @@ where
                 self.content.handle_event(bounds, event, context)
             }
 
+            ViewEvent::PointerPressed {
+                position,
+                button: PointerButton::Secondary,
+            } => {
+                if let Some(index) = self.hit_index(bounds, *position) {
+                    self.open_menu(bounds, index, context);
+                    return EventResult::Consumed;
+                }
+
+                self.content.handle_event(bounds, event, context)
+            }
+
             ViewEvent::PointerReleased {
                 position,
                 button: PointerButton::Primary,
@@ -557,20 +729,7 @@ where
 
                     if pressed == hit {
                         if let Some(index) = hit {
-                            let before = self.visible_windows_damage();
-                            if self
-                                .activate_or_launch(index)
-                                .is_some_and(ProcessActivation::changed_window_state)
-                            {
-                                let dirty = match (before, self.visible_windows_damage()) {
-                                    (Some(before), Some(after)) => Some(before.union(after)),
-                                    (Some(dirty), None) | (None, Some(dirty)) => Some(dirty),
-                                    (None, None) => None,
-                                };
-                                if let Some(dirty) = dirty {
-                                    context.request_redraw_in(dirty);
-                                }
-                            }
+                            self.activate_with_redraw(index, context);
                         }
                     }
 

@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::platform::{self, AppInfo, DesktopPlatform, SystemBarState};
+use crate::platform::{self, AppInfo, ContextMenuModel, DesktopPlatform, SystemBarState};
 use crate::window::{DesktopWindows, WindowDrag, WindowId};
 use viewkit::prelude::*;
 
@@ -21,6 +21,8 @@ pub struct BinderApp {
     dock_running_apps: State<Vec<String>>,
     cursor_pointer: Rc<Cell<Option<Point>>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, crate::ui::test::TestWindowState>>>,
+    context_menu: State<Option<ContextMenuModel>>,
+    wallpaper: crate::ui::wallpaper::Wallpaper,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,7 +49,8 @@ impl App for BinderApp {
     type Body = Box<dyn View + 'static>;
 
     fn new() -> Self {
-        let platform = platform::current();
+        let context_menu = State::new(None);
+        let platform = platform::current(context_menu.clone());
         let system_bar = platform.borrow().system_bar_state().unwrap_or_default();
         let apps = platform.borrow().get_apps();
 
@@ -65,6 +68,8 @@ impl App for BinderApp {
             dock_running_apps: State::new(Vec::new()),
             cursor_pointer: Rc::new(Cell::new(None)),
             test_window_states: Rc::new(RefCell::new(HashMap::new())),
+            context_menu,
+            wallpaper: crate::ui::wallpaper::Wallpaper::load_default(),
         }
     }
 
@@ -90,6 +95,8 @@ impl App for BinderApp {
             self.dock_running_apps.clone(),
             Rc::clone(&self.cursor_pointer),
             Rc::clone(&self.test_window_states),
+            self.context_menu.clone(),
+            self.wallpaper.clone(),
         )
     }
 

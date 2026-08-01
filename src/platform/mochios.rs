@@ -11,12 +11,15 @@ use std::process::{Command, Stdio};
 use crate::apps;
 
 #[cfg(target_os = "mochios")]
+mod context_menu;
+#[cfg(target_os = "mochios")]
 mod decoration;
 
 use super::{
-    AppInfo, ClockState, CloseWindowRequest, CreateWindowRequest, DesktopPlatform, PlatformError,
-    ProcessId, RemoteWindowId, SystemAction, SystemBarState,
+    AppInfo, ClockState, CloseWindowRequest, ContextMenuModel, CreateWindowRequest,
+    DesktopPlatform, PlatformError, ProcessId, RemoteWindowId, SystemAction, SystemBarState,
 };
+use viewkit::prelude::State;
 
 #[derive(Debug)]
 struct ManagedApp {
@@ -44,11 +47,20 @@ pub struct MochiOsPlatform {
     decoration_manager: Option<decoration::DecorationManager>,
     #[cfg(target_os = "mochios")]
     decoration_connect_attempted: bool,
+    context_menu_state: State<Option<ContextMenuModel>>,
+    #[cfg(target_os = "mochios")]
+    context_menu_manager: Option<context_menu::ContextMenuManager>,
+    #[cfg(target_os = "mochios")]
+    context_menu_connect_attempted: bool,
 }
 
 impl MochiOsPlatform {
     #[allow(unused)]
     pub fn new() -> Self {
+        Self::with_context_menu_state(State::new(None))
+    }
+
+    pub fn with_context_menu_state(context_menu_state: State<Option<ContextMenuModel>>) -> Self {
         Self {
             system_bar: SystemBarState::default(),
             apps: read_apps(),
@@ -61,6 +73,11 @@ impl MochiOsPlatform {
             decoration_manager: None,
             #[cfg(target_os = "mochios")]
             decoration_connect_attempted: false,
+            context_menu_state,
+            #[cfg(target_os = "mochios")]
+            context_menu_manager: None,
+            #[cfg(target_os = "mochios")]
+            context_menu_connect_attempted: false,
         }
     }
 
@@ -406,6 +423,17 @@ impl DesktopPlatform for MochiOsPlatform {
 
     fn handle_platform_message(&mut self, message: &[u8]) -> bool {
         #[cfg(target_os = "mochios")]
+        if let Some(manager) = self.context_menu_manager.as_mut() {
+            match manager.handle_message(message, &self.context_menu_state) {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!("Binder context menu manager failed: {error}");
+                    return false;
+                }
+            }
+        }
+        #[cfg(target_os = "mochios")]
         if let Some(manager) = self.decoration_manager.as_mut() {
             return match manager.handle_message(message) {
                 Ok(handled) => handled,
@@ -435,6 +463,14 @@ impl DesktopPlatform for MochiOsPlatform {
             match decoration::DecorationManager::connect() {
                 Ok(manager) => self.decoration_manager = Some(manager),
                 Err(error) => eprintln!("Binder decoration manager unavailable: {error}"),
+            }
+        }
+        #[cfg(target_os = "mochios")]
+        if !self.context_menu_connect_attempted {
+            self.context_menu_connect_attempted = true;
+            match context_menu::ContextMenuManager::connect() {
+                Ok(manager) => self.context_menu_manager = Some(manager),
+                Err(error) => eprintln!("Binder context menu manager unavailable: {error}"),
             }
         }
 
@@ -470,6 +506,28 @@ impl DesktopPlatform for MochiOsPlatform {
             .values()
             .map(|child| child.bundle_id.clone())
             .collect()
+    }
+
+    fn complete_context_menu(
+        &mut self,
+        request_id: u64,
+        command_id: Option<u32>,
+    ) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        {
+            let manager = self
+                .context_menu_manager
+                .as_mut()
+                .ok_or(PlatformError::ServiceUnavailable)?;
+            return manager
+                .complete(request_id, command_id)
+                .map_err(|_| PlatformError::TransportFailure);
+        }
+        #[cfg(not(target_os = "mochios"))]
+        {
+            let _ = (request_id, command_id);
+            Err(PlatformError::UnsupportedOperation)
+        }
     }
 }
 

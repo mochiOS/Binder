@@ -9,6 +9,7 @@ use super::{dock, top_bar};
 
 use crate::desktop::WindowResize;
 
+use crate::platform::ContextMenuModel;
 use crate::platform::{AppInfo, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState};
 
 use crate::window::{DesktopWindows, WindowDrag, WindowId};
@@ -37,6 +38,8 @@ pub(crate) fn view(
     dock_running_apps: State<Vec<String>>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, super::test::TestWindowState>>>,
+    context_menu: State<Option<ContextMenuModel>>,
+    wallpaper: super::wallpaper::Wallpaper,
 ) -> Box<dyn View + 'static> {
     let refresh_driver = PlatformRefreshView::new(
         Rc::clone(&platform),
@@ -63,7 +66,11 @@ pub(crate) fn view(
 
     let desktop_content = Background::new().background(refresh_driver).content(
         Background::new()
-            .background(Rectangle::new().color(RectangleColor::Custom(DESKTOP_BACKGROUND)))
+            .background(
+                Background::new()
+                    .background(Rectangle::new().color(RectangleColor::Custom(DESKTOP_BACKGROUND)))
+                    .content(wallpaper),
+            )
             .content(content),
     );
 
@@ -86,9 +93,10 @@ pub(crate) fn view(
         dock_running_apps,
     );
 
-    let menu = super::menu::view(platform, menu_open.clone(), windows);
+    let menu = super::menu::view(Rc::clone(&platform), menu_open.clone(), windows);
 
     let root = super::popup_menu::PopupMenu::new(docked_desktop, menu, menu_open);
+    let root = super::context_menu::ContextMenuLayer::new(root, Rc::clone(&platform), context_menu);
 
     #[cfg(target_os = "mochios")]
     {

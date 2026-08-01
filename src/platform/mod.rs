@@ -93,6 +93,23 @@ pub struct AppInfo {
     pub resources: Vec<PathBuf>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContextMenuEntry {
+    pub command_id: u32,
+    pub label: String,
+    pub enabled: bool,
+    pub checked: bool,
+    pub destructive: bool,
+    pub separator: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContextMenuModel {
+    pub request_id: u64,
+    pub position: viewkit::prelude::Point,
+    pub entries: Vec<ContextMenuEntry>,
+}
+
 impl AppInfo {
     pub fn entry_path(&self) -> PathBuf {
         let path = PathBuf::from(&self.entry);
@@ -225,17 +242,30 @@ pub trait DesktopPlatform {
     fn running_app_bundle_ids(&self) -> Vec<String> {
         Vec::new()
     }
+
+    fn complete_context_menu(
+        &mut self,
+        _request_id: u64,
+        _command_id: Option<u32>,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
 }
 
-pub fn current() -> Rc<RefCell<dyn DesktopPlatform>> {
+pub fn current(
+    context_menu: viewkit::prelude::State<Option<ContextMenuModel>>,
+) -> Rc<RefCell<dyn DesktopPlatform>> {
     #[cfg(target_os = "linux")]
     {
+        let _ = context_menu;
         Rc::new(RefCell::new(linux::LinuxPlatform::new()))
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        Rc::new(RefCell::new(mochios::MochiOsPlatform::new()))
+        Rc::new(RefCell::new(
+            mochios::MochiOsPlatform::with_context_menu_state(context_menu),
+        ))
     }
 }
 
