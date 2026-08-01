@@ -52,6 +52,8 @@ pub struct MochiOsPlatform {
     context_menu_manager: Option<context_menu::ContextMenuManager>,
     #[cfg(target_os = "mochios")]
     context_menu_connect_attempted: bool,
+    #[cfg(target_os = "mochios")]
+    _desktop_background: Option<viewkit::platform::mochios::DesktopBackground>,
 }
 
 impl MochiOsPlatform {
@@ -78,6 +80,10 @@ impl MochiOsPlatform {
             context_menu_manager: None,
             #[cfg(target_os = "mochios")]
             context_menu_connect_attempted: false,
+            #[cfg(target_os = "mochios")]
+            _desktop_background: crate::ui::wallpaper::Wallpaper::load_default_image().and_then(
+                |image| viewkit::platform::mochios::DesktopBackground::from_image(image).ok(),
+            ),
         }
     }
 

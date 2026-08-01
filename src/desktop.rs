@@ -69,7 +69,16 @@ impl App for BinderApp {
             cursor_pointer: Rc::new(Cell::new(None)),
             test_window_states: Rc::new(RefCell::new(HashMap::new())),
             context_menu,
-            wallpaper: crate::ui::wallpaper::Wallpaper::load_default(),
+            wallpaper: {
+                #[cfg(target_os = "mochios")]
+                {
+                    crate::ui::wallpaper::Wallpaper::default()
+                }
+                #[cfg(not(target_os = "mochios"))]
+                {
+                    crate::ui::wallpaper::Wallpaper::load_default()
+                }
+            },
         }
     }
 

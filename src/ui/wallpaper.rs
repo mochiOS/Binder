@@ -13,13 +13,19 @@ pub(crate) struct Wallpaper {
 }
 
 impl Wallpaper {
-    pub(crate) fn load_default() -> Self {
+    pub(crate) fn load_default_image() -> Option<ImageData> {
         for path in WALLPAPER_PATHS {
             if let Ok(image) = ImageData::from_path(path) {
-                return Self { image: Some(image) };
+                return Some(image);
             }
         }
-        Self::default()
+        None
+    }
+
+    pub(crate) fn load_default() -> Self {
+        Self {
+            image: Self::load_default_image(),
+        }
     }
 }
 
