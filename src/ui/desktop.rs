@@ -134,7 +134,8 @@ impl PlatformRefreshView {
 }
 
 impl View for PlatformRefreshView {
-    fn paint(&self, _bounds: Rect, context: &mut PaintContext<'_>) {
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        let poll_wake_region = Rect::new(bounds.origin.x, bounds.origin.y, 1.0, 1.0);
         let needs_notifications = {
             let desktop = self.windows.get();
 
@@ -304,6 +305,7 @@ impl View for PlatformRefreshView {
                     desktop.cancel_close_request(request.process_id, request.window);
                 }
             });
+            context.request_redraw_at(Instant::now());
         }
 
         let mut failed_registrations = Vec::new();
@@ -330,7 +332,8 @@ impl View for PlatformRefreshView {
         }
 
         if !system_bar_changed {
-            context.request_redraw_at(Instant::now() + PLATFORM_REFRESH_INTERVAL);
+            context
+                .request_redraw_in_at(poll_wake_region, Instant::now() + PLATFORM_REFRESH_INTERVAL);
             return;
         }
 
@@ -349,6 +352,6 @@ impl View for PlatformRefreshView {
             context.request_redraw_at(Instant::now());
         }
 
-        context.request_redraw_at(Instant::now() + PLATFORM_REFRESH_INTERVAL);
+        context.request_redraw_in_at(poll_wake_region, Instant::now() + PLATFORM_REFRESH_INTERVAL);
     }
 }
