@@ -148,6 +148,32 @@ where
             .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
     }
 
+    fn visible_windows_damage(&self) -> Option<Rect> {
+        self.windows
+            .get()
+            .windows
+            .iter()
+            .filter(|window| !window.minimized)
+            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+            .reduce(Rect::union)
+    }
+
+    fn request_window_state_damage(
+        before: Option<Rect>,
+        after: Option<Rect>,
+        context: &mut EventContext<'_>,
+    ) {
+        let dirty = match (before, after) {
+            (Some(before), Some(after)) => Some(before.union(after)),
+            (Some(dirty), None) | (None, Some(dirty)) => Some(dirty),
+            (None, None) => None,
+        };
+
+        if let Some(dirty) = dirty {
+            context.request_redraw_in(dirty);
+        }
+    }
+
     fn control_at(frame: Rect, position: Point) -> Option<WindowControl> {
         if window_decoration::close_bounds(frame).contains(position) {
             return Some(WindowControl::Close);
@@ -518,6 +544,7 @@ where
             };
 
             if let Some(command) = command {
+                let before = self.visible_windows_damage();
                 let mut changed = false;
                 self.windows.update(|desktop| match command {
                     WindowKeyboardCommand::Minimize => {
@@ -536,7 +563,11 @@ where
                 });
 
                 if changed {
-                    context.request_redraw();
+                    Self::request_window_state_damage(
+                        before,
+                        self.visible_windows_damage(),
+                        context,
+                    );
                 }
                 return EventResult::Consumed;
             }
@@ -679,6 +710,7 @@ where
                 };
 
                 if let Some((resize_window, edge)) = resize_target {
+                    let before = self.visible_windows_damage();
                     context.set_cursor(Self::cursor_for_resize_edge(edge));
 
                     self.windows.update(|desktop| {
@@ -701,7 +733,11 @@ where
 
                     self.drag.set(None);
 
-                    context.request_redraw();
+                    Self::request_window_state_damage(
+                        before,
+                        self.visible_windows_damage(),
+                        context,
+                    );
 
                     return EventResult::Consumed;
                 }
@@ -733,13 +769,18 @@ where
                         drop(desktop);
 
                         if changed {
+                            let before = self.visible_windows_damage();
                             self.windows.update(|desktop| {
                                 desktop.focused = None;
 
                                 desktop.clear_interactions();
                             });
 
-                            context.request_redraw();
+                            Self::request_window_state_damage(
+                                before,
+                                self.visible_windows_damage(),
+                                context,
+                            );
                         }
                     }
 
@@ -747,6 +788,7 @@ where
                 };
 
                 let control = Self::control_at(hit_window.frame, *position);
+                let before = self.visible_windows_damage();
 
                 self.windows.update(|desktop| {
                     desktop.focus(hit_window.id);
@@ -773,7 +815,7 @@ where
                     self.resize.set(None);
                 }
 
-                context.request_redraw();
+                Self::request_window_state_damage(before, self.visible_windows_damage(), context);
 
                 if control.is_none() && !in_title_bar {
                     self.dispatch_window_event(&hit_window, true, event, context);
@@ -798,6 +840,7 @@ where
                 };
 
                 if let Some((window_id, pressed_control, frame)) = pressed {
+                    let before = self.visible_windows_damage();
                     let released_control = Self::control_at(frame, *position);
 
                     let activate = released_control == Some(pressed_control);
@@ -830,7 +873,11 @@ where
 
                     self.update_resize_cursor(*position, context);
 
-                    context.request_redraw();
+                    Self::request_window_state_damage(
+                        before,
+                        self.visible_windows_damage(),
+                        context,
+                    );
 
                     return EventResult::Consumed;
                 }

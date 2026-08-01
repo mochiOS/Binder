@@ -19,6 +19,9 @@ use viewkit::{prelude::*, view::PaintContext};
 const DESKTOP_BACKGROUND: Color = Color::TRANSPARENT;
 
 const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const SYSTEM_BAR_HEIGHT: f32 = 40.0;
+const DOCK_DAMAGE_HEIGHT: f32 = 150.0;
+const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
@@ -131,6 +134,43 @@ impl PlatformRefreshView {
             dock_running_apps,
         }
     }
+
+    fn system_bar_damage(bounds: Rect) -> Rect {
+        Rect::new(
+            bounds.origin.x,
+            bounds.origin.y,
+            bounds.size.width,
+            SYSTEM_BAR_HEIGHT.min(bounds.size.height),
+        )
+    }
+
+    fn dock_damage(bounds: Rect) -> Rect {
+        let height = DOCK_DAMAGE_HEIGHT.min(bounds.size.height);
+        Rect::new(
+            bounds.origin.x,
+            bounds.origin.y + bounds.size.height - height,
+            bounds.size.width,
+            height,
+        )
+    }
+
+    fn visible_windows_damage(&self) -> Option<Rect> {
+        self.windows
+            .get()
+            .windows
+            .iter()
+            .filter(|window| !window.minimized)
+            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+            .reduce(Rect::union)
+    }
+
+    fn window_change_damage(before: Option<Rect>, after: Option<Rect>) -> Option<Rect> {
+        match (before, after) {
+            (Some(before), Some(after)) => Some(before.union(after)),
+            (Some(dirty), None) | (None, Some(dirty)) => Some(dirty),
+            (None, None) => None,
+        }
+    }
 }
 
 impl View for PlatformRefreshView {
@@ -235,12 +275,12 @@ impl View for PlatformRefreshView {
 
         if self.apps.get() != discovered_apps {
             self.apps.set(discovered_apps);
-            context.request_redraw_at(Instant::now());
+            context.request_redraw_in_at(Self::dock_damage(bounds), Instant::now());
         }
 
         if self.dock_running_apps.get() != running_apps {
             self.dock_running_apps.set(running_apps);
-            context.request_redraw_at(Instant::now());
+            context.request_redraw_in_at(Self::dock_damage(bounds), Instant::now());
         }
 
         let has_window_changes = !create_requests.is_empty()
@@ -251,6 +291,7 @@ impl View for PlatformRefreshView {
         let mut registrations: Vec<(ProcessId, RemoteWindowId)> = Vec::new();
 
         if has_window_changes {
+            let before = self.visible_windows_damage();
             self.windows.update(|desktop| {
                 for request in create_requests {
                     match request.renderer.as_str() {
@@ -305,7 +346,9 @@ impl View for PlatformRefreshView {
                     desktop.cancel_close_request(request.process_id, request.window);
                 }
             });
-            context.request_redraw_at(Instant::now());
+            if let Some(dirty) = Self::window_change_damage(before, self.visible_windows_damage()) {
+                context.request_redraw_in_at(dirty, Instant::now());
+            }
         }
 
         let mut failed_registrations = Vec::new();
@@ -323,12 +366,15 @@ impl View for PlatformRefreshView {
         }
 
         if !failed_registrations.is_empty() {
+            let before = self.visible_windows_damage();
             self.windows.update(|desktop| {
                 for process_id in failed_registrations {
                     desktop.close_process(process_id);
                 }
             });
-            context.request_redraw_at(Instant::now());
+            if let Some(dirty) = Self::window_change_damage(before, self.visible_windows_damage()) {
+                context.request_redraw_in_at(dirty, Instant::now());
+            }
         }
 
         if !system_bar_changed {
@@ -349,7 +395,7 @@ impl View for PlatformRefreshView {
 
         if self.system_bar.get() != next_state {
             self.system_bar.set(next_state);
-            context.request_redraw_at(Instant::now());
+            context.request_redraw_in_at(Self::system_bar_damage(bounds), Instant::now());
         }
 
         context.request_redraw_in_at(poll_wake_region, Instant::now() + PLATFORM_REFRESH_INTERVAL);

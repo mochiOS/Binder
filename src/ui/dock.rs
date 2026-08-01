@@ -30,6 +30,7 @@ const DOCK_RADIUS: f32 = 48.0;
 const DOCK_ITEM_RADIUS: f32 = 16.0;
 const DOCK_INTERACTION_TOP_OVERFLOW: f32 = 26.0;
 const DOCK_REDRAW_MARGIN: f32 = 20.0;
+const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 
 const DOCK_TOOLTIP_HEIGHT: f32 = 30.0;
 const DOCK_TOOLTIP_MARGIN: f32 = 10.0;
@@ -306,6 +307,16 @@ where
         Some(activation)
     }
 
+    fn visible_windows_damage(&self) -> Option<Rect> {
+        self.windows
+            .get()
+            .windows
+            .iter()
+            .filter(|window| !window.minimized)
+            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+            .reduce(Rect::union)
+    }
+
     fn load_icon(&self, path: &Path) -> DockIcon {
         if let Some(icon) = self.icon_cache.borrow().get(path) {
             return icon.clone();
@@ -340,7 +351,7 @@ where
                 Image::new(image)
                     .content_mode(ImageContentMode::Fit)
                     .radius(CornerRadius::Custom(10.0))
-                    .sampling(ImageSampling::Nearest)
+                    .sampling(ImageSampling::Bicubic)
                     .paint(bounds, context);
 
                 return;
@@ -352,7 +363,7 @@ where
             Image::new(image)
                 .content_mode(ImageContentMode::Fit)
                 .radius(CornerRadius::Custom(10.0))
-                .sampling(ImageSampling::Nearest)
+                .sampling(ImageSampling::Bicubic)
                 .paint(bounds, context);
         }
     }
@@ -546,11 +557,19 @@ where
 
                     if pressed == hit {
                         if let Some(index) = hit {
+                            let before = self.visible_windows_damage();
                             if self
                                 .activate_or_launch(index)
                                 .is_some_and(ProcessActivation::changed_window_state)
                             {
-                                context.request_redraw();
+                                let dirty = match (before, self.visible_windows_damage()) {
+                                    (Some(before), Some(after)) => Some(before.union(after)),
+                                    (Some(dirty), None) | (None, Some(dirty)) => Some(dirty),
+                                    (None, None) => None,
+                                };
+                                if let Some(dirty) = dirty {
+                                    context.request_redraw_in(dirty);
+                                }
                             }
                         }
                     }

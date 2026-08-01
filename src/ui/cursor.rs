@@ -81,7 +81,7 @@ where
 
         Image::new(image)
             .content_mode(ImageContentMode::Stretch)
-            .sampling(ImageSampling::Nearest)
+            .sampling(ImageSampling::Bicubic)
             .paint(cursor_bounds, context);
     }
 

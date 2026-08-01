@@ -99,7 +99,7 @@ where
 
             ViewEvent::FocusChanged { focused: false } => {
                 self.open.set(false);
-                context.request_redraw();
+                context.request_redraw_in(self.redraw_frame(bounds));
 
                 EventResult::Consumed
             }
@@ -138,7 +138,7 @@ where
                 }
 
                 self.open.set(false);
-                context.request_redraw();
+                context.request_redraw_in(self.redraw_frame(bounds));
 
                 EventResult::Consumed
             }
@@ -152,7 +152,7 @@ where
 
                     if result.is_consumed() {
                         self.open.set(false);
-                        context.request_redraw();
+                        context.request_redraw_in(self.redraw_frame(bounds));
                     }
 
                     return result.merge(EventResult::Consumed);

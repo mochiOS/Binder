@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Child;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(not(target_os = "mochios"))]
 use std::process::{Command, Stdio};
@@ -13,8 +14,8 @@ use crate::apps;
 mod decoration;
 
 use super::{
-    AppInfo, CloseWindowRequest, CreateWindowRequest, DesktopPlatform, PlatformError, ProcessId,
-    RemoteWindowId, SystemAction, SystemBarState,
+    AppInfo, ClockState, CloseWindowRequest, CreateWindowRequest, DesktopPlatform, PlatformError,
+    ProcessId, RemoteWindowId, SystemAction, SystemBarState,
 };
 
 #[derive(Debug)]
@@ -437,7 +438,14 @@ impl DesktopPlatform for MochiOsPlatform {
             }
         }
 
-        self.reap_exited_children()
+        let children_changed = self.reap_exited_children()?;
+        let clock = read_clock()?;
+        let clock_changed = self.system_bar.clock != clock;
+        if clock_changed {
+            self.system_bar.clock = clock;
+        }
+
+        Ok(children_changed || clock_changed)
     }
 
     fn get_apps(&self) -> Vec<AppInfo> {
@@ -463,6 +471,51 @@ impl DesktopPlatform for MochiOsPlatform {
             .map(|child| child.bundle_id.clone())
             .collect()
     }
+}
+
+fn read_clock() -> Result<ClockState, PlatformError> {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| PlatformError::InvalidResponse)?
+        .as_secs()
+        .try_into()
+        .map_err(|_| PlatformError::InvalidResponse)?;
+
+    clock_from_unix_seconds(seconds)
+}
+
+fn clock_from_unix_seconds(seconds: i64) -> Result<ClockState, PlatformError> {
+    let days = seconds.div_euclid(86_400);
+    let seconds_in_day = seconds.rem_euclid(86_400);
+    let hour = seconds_in_day / 3_600;
+    let minute = (seconds_in_day % 3_600) / 60;
+
+    let shifted_days = days
+        .checked_add(719_468)
+        .ok_or(PlatformError::InvalidResponse)?;
+    let era = if shifted_days >= 0 {
+        shifted_days
+    } else {
+        shifted_days - 146_096
+    } / 146_097;
+    let day_of_era = shifted_days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_phase = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_phase + 2) / 5 + 1;
+    let month = month_phase + if month_phase < 10 { 3 } else { -9 };
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(PlatformError::InvalidResponse);
+    }
+
+    let weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let weekday = weekdays[(days + 4).rem_euclid(7) as usize];
+
+    Ok(ClockState {
+        date: format!("{month:02}/{day:02} {weekday}"),
+        time: format!("{hour:02}:{minute:02}"),
+    })
 }
 
 #[allow(unused)]
@@ -782,6 +835,13 @@ fn parse_string_literals(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn formats_system_bar_clock_like_linux_backend() {
+        let clock = clock_from_unix_seconds(1_704_067_140).unwrap_or_default();
+        assert_eq!(clock.date, "12/31 Sun");
+        assert_eq!(clock.time, "23:59");
+    }
 
     #[test]
     fn encodes_capability_service_app_launch_request() {

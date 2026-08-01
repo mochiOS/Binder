@@ -19,6 +19,7 @@ requires = [
     "ipc.server",
     "process.inspect",
     "process.spawn",
+    "system.time.read",
     "window.create",
     "window.overlay",
 ]
