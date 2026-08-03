@@ -40,6 +40,7 @@ pub(crate) fn view(
     test_window_states: Rc<RefCell<HashMap<WindowId, super::test::TestWindowState>>>,
     context_menu: State<Option<ContextMenuModel>>,
     wallpaper: super::wallpaper::Wallpaper,
+    session_user: String,
 ) -> Box<dyn View + 'static> {
     let refresh_driver = PlatformRefreshView::new(
         Rc::clone(&platform),
@@ -93,7 +94,12 @@ pub(crate) fn view(
         dock_running_apps,
     );
 
-    let menu = super::menu::view(Rc::clone(&platform), menu_open.clone(), windows);
+    let menu = super::menu::view(
+        Rc::clone(&platform),
+        menu_open.clone(),
+        windows,
+        session_user,
+    );
 
     let root = super::popup_menu::PopupMenu::new(docked_desktop, menu, menu_open);
     let root = super::context_menu::ContextMenuLayer::new(root, Rc::clone(&platform), context_menu);

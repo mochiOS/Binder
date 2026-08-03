@@ -28,7 +28,7 @@ where
             menu,
             open,
 
-            menu_frame: Rect::new(14.0, 42.0, 250.0, 286.0),
+            menu_frame: Rect::new(14.0, 42.0, 250.0, 334.0),
 
             trigger_frame: Rect::new(14.0, 5.0, 92.0, 29.0),
         }

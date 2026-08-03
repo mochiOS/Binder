@@ -2,6 +2,7 @@ mod apps;
 mod desktop;
 mod ipc;
 mod platform;
+mod session;
 mod ui;
 mod window;
 
@@ -41,6 +42,17 @@ fn main() -> Result<(), ViewKitError> {
     let Some(role) = arguments.next() else {
         return run_desktop();
     };
+
+    if role
+        .to_str()
+        .is_some_and(|role| role.starts_with(session::USER_ARGUMENT_PREFIX))
+    {
+        if let Some(argument) = arguments.next() {
+            eprintln!("unexpected Binder argument: {:?}", argument,);
+            return Ok(());
+        }
+        return run_desktop();
+    }
 
     if let Some(argument) = arguments.next() {
         eprintln!("unexpected Binder argument: {:?}", argument,);

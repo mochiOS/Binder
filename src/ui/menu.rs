@@ -12,6 +12,7 @@ pub(crate) fn view(
 
     menu_open: State<bool>,
     windows: State<DesktopWindows>,
+    session_user: String,
 ) -> Menu {
     let about_platform = Rc::clone(&platform);
 
@@ -81,6 +82,8 @@ pub(crate) fn view(
                 eprintln!("failed to open system settings: {error:?}",);
             }
         }))
+        .separator()
+        .item(MenuItem::new(session_user).enabled(false))
 }
 
 fn system_action_item(

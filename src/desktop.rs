@@ -23,6 +23,7 @@ pub struct BinderApp {
     test_window_states: Rc<RefCell<HashMap<WindowId, crate::ui::test::TestWindowState>>>,
     context_menu: State<Option<ContextMenuModel>>,
     wallpaper: crate::ui::wallpaper::Wallpaper,
+    session_user: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +70,7 @@ impl App for BinderApp {
             cursor_pointer: Rc::new(Cell::new(None)),
             test_window_states: Rc::new(RefCell::new(HashMap::new())),
             context_menu,
+            session_user: crate::session::current_user_label(),
             wallpaper: {
                 #[cfg(target_os = "mochios")]
                 {
@@ -106,6 +108,7 @@ impl App for BinderApp {
             Rc::clone(&self.test_window_states),
             self.context_menu.clone(),
             self.wallpaper.clone(),
+            self.session_user.clone(),
         )
     }
 
