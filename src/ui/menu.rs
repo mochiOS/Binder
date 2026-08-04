@@ -26,6 +26,12 @@ pub(crate) fn view(
 
     Menu::new()
         .item(system_action_item(
+            "Lock Screen",
+            SystemAction::LockScreen,
+            Rc::clone(&platform),
+            menu_open.clone(),
+        ))
+        .item(system_action_item(
             "Sleep",
             SystemAction::Sleep,
             Rc::clone(&platform),

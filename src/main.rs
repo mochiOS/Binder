@@ -11,6 +11,9 @@ use std::ffi::OsStr;
 use viewkit::prelude::{ViewKitError, run};
 
 fn run_desktop() -> Result<(), ViewKitError> {
+    if let Some(home) = std::env::var_os("HOME") {
+        let _ = std::env::set_current_dir(home);
+    }
     run::<BinderApp>()
 }
 

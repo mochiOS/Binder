@@ -23,4 +23,5 @@ binder_client = { git = "https://github.com/mochiOS/Binder", package = "binder_c
 libc = "0.2"
 
 [target.'cfg(target_os = "mochios")'.dependencies]
+mochi-user-platform = { git = "https://github.com/mochiOS/syscalls", package = "mochi-user-platform", default-features = false, features = ["std"] }
 mochi-user-syscall = { git = "https://github.com/mochiOS/syscalls", package = "mochi-user-syscall" }

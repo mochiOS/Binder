@@ -238,10 +238,12 @@ fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), Platfo
     let executable = executable
         .to_str()
         .ok_or(PlatformError::ProcessLaunchFailed)?;
-    let request = encode_spawn_app_request(
+    let environment = session_environment_arguments();
+    let request = encode_spawn_app_request_with_environment(
         executable,
         shell_endpoint_from_environment(),
         prompt_is_interactive(),
+        &environment,
     )?;
     let endpoint = syscall::call2(
         syscall::SyscallNumber::FindProcessByName,
@@ -318,23 +320,55 @@ fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), Platfo
 
 const SPAWN_APP_OPCODE: u32 = 0x4150_5053;
 const SPAWN_APP_HEADER_LEN: usize = 24;
+const EXEC_MANIFEST_ENV_PREFIX: &str = "__MOCHI_EXEC_ENV=";
+const SESSION_ENVIRONMENT_NAMES: [&str; 4] = ["HOME", "USER", "LOGNAME", "SHELL"];
 
 fn encode_spawn_app_request(
     executable: &str,
     shell_endpoint: u64,
     interactive: bool,
 ) -> Result<Vec<u8>, PlatformError> {
+    encode_spawn_app_request_with_environment(executable, shell_endpoint, interactive, &[])
+}
+
+fn encode_spawn_app_request_with_environment(
+    executable: &str,
+    shell_endpoint: u64,
+    interactive: bool,
+    environment: &[String],
+) -> Result<Vec<u8>, PlatformError> {
     if executable.is_empty() || !executable.starts_with('/') || executable.as_bytes().contains(&0) {
         return Err(PlatformError::ProcessLaunchFailed);
     }
+    if environment.iter().any(|item| item.as_bytes().contains(&0)) {
+        return Err(PlatformError::ProcessLaunchFailed);
+    }
 
-    let mut request = vec![0u8; SPAWN_APP_HEADER_LEN + executable.len() + 1];
+    let payload_len =
+        executable.len() + 1 + environment.iter().map(|item| item.len() + 1).sum::<usize>();
+    let mut request = vec![0u8; SPAWN_APP_HEADER_LEN + payload_len];
     request[0..4].copy_from_slice(&SPAWN_APP_OPCODE.to_le_bytes());
     request[8..16].copy_from_slice(&shell_endpoint.to_le_bytes());
     request[16] = u8::from(interactive);
-    request[SPAWN_APP_HEADER_LEN..SPAWN_APP_HEADER_LEN + executable.len()]
-        .copy_from_slice(executable.as_bytes());
+    let mut cursor = SPAWN_APP_HEADER_LEN;
+    request[cursor..cursor + executable.len()].copy_from_slice(executable.as_bytes());
+    cursor += executable.len() + 1;
+    for item in environment {
+        request[cursor..cursor + item.len()].copy_from_slice(item.as_bytes());
+        cursor += item.len() + 1;
+    }
     Ok(request)
+}
+
+fn session_environment_arguments() -> Vec<String> {
+    SESSION_ENVIRONMENT_NAMES
+        .iter()
+        .filter_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| format!("{EXEC_MANIFEST_ENV_PREFIX}{name}={value}"))
+        })
+        .collect()
 }
 
 #[cfg(target_os = "mochios")]
@@ -365,8 +399,26 @@ impl DesktopPlatform for MochiOsPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
-    fn perform_system_action(&self, _action: SystemAction) -> Result<(), PlatformError> {
-        Err(PlatformError::UnsupportedOperation)
+    fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError> {
+        #[cfg(not(target_os = "mochios"))]
+        {
+            let _ = action;
+            return Err(PlatformError::UnsupportedOperation);
+        }
+        #[cfg(target_os = "mochios")]
+        match action {
+            SystemAction::LockScreen => {
+                request_session_action(mochi_user_platform::session_control::Action::Lock)
+            }
+            SystemAction::LogOut => {
+                request_session_action(mochi_user_platform::session_control::Action::LogOut)?;
+                viewkit::request_exit();
+                Ok(())
+            }
+            SystemAction::Sleep | SystemAction::Restart | SystemAction::ShutDown => {
+                Err(PlatformError::UnsupportedOperation)
+            }
+        }
     }
 
     fn launch_internal_window(&mut self, entry: &str) -> Result<ProcessId, PlatformError> {
@@ -535,6 +587,51 @@ impl DesktopPlatform for MochiOsPlatform {
             Err(PlatformError::UnsupportedOperation)
         }
     }
+}
+
+#[cfg(target_os = "mochios")]
+fn request_session_action(
+    action: mochi_user_platform::session_control::Action,
+) -> Result<(), PlatformError> {
+    use mochi_user_platform::session_control::{
+        RESPONSE_LEN, Request, decode_response, encode_request,
+    };
+    use mochi_user_syscall as syscall;
+
+    const SERVICE_MANAGER_NAME: &str = "service-manager.service";
+    let session_id = std::env::var("MOCHI_SESSION_ID")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value != 0)
+        .ok_or(PlatformError::InvalidResponse)?;
+    let endpoint = syscall::call2(
+        syscall::SyscallNumber::FindProcessByName,
+        SERVICE_MANAGER_NAME.as_ptr() as u64,
+        SERVICE_MANAGER_NAME.len() as u64,
+    )
+    .map_err(|_| PlatformError::ServiceUnavailable)?;
+    let request = encode_request(Request { action, session_id });
+    let mut response = [0u8; RESPONSE_LEN];
+    let received = syscall::call5(
+        syscall::SyscallNumber::IpcCall,
+        endpoint,
+        request.as_ptr() as u64,
+        request.len() as u64,
+        response.as_mut_ptr() as u64,
+        response.len() as u64,
+    )
+    .map_err(|_| PlatformError::TransportFailure)?;
+    if (received & 0xffff_ffff) as usize != RESPONSE_LEN {
+        return Err(PlatformError::InvalidResponse);
+    }
+    let response = decode_response(&response).map_err(|_| PlatformError::InvalidResponse)?;
+    if response.action != action || response.session_id != session_id {
+        return Err(PlatformError::InvalidResponse);
+    }
+    if response.status != 0 {
+        return Err(PlatformError::PermissionDenied);
+    }
+    Ok(())
 }
 
 fn read_clock() -> Result<ClockState, PlatformError> {
@@ -920,6 +1017,25 @@ mod tests {
         assert_eq!(request[16], 1);
         assert_eq!(&request[17..24], &[0; 7]);
         assert_eq!(&request[24..], b"/applications/test.app/entry.elf\0");
+    }
+
+    #[test]
+    fn app_launch_request_carries_session_environment() {
+        let environment = vec![
+            String::from("__MOCHI_EXEC_ENV=HOME=/home/alice"),
+            String::from("__MOCHI_EXEC_ENV=USER=alice"),
+        ];
+        let request = encode_spawn_app_request_with_environment(
+            "/applications/test.app/entry.elf",
+            7,
+            true,
+            &environment,
+        )
+        .unwrap_or_default();
+        assert_eq!(
+            &request[SPAWN_APP_HEADER_LEN..],
+            b"/applications/test.app/entry.elf\0__MOCHI_EXEC_ENV=HOME=/home/alice\0__MOCHI_EXEC_ENV=USER=alice\0"
+        );
     }
 
     fn temporary_app_root() -> PathBuf {
