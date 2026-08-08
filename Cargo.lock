@@ -2382,6 +2382,10 @@ dependencies = [
 ]
 
 [[patch.unused]]
+name = "mboot-protocol"
+version = "0.1.0"
+
+[[patch.unused]]
 name = "viewkit"
 version = "1.0.1"
 
