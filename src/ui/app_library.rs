@@ -18,9 +18,14 @@ use viewkit::{
 const PANEL_WIDTH: f32 = 760.0;
 const PANEL_HEIGHT: f32 = 520.0;
 const GRID_COLUMNS: usize = 5;
+const GRID_ROWS: usize = 3;
+const PAGE_SIZE: usize = GRID_COLUMNS * GRID_ROWS;
 const ITEM_WIDTH: f32 = 132.0;
 const ITEM_HEIGHT: f32 = 108.0;
 const ICON_SIZE: f32 = 60.0;
+const SEARCH_WIDTH: f32 = 310.0;
+const SEARCH_HEIGHT: f32 = 38.0;
+const PAGE_BUTTON_SIZE: f32 = 30.0;
 const MENU_WIDTH: f32 = 190.0;
 const MENU_HEIGHT: f32 = 80.0;
 const WINDOW_EFFECT_EXTENT: f32 = 20.0;
@@ -59,6 +64,10 @@ pub(crate) struct AppLibraryLayer<C> {
     >,
     hovered: Cell<Option<usize>>,
     pressed: Cell<Option<usize>>,
+    selected: Cell<Option<usize>>,
+    query: RefCell<String>,
+    page: Cell<usize>,
+    was_open: Cell<bool>,
     menu_index: Cell<Option<usize>>,
     menu_position: Cell<Option<Point>>,
     menu_action: Rc<Cell<Option<MenuAction>>>,
@@ -99,6 +108,10 @@ where
             launch_failure_states,
             hovered: Cell::new(None),
             pressed: Cell::new(None),
+            selected: Cell::new(None),
+            query: RefCell::new(String::new()),
+            page: Cell::new(0),
+            was_open: Cell::new(false),
             menu_index: Cell::new(None),
             menu_position: Cell::new(None),
             menu_action,
@@ -137,17 +150,110 @@ where
         let column = index % columns;
         let grid_width = ITEM_WIDTH * columns as f32;
         let x = panel.origin.x + (panel.size.width - grid_width) / 2.0 + column as f32 * ITEM_WIDTH;
-        let y = panel.origin.y + 76.0 + row as f32 * ITEM_HEIGHT;
+        let y = panel.origin.y + 84.0 + row as f32 * ITEM_HEIGHT;
         Rect::new(x, y, ITEM_WIDTH, ITEM_HEIGHT)
     }
 
-    fn hit_index(&self, panel: Rect, position: Point) -> Option<usize> {
-        self.apps
-            .get()
+    fn search_rect(panel: Rect) -> Rect {
+        Rect::new(
+            panel.origin.x + panel.size.width - SEARCH_WIDTH - 30.0,
+            panel.origin.y + 22.0,
+            SEARCH_WIDTH,
+            SEARCH_HEIGHT,
+        )
+    }
+
+    fn previous_page_rect(panel: Rect) -> Rect {
+        Rect::new(
+            panel.origin.x + panel.size.width / 2.0 - 78.0,
+            panel.origin.y + panel.size.height - 46.0,
+            PAGE_BUTTON_SIZE,
+            PAGE_BUTTON_SIZE,
+        )
+    }
+
+    fn next_page_rect(panel: Rect) -> Rect {
+        Rect::new(
+            panel.origin.x + panel.size.width / 2.0 + 48.0,
+            panel.origin.y + panel.size.height - 46.0,
+            PAGE_BUTTON_SIZE,
+            PAGE_BUTTON_SIZE,
+        )
+    }
+
+    fn filtered_indices(&self) -> Vec<usize> {
+        matching_app_indices(&self.apps.get(), &self.query.borrow())
+    }
+
+    fn page_count(&self, filtered: &[usize]) -> usize {
+        page_count(filtered.len())
+    }
+
+    fn clamp_page(&self, filtered: &[usize]) {
+        let last_page = self.page_count(filtered).saturating_sub(1);
+        if self.page.get() > last_page {
+            self.page.set(last_page);
+        }
+    }
+
+    fn visible_indices(&self, filtered: &[usize]) -> Vec<usize> {
+        let start = self.page.get().saturating_mul(PAGE_SIZE);
+        filtered
             .iter()
+            .skip(start)
+            .take(PAGE_SIZE)
+            .copied()
+            .collect()
+    }
+
+    fn reset_selection(&self) {
+        let filtered = self.filtered_indices();
+        self.page.set(0);
+        self.selected.set(filtered.first().copied());
+        self.hovered.set(None);
+        self.pressed.set(None);
+        self.close_menu();
+    }
+
+    fn ensure_open_session(&self) {
+        if self.was_open.replace(true) {
+            return;
+        }
+        self.query.borrow_mut().clear();
+        self.reset_selection();
+    }
+
+    fn select_page(&self, page: usize) {
+        let filtered = self.filtered_indices();
+        let last_page = self.page_count(&filtered).saturating_sub(1);
+        let page = page.min(last_page);
+        self.page.set(page);
+        self.selected
+            .set(filtered.get(page.saturating_mul(PAGE_SIZE)).copied());
+        self.hovered.set(None);
+        self.pressed.set(None);
+        self.close_menu();
+    }
+
+    fn move_selection(&self, offset: isize) {
+        let filtered = self.filtered_indices();
+        let selected = adjacent_selection(&filtered, self.selected.get(), offset);
+        self.selected.set(selected);
+        if let Some(selected) = selected
+            && let Some(position) = filtered.iter().position(|index| *index == selected)
+        {
+            self.page.set(position / PAGE_SIZE);
+        }
+        self.hovered.set(None);
+    }
+
+    fn hit_index(&self, panel: Rect, position: Point) -> Option<usize> {
+        let filtered = self.filtered_indices();
+        self.visible_indices(&filtered)
+            .into_iter()
             .enumerate()
-            .find(|(index, _)| Self::item_rect(panel, *index).contains(position))
-            .map(|(index, _)| index)
+            .find(|(local_index, _)| Self::item_rect(panel, *local_index).contains(position))
+            .map(|(_, app_index)| app_index)
     }
 
     fn menu_bounds(&self, bounds: Rect) -> Option<Rect> {
@@ -217,10 +323,7 @@ where
 
     fn activate(&self, app: &AppInfo, context: &mut EventContext<'_>) {
         let before = self.visible_windows_damage();
-        let running_process = self
-            .platform
-            .borrow()
-            .process_id_for_bundle(&app.bundle_id);
+        let running_process = self.platform.borrow().process_id_for_bundle(&app.bundle_id);
         let process_id = match running_process {
             Some(process_id) => process_id,
             None => match self.platform.borrow_mut().launch_app(app) {
@@ -311,8 +414,10 @@ where
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.content.paint(bounds, context);
         if !self.open.get() {
+            self.was_open.set(false);
             return;
         }
+        self.ensure_open_session();
         Rectangle::new()
             .color(RectangleColor::Custom(Color::rgba(0, 0, 0, 72)))
             .paint(bounds, context);
@@ -331,9 +436,52 @@ where
                 Rect::new(panel.origin.x + 34.0, panel.origin.y + 24.0, 300.0, 36.0),
                 context,
             );
-        for (index, app) in self.apps.get().iter().enumerate() {
-            let item = Self::item_rect(panel, index);
-            if self.hovered.get() == Some(index) || self.pressed.get() == Some(index) {
+        let search = Self::search_rect(panel);
+        Rectangle::new()
+            .color(RectangleColor::Custom(Color::rgba(255, 255, 255, 232)))
+            .radius(CornerRadius::Custom(11.0))
+            .border(BorderStyle::custom(Color::rgba(0, 0, 0, 30), 1.0))
+            .paint(search, context);
+        let query = self.query.borrow().clone();
+        Text::new(if query.is_empty() {
+            String::from("Search applications")
+        } else {
+            query
+        })
+        .font_size(13.0)
+        .line_height(20.0)
+        .color(if self.query.borrow().is_empty() {
+            Color::rgba(70, 70, 74, 150)
+        } else {
+            Color::from_rgb_hex(0x1d1d1f)
+        })
+        .paint(
+            Rect::new(
+                search.origin.x + 14.0,
+                search.origin.y + 9.0,
+                search.size.width - 28.0,
+                22.0,
+            ),
+            context,
+        );
+
+        let apps = self.apps.get();
+        let filtered = matching_app_indices(&apps, &self.query.borrow());
+        self.clamp_page(&filtered);
+        let visible = self.visible_indices(&filtered);
+        for (local_index, app_index) in visible.iter().copied().enumerate() {
+            let Some(app) = apps.get(app_index) else {
+                continue;
+            };
+            let item = Self::item_rect(panel, local_index);
+            if self.selected.get() == Some(app_index) {
+                Rectangle::new()
+                    .color(RectangleColor::Custom(Color::rgba(0, 122, 255, 28)))
+                    .radius(CornerRadius::Custom(14.0))
+                    .border(BorderStyle::custom(Color::rgba(0, 122, 255, 72), 1.0))
+                    .paint(item, context);
+            } else if self.hovered.get() == Some(app_index) || self.pressed.get() == Some(app_index)
+            {
                 Rectangle::new()
                     .color(RectangleColor::Custom(Color::rgba(0, 0, 0, 12)))
                     .radius(CornerRadius::Custom(14.0))
@@ -360,6 +508,74 @@ where
                     context,
                 );
         }
+
+        if filtered.is_empty() {
+            Text::new("No applications found")
+                .font_size(14.0)
+                .line_height(22.0)
+                .alignment(TextAlignment::Center)
+                .color(Color::rgba(60, 60, 67, 170))
+                .paint(
+                    Rect::new(
+                        panel.origin.x + 80.0,
+                        panel.origin.y + 220.0,
+                        panel.size.width - 160.0,
+                        28.0,
+                    ),
+                    context,
+                );
+        }
+
+        let page_count = self.page_count(&filtered);
+        let page = self.page.get();
+        let previous = Self::previous_page_rect(panel);
+        let next = Self::next_page_rect(panel);
+        for (button, enabled, label) in [
+            (previous, page > 0, "<"),
+            (next, page + 1 < page_count, ">"),
+        ] {
+            Rectangle::new()
+                .color(RectangleColor::Custom(if enabled {
+                    Color::rgba(0, 0, 0, 14)
+                } else {
+                    Color::rgba(0, 0, 0, 5)
+                }))
+                .radius(CornerRadius::Custom(PAGE_BUTTON_SIZE / 2.0))
+                .paint(button, context);
+            Text::new(label)
+                .font_size(15.0)
+                .line_height(22.0)
+                .weight(700)
+                .alignment(TextAlignment::Center)
+                .color(if enabled {
+                    Color::from_rgb_hex(0x1d1d1f)
+                } else {
+                    Color::rgba(60, 60, 67, 70)
+                })
+                .paint(
+                    Rect::new(
+                        button.origin.x,
+                        button.origin.y + 4.0,
+                        button.size.width,
+                        22.0,
+                    ),
+                    context,
+                );
+        }
+        Text::new(format!("{} / {}", page + 1, page_count))
+            .font_size(11.0)
+            .line_height(18.0)
+            .alignment(TextAlignment::Center)
+            .color(Color::rgba(60, 60, 67, 170))
+            .paint(
+                Rect::new(
+                    panel.origin.x + panel.size.width / 2.0 - 42.0,
+                    panel.origin.y + panel.size.height - 40.0,
+                    84.0,
+                    20.0,
+                ),
+                context,
+            );
         if let Some(menu_bounds) = self.menu_bounds(bounds) {
             self.active_menu().paint(menu_bounds, context);
         }
@@ -372,8 +588,10 @@ where
         context: &mut EventContext<'_>,
     ) -> EventResult {
         if !self.open.get() {
+            self.was_open.set(false);
             return self.content.handle_event(bounds, event, context);
         }
+        self.ensure_open_session();
         if let Some(menu_bounds) = self.menu_bounds(bounds) {
             match event {
                 ViewEvent::PointerMoved { position }
@@ -412,6 +630,65 @@ where
                 self.open.set(false);
                 context.request_redraw_in(bounds);
             }
+            ViewEvent::ArrowLeft => {
+                self.move_selection(-1);
+                context.request_redraw_in(panel);
+            }
+            ViewEvent::ArrowRight => {
+                self.move_selection(1);
+                context.request_redraw_in(panel);
+            }
+            ViewEvent::KeyPressed {
+                key: Key::ArrowUp, ..
+            } => {
+                self.move_selection(-(GRID_COLUMNS as isize));
+                context.request_redraw_in(panel);
+            }
+            ViewEvent::KeyPressed {
+                key: Key::ArrowDown,
+                ..
+            } => {
+                self.move_selection(GRID_COLUMNS as isize);
+                context.request_redraw_in(panel);
+            }
+            ViewEvent::KeyPressed {
+                key: Key::PageUp, ..
+            } => {
+                self.select_page(self.page.get().saturating_sub(1));
+                context.request_redraw_in(panel);
+            }
+            ViewEvent::KeyPressed {
+                key: Key::PageDown, ..
+            } => {
+                self.select_page(self.page.get().saturating_add(1));
+                context.request_redraw_in(panel);
+            }
+            ViewEvent::Backspace => {
+                self.query.borrow_mut().pop();
+                self.reset_selection();
+                context.request_redraw_in(panel);
+            }
+            ViewEvent::TextInput { text } if text.contains(['\r', '\n']) => {
+                let app = self
+                    .selected
+                    .get()
+                    .and_then(|index| self.apps.get().get(index).cloned());
+                if let Some(app) = app {
+                    self.activate(&app, context);
+                }
+            }
+            ViewEvent::TextInput { text } => {
+                let mut query = self.query.borrow_mut();
+                for character in text.chars().filter(|character| !character.is_control()) {
+                    if query.chars().count() >= 64 {
+                        break;
+                    }
+                    query.push(character);
+                }
+                drop(query);
+                self.reset_selection();
+                context.request_redraw_in(panel);
+            }
             ViewEvent::PointerMoved { position } => {
                 self.hovered.set(self.hit_index(panel, *position));
                 context.set_cursor(if self.hovered.get().is_some() {
@@ -428,8 +705,15 @@ where
                 if !panel.contains(*position) {
                     self.open.set(false);
                     context.request_redraw_in(bounds);
+                } else if Self::previous_page_rect(panel).contains(*position) {
+                    self.select_page(self.page.get().saturating_sub(1));
+                    context.request_redraw_in(panel);
+                } else if Self::next_page_rect(panel).contains(*position) {
+                    self.select_page(self.page.get().saturating_add(1));
+                    context.request_redraw_in(panel);
                 } else {
                     self.pressed.set(self.hit_index(panel, *position));
+                    self.selected.set(self.pressed.get());
                     context.request_redraw_in(panel);
                 }
             }
@@ -451,11 +735,22 @@ where
                 button: PointerButton::Secondary,
             } => {
                 if let Some(index) = self.hit_index(panel, *position) {
+                    self.selected.set(Some(index));
                     self.menu_index.set(Some(index));
                     self.menu_position.set(Some(*position));
                     self.menu_action.set(None);
                     context.request_redraw_in(bounds);
                 }
+            }
+            ViewEvent::Scroll {
+                position, delta_y, ..
+            } if panel.contains(*position) && *delta_y != 0.0 => {
+                if *delta_y > 0.0 {
+                    self.select_page(self.page.get().saturating_sub(1));
+                } else {
+                    self.select_page(self.page.get().saturating_add(1));
+                }
+                context.request_redraw_in(panel);
             }
             _ => {}
         }
@@ -468,5 +763,83 @@ fn bounds_for_damage(before: Option<Rect>, after: Option<Rect>) -> Rect {
         (Some(before), Some(after)) => before.union(after),
         (Some(bounds), None) | (None, Some(bounds)) => bounds,
         (None, None) => Rect::new(0.0, 0.0, 1.0, 1.0),
+    }
+}
+
+fn matching_app_indices(apps: &[AppInfo], query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    apps.iter()
+        .enumerate()
+        .filter_map(|(index, app)| {
+            let matches = query.is_empty()
+                || app.name.to_lowercase().contains(&query)
+                || app.bundle_id.to_lowercase().contains(&query)
+                || app.developer.to_lowercase().contains(&query);
+            matches.then_some(index)
+        })
+        .collect()
+}
+
+fn page_count(item_count: usize) -> usize {
+    item_count.div_ceil(PAGE_SIZE).max(1)
+}
+
+fn adjacent_selection(filtered: &[usize], selected: Option<usize>, offset: isize) -> Option<usize> {
+    let Some(current) =
+        selected.and_then(|selected| filtered.iter().position(|index| *index == selected))
+    else {
+        return filtered.first().copied();
+    };
+    let target = current
+        .saturating_add_signed(offset)
+        .min(filtered.len().saturating_sub(1));
+    filtered.get(target).copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(name: &str, bundle_id: &str, developer: &str) -> AppInfo {
+        AppInfo {
+            root: PathBuf::new(),
+            name: name.to_owned(),
+            bundle_id: bundle_id.to_owned(),
+            version: String::from("1.0.0"),
+            developer: developer.to_owned(),
+            entry: String::from("entry.elf"),
+            description: String::new(),
+            icon: None,
+            resources: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn search_matches_name_bundle_and_developer_case_insensitively() {
+        let apps = vec![
+            app("Files", "org.mochios.files", "mochiOS"),
+            app("Terminal", "org.mochios.terminal", "System Team"),
+        ];
+        assert_eq!(matching_app_indices(&apps, "FILE"), vec![0]);
+        assert_eq!(matching_app_indices(&apps, "terminal"), vec![1]);
+        assert_eq!(matching_app_indices(&apps, "system team"), vec![1]);
+        assert_eq!(matching_app_indices(&apps, "missing"), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn page_count_keeps_an_empty_page_and_rounds_up() {
+        assert_eq!(page_count(0), 1);
+        assert_eq!(page_count(PAGE_SIZE), 1);
+        assert_eq!(page_count(PAGE_SIZE + 1), 2);
+    }
+
+    #[test]
+    fn selection_navigation_uses_filtered_app_indices() {
+        let filtered = vec![2, 5, 9];
+        assert_eq!(adjacent_selection(&filtered, None, 1), Some(2));
+        assert_eq!(adjacent_selection(&filtered, Some(5), 1), Some(9));
+        assert_eq!(adjacent_selection(&filtered, Some(5), -1), Some(2));
+        assert_eq!(adjacent_selection(&filtered, Some(9), 1), Some(9));
+        assert_eq!(adjacent_selection(&[], None, 1), None);
     }
 }
