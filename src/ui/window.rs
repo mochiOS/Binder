@@ -1,4 +1,4 @@
-use super::{about, test, window_decoration};
+use super::{about, launch_failure, test, window_decoration};
 use crate::apps;
 use crate::window::DesktopWindow;
 use viewkit::theme::{Shadow, ShadowSet};
@@ -123,9 +123,16 @@ pub(crate) fn view(
     window: &DesktopWindow,
     focused: bool,
     test_state: Option<test::TestWindowState>,
+    launch_failure_state: Option<launch_failure::LaunchFailureWindowState>,
+    windows: State<crate::window::DesktopWindows>,
 ) -> impl View + 'static {
     let content: Box<dyn View + 'static> = match window.renderer.as_str() {
         apps::ABOUT_ENTRY => Box::new(about::view()),
+        apps::LAUNCH_FAILURE_ENTRY => Box::new(launch_failure::view(
+            launch_failure_state.unwrap_or_default(),
+            window.id,
+            windows,
+        )),
         apps::TEST_ENTRY => Box::new(test::view(test_state.unwrap_or_default())),
         _ => Box::new(remote_placeholder_view()),
     };

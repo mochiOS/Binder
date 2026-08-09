@@ -94,6 +94,35 @@ impl DesktopWindows {
             .map(|window| window.id)
     }
 
+    pub fn open_launch_failure(&mut self) -> WindowId {
+        if let Some(id) = self
+            .windows
+            .iter()
+            .find(|window| window.renderer == apps::LAUNCH_FAILURE_ENTRY)
+            .map(|window| window.id)
+        {
+            self.focus(id);
+            return id;
+        }
+
+        let id = self.allocate_id();
+        self.windows.push(DesktopWindow {
+            id,
+            title: String::from("Unable to Open Application"),
+            frame: Rect::new(430.0, 240.0, 420.0, 250.0),
+            resizable: false,
+            minimized: false,
+            close_requested: false,
+            renderer: String::from(apps::LAUNCH_FAILURE_ENTRY),
+            process_id: None,
+            remote_window: None,
+            interaction: WindowInteraction::default(),
+            restore_frame: None,
+        });
+        self.focused = Some(id);
+        id
+    }
+
     pub fn open_about(
         &mut self,
         process_id: ProcessId,
@@ -615,6 +644,22 @@ pub struct WindowDrag {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_failure_window_is_reused_and_focused() {
+        let mut desktop = DesktopWindows::default();
+
+        let first = desktop.open_launch_failure();
+        desktop.minimize(first);
+        let second = desktop.open_launch_failure();
+
+        assert_eq!(first, second);
+        assert_eq!(desktop.focused, Some(first));
+        assert_eq!(desktop.windows.len(), 1);
+        assert!(!desktop.windows[0].minimized);
+        assert_eq!(desktop.windows[0].process_id, None);
+        assert_eq!(desktop.windows[0].remote_window, None);
+    }
 
     #[test]
     fn activating_process_restores_its_topmost_minimized_window() {

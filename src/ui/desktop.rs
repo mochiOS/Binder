@@ -38,6 +38,9 @@ pub(crate) fn view(
     dock_running_apps: State<Vec<String>>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, super::test::TestWindowState>>>,
+    launch_failure_states: Rc<
+        RefCell<HashMap<WindowId, super::launch_failure::LaunchFailureWindowState>>,
+    >,
     context_menu: State<Option<ContextMenuModel>>,
     wallpaper: super::wallpaper::Wallpaper,
     session_user: String,
@@ -81,6 +84,7 @@ pub(crate) fn view(
         window_drag,
         resize,
         test_window_states,
+        Rc::clone(&launch_failure_states),
     );
 
     let docked_desktop = dock::DockLayer::new(
@@ -92,6 +96,7 @@ pub(crate) fn view(
         dock_pressed,
         dock_pointer,
         dock_running_apps,
+        launch_failure_states,
     );
 
     let menu = super::menu::view(

@@ -285,7 +285,7 @@ fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), Platfo
     );
     if status != 0 {
         eprintln!("capability.service rejected app launch: errno={status}");
-        return Err(PlatformError::ProcessLaunchFailed);
+        return Err(PlatformError::ProcessLaunchRejected { errno: status });
     }
     let pid = u64::from_le_bytes(
         reply[8..]

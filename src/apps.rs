@@ -1,4 +1,5 @@
 pub const ABOUT_ENTRY: &str = "internal:about";
+pub const LAUNCH_FAILURE_ENTRY: &str = "internal:launch-failure";
 pub const TEST_ENTRY: &str = "internal:test";
 
 pub const ABOUT_ROLE: &str = "--role=about";

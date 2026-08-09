@@ -26,6 +26,9 @@ pub(crate) struct WindowLayer<C> {
     drag: State<Option<WindowDrag>>,
     resize: State<Option<WindowResize>>,
     test_window_states: Rc<RefCell<HashMap<crate::window::WindowId, TestWindowState>>>,
+    launch_failure_states: Rc<
+        RefCell<HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>>,
+    >,
 }
 
 #[derive(Clone, Copy)]
@@ -45,6 +48,11 @@ where
         drag: State<Option<WindowDrag>>,
         resize: State<Option<WindowResize>>,
         test_window_states: Rc<RefCell<HashMap<crate::window::WindowId, TestWindowState>>>,
+        launch_failure_states: Rc<
+            RefCell<
+                HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>,
+            >,
+        >,
     ) -> Self {
         Self {
             content,
@@ -52,6 +60,7 @@ where
             drag,
             resize,
             test_window_states,
+            launch_failure_states,
         }
     }
 
@@ -75,11 +84,14 @@ where
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
-        window::view(window, focused, self.test_state(window)).handle_event(
-            window.frame,
-            event,
-            context,
+        window::view(
+            window,
+            focused,
+            self.test_state(window),
+            self.launch_failure_states.borrow().get(&window.id).cloned(),
+            self.windows.clone(),
         )
+        .handle_event(window.frame, event, context)
     }
 
     fn topmost_window_at(desktop: &DesktopWindows, position: Point) -> Option<DesktopWindow> {
@@ -508,6 +520,12 @@ where
                 .any(|window| window.id == *id && window.renderer == crate::apps::TEST_ENTRY)
         });
 
+        self.launch_failure_states.borrow_mut().retain(|id, _| {
+            desktop.windows.iter().any(|window| {
+                window.id == *id && window.renderer == crate::apps::LAUNCH_FAILURE_ENTRY
+            })
+        });
+
         for desktop_window in &desktop.windows {
             if desktop_window.minimized {
                 continue;
@@ -515,8 +533,17 @@ where
 
             let focused = desktop.focused == Some(desktop_window.id);
 
-            window::view(desktop_window, focused, self.test_state(desktop_window))
-                .paint(desktop_window.frame, context);
+            window::view(
+                desktop_window,
+                focused,
+                self.test_state(desktop_window),
+                self.launch_failure_states
+                    .borrow()
+                    .get(&desktop_window.id)
+                    .cloned(),
+                self.windows.clone(),
+            )
+            .paint(desktop_window.frame, context);
         }
     }
 

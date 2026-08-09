@@ -807,7 +807,7 @@ dependencies = [
 [[package]]
 name = "mochios-capability-protocol"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/syscalls#e00e535b543a462f89ba77a935327328ad775161"
+source = "git+https://github.com/mochiOS/syscalls#a198c188b5490b5d7874a5100083b5c247c428fb"
 
 [[package]]
 name = "moxcms"

@@ -158,6 +158,7 @@ pub enum PlatformError {
     PermissionDenied,
     TransportFailure,
     UnsupportedOperation,
+    ProcessLaunchRejected { errno: u64 },
     ProcessLaunchFailed,
     ProcessTerminationFailed,
 }

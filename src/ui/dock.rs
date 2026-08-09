@@ -79,6 +79,9 @@ pub(crate) struct DockLayer<C> {
     pressed: Rc<Cell<Option<usize>>>,
     pointer: Rc<Cell<Option<Point>>>,
     running_apps: State<Vec<String>>,
+    launch_failure_states: Rc<
+        RefCell<HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>>,
+    >,
     icon_cache: RefCell<HashMap<PathBuf, DockIcon>>,
     menu: Menu,
     menu_index: Rc<Cell<Option<usize>>>,
@@ -98,6 +101,11 @@ where
         pressed: Rc<Cell<Option<usize>>>,
         pointer: Rc<Cell<Option<Point>>>,
         running_apps: State<Vec<String>>,
+        launch_failure_states: Rc<
+            RefCell<
+                HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>,
+            >,
+        >,
     ) -> Self {
         let menu_action_requested = Rc::new(Cell::new(false));
         let action = Rc::clone(&menu_action_requested);
@@ -111,6 +119,7 @@ where
             pressed,
             pointer,
             running_apps,
+            launch_failure_states,
             icon_cache: RefCell::new(HashMap::new()),
             menu: Menu::new().item(MenuItem::new("Open").on_select(move || {
                 action.set(true);
@@ -277,10 +286,11 @@ where
 
     fn activate_with_redraw(&self, index: usize, context: &mut EventContext<'_>) {
         let before = self.visible_windows_damage();
-        if self
+        let activation_changed = self
             .activate_or_launch(index)
-            .is_some_and(ProcessActivation::changed_window_state)
-        {
+            .is_some_and(ProcessActivation::changed_window_state);
+        let after = self.visible_windows_damage();
+        if activation_changed || before != after {
             let dirty = match (before, self.visible_windows_damage()) {
                 (Some(before), Some(after)) => Some(before.union(after)),
                 (Some(dirty), None) | (None, Some(dirty)) => Some(dirty),
@@ -369,6 +379,17 @@ where
 
                 Err(error) => {
                     eprintln!("failed to launch app {}: {error:?}", app.bundle_id,);
+
+                    let state = super::launch_failure::LaunchFailureWindowState::new(&app, error);
+                    let mut window_id = None;
+                    self.windows.update(|desktop| {
+                        window_id = Some(desktop.open_launch_failure());
+                    });
+                    if let Some(window_id) = window_id {
+                        self.launch_failure_states
+                            .borrow_mut()
+                            .insert(window_id, state);
+                    }
 
                     return None;
                 }

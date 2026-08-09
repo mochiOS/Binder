@@ -21,6 +21,8 @@ pub struct BinderApp {
     dock_running_apps: State<Vec<String>>,
     cursor_pointer: Rc<Cell<Option<Point>>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, crate::ui::test::TestWindowState>>>,
+    launch_failure_states:
+        Rc<RefCell<HashMap<WindowId, crate::ui::launch_failure::LaunchFailureWindowState>>>,
     context_menu: State<Option<ContextMenuModel>>,
     wallpaper: crate::ui::wallpaper::Wallpaper,
     session_user: String,
@@ -69,6 +71,7 @@ impl App for BinderApp {
             dock_running_apps: State::new(Vec::new()),
             cursor_pointer: Rc::new(Cell::new(None)),
             test_window_states: Rc::new(RefCell::new(HashMap::new())),
+            launch_failure_states: Rc::new(RefCell::new(HashMap::new())),
             context_menu,
             session_user: crate::session::current_user_label(),
             wallpaper: {
@@ -106,6 +109,7 @@ impl App for BinderApp {
             self.dock_running_apps.clone(),
             Rc::clone(&self.cursor_pointer),
             Rc::clone(&self.test_window_states),
+            Rc::clone(&self.launch_failure_states),
             self.context_menu.clone(),
             self.wallpaper.clone(),
             self.session_user.clone(),
