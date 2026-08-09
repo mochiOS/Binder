@@ -221,6 +221,7 @@ where
         }
         self.query.borrow_mut().clear();
         self.reset_selection();
+        self.selected.set(None);
     }
 
     fn select_page(&self, page: usize) {
