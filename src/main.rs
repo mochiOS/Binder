@@ -1,5 +1,6 @@
 mod apps;
 mod desktop;
+mod dock_preferences;
 mod ipc;
 mod platform;
 mod session;

@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::dock_preferences::DockPreferences;
 use crate::platform::{AppInfo, DesktopPlatform};
 
 use crate::window::{DesktopWindows, ProcessActivation};
@@ -31,9 +32,10 @@ const DOCK_ITEM_RADIUS: f32 = 16.0;
 const DOCK_INTERACTION_TOP_OVERFLOW: f32 = 26.0;
 const DOCK_REDRAW_MARGIN: f32 = 20.0;
 const WINDOW_EFFECT_EXTENT: f32 = 20.0;
+const APP_LIBRARY_BUNDLE_ID: &str = "internal:app-library";
 
 const DOCK_MENU_WIDTH: f32 = 180.0;
-const DOCK_MENU_HEIGHT: f32 = 46.0;
+const DOCK_MENU_HEIGHT: f32 = 80.0;
 const DOCK_MENU_GAP: f32 = 10.0;
 const DOCK_MENU_REDRAW_MARGIN: f32 = 16.0;
 
@@ -70,6 +72,13 @@ enum DockIcon {
     Missing,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DockMenuAction {
+    Open,
+    Pin,
+    Unpin,
+}
+
 pub(crate) struct DockLayer<C> {
     content: C,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
@@ -79,13 +88,18 @@ pub(crate) struct DockLayer<C> {
     pressed: Rc<Cell<Option<usize>>>,
     pointer: Rc<Cell<Option<Point>>>,
     running_apps: State<Vec<String>>,
+    preferences: State<DockPreferences>,
+    app_library_open: State<bool>,
     launch_failure_states: Rc<
         RefCell<HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>>,
     >,
     icon_cache: RefCell<HashMap<PathBuf, DockIcon>>,
-    menu: Menu,
+    pin_menu: Menu,
+    unpin_menu: Menu,
     menu_index: Rc<Cell<Option<usize>>>,
-    menu_action_requested: Rc<Cell<bool>>,
+    menu_action_requested: Rc<Cell<Option<DockMenuAction>>>,
+    dragged_pin: Rc<Cell<Option<usize>>>,
+    drag_did_move: Rc<Cell<bool>>,
 }
 
 impl<C> DockLayer<C>
@@ -101,14 +115,19 @@ where
         pressed: Rc<Cell<Option<usize>>>,
         pointer: Rc<Cell<Option<Point>>>,
         running_apps: State<Vec<String>>,
+        preferences: State<DockPreferences>,
+        app_library_open: State<bool>,
         launch_failure_states: Rc<
             RefCell<
                 HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>,
             >,
         >,
     ) -> Self {
-        let menu_action_requested = Rc::new(Cell::new(false));
-        let action = Rc::clone(&menu_action_requested);
+        let menu_action_requested = Rc::new(Cell::new(None));
+        let open_action = Rc::clone(&menu_action_requested);
+        let pin_action = Rc::clone(&menu_action_requested);
+        let open_unpin_action = Rc::clone(&menu_action_requested);
+        let unpin_action = Rc::clone(&menu_action_requested);
 
         Self {
             content,
@@ -119,18 +138,89 @@ where
             pressed,
             pointer,
             running_apps,
+            preferences,
+            app_library_open,
             launch_failure_states,
             icon_cache: RefCell::new(HashMap::new()),
-            menu: Menu::new().item(MenuItem::new("Open").on_select(move || {
-                action.set(true);
-            })),
+            pin_menu: Menu::new()
+                .item(MenuItem::new("Open").on_select(move || {
+                    open_action.set(Some(DockMenuAction::Open));
+                }))
+                .item(MenuItem::new("Pin to Dock").on_select(move || {
+                    pin_action.set(Some(DockMenuAction::Pin));
+                })),
+            unpin_menu: Menu::new()
+                .item(MenuItem::new("Open").on_select(move || {
+                    open_unpin_action.set(Some(DockMenuAction::Open));
+                }))
+                .item(MenuItem::new("Unpin from Dock").on_select(move || {
+                    unpin_action.set(Some(DockMenuAction::Unpin));
+                })),
             menu_index: Rc::new(Cell::new(None)),
             menu_action_requested,
+            dragged_pin: Rc::new(Cell::new(None)),
+            drag_did_move: Rc::new(Cell::new(false)),
         }
     }
 
+    fn active_menu(&self, index: usize) -> &Menu {
+        let pinned = self
+            .dock_apps()
+            .get(index)
+            .is_some_and(|app| self.preferences.get().is_pinned(&app.bundle_id));
+        if pinned {
+            &self.unpin_menu
+        } else {
+            &self.pin_menu
+        }
+    }
+
+    fn update_pin(&self, bundle_id: &str, pin: bool) {
+        self.preferences.update(|preferences| {
+            let changed = if pin {
+                preferences.pin(bundle_id)
+            } else {
+                preferences.unpin(bundle_id)
+            };
+            if changed && let Err(error) = preferences.save() {
+                eprintln!("failed to save Dock preferences: {error}");
+            }
+        });
+    }
+
+    fn dock_apps(&self) -> Vec<AppInfo> {
+        let apps = self.apps.get();
+        let preferences = self.preferences.get();
+        let mut visible = Vec::new();
+        for bundle_id in preferences.pinned() {
+            if let Some(app) = apps.iter().find(|app| &app.bundle_id == bundle_id) {
+                visible.push(app.clone());
+            }
+        }
+        for bundle_id in self.running_apps.get() {
+            if preferences.is_pinned(&bundle_id) {
+                continue;
+            }
+            if let Some(app) = apps.iter().find(|app| app.bundle_id == bundle_id) {
+                visible.push(app.clone());
+            }
+        }
+        visible.push(app_library_item());
+        visible
+    }
+
+    fn pinned_visible_count(&self) -> usize {
+        let apps = self.apps.get();
+        self.preferences
+            .get()
+            .pinned()
+            .iter()
+            .filter(|bundle_id| apps.iter().any(|app| &app.bundle_id == *bundle_id))
+            .count()
+    }
+
     fn dock_rect(&self, bounds: Rect) -> Option<Rect> {
-        let count = self.apps.get().len();
+        let count = self.dock_apps().len();
 
         if count == 0 {
             return None;
@@ -215,7 +305,7 @@ where
             return None;
         }
 
-        let apps = self.apps.get();
+        let apps = self.dock_apps();
 
         for index in 0..apps.len() {
             let item = Self::item_rect(dock, index);
@@ -265,7 +355,7 @@ where
         let previous_hovered = self.hovered.get();
         self.request_menu_redraw(bounds, context);
         self.menu_index.set(None);
-        self.menu_action_requested.set(false);
+        self.menu_action_requested.set(None);
         self.hovered.set(None);
         self.pointer.set(None);
         self.pressed.set(None);
@@ -276,7 +366,7 @@ where
         let previous_hovered = self.hovered.get();
         self.request_menu_redraw(bounds, context);
         self.menu_index.set(Some(index));
-        self.menu_action_requested.set(false);
+        self.menu_action_requested.set(None);
         self.hovered.set(Some(index));
         self.pointer.set(self.pointer_for_hit(bounds, Some(index)));
         self.pressed.set(None);
@@ -365,11 +455,16 @@ where
     }
 
     fn activate_or_launch(&self, index: usize) -> Option<ProcessActivation> {
-        let apps = self.apps.get();
+        let apps = self.dock_apps();
 
         let Some(app) = apps.get(index).cloned() else {
             return None;
         };
+
+        if app.bundle_id == APP_LIBRARY_BUNDLE_ID {
+            self.app_library_open.update(|open| *open = !*open);
+            return Some(ProcessActivation::NoWindow);
+        }
 
         let running_process = self.platform.borrow().process_id_for_bundle(&app.bundle_id);
         let process_id = match running_process {
@@ -442,6 +537,10 @@ where
     }
 
     fn paint_app_icon(&self, app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
+        if app.bundle_id == APP_LIBRARY_BUNDLE_ID {
+            self.paint_app_library_icon(bounds, context);
+            return;
+        }
         if let Some(icon) = &app.icon {
             if let DockIcon::Image(image) = self.load_icon(icon) {
                 Image::new(image)
@@ -460,7 +559,55 @@ where
                 .content_mode(ImageContentMode::Fit)
                 .radius(CornerRadius::Custom(10.0))
                 .sampling(ImageSampling::Bicubic)
-                .paint(bounds, context);
+            .paint(bounds, context);
+        }
+    }
+
+    fn paint_app_library_icon(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        Rectangle::new()
+            .color(RectangleColor::Custom(DOCK_BACKGROUND))
+            .radius(CornerRadius::Custom(bounds.size.width * 0.3))
+            .border(BorderStyle::custom(DOCK_BORDER, 1.0))
+            .paint(bounds, context);
+
+        let cell_size = bounds.size.width * 0.3;
+        let gap = bounds.size.width * 0.075;
+        let total = cell_size * 2.0 + gap;
+        let start_x = bounds.origin.x + (bounds.size.width - total) / 2.0;
+        let start_y = bounds.origin.y + (bounds.size.height - total) / 2.0;
+        let apps = self.apps.get();
+
+        for (index, app) in apps.iter().take(4).enumerate() {
+            let column = index % 2;
+            let row = index / 2;
+            let cell = Rect::new(
+                start_x + column as f32 * (cell_size + gap),
+                start_y + row as f32 * (cell_size + gap),
+                cell_size,
+                cell_size,
+            );
+
+            Rectangle::new()
+                .color(RectangleColor::Custom(Color::rgba(255, 255, 255, 225)))
+                .radius(CornerRadius::Custom(cell_size * 0.24))
+                .paint(cell, context);
+
+            let inset = cell_size * 0.08;
+            let icon = Rect::new(
+                cell.origin.x + inset,
+                cell.origin.y + inset,
+                cell.size.width - inset * 2.0,
+                cell.size.height - inset * 2.0,
+            );
+            if let Some(path) = app.icon.as_deref()
+                && let DockIcon::Image(image) = self.load_icon(path)
+            {
+                Image::new(image)
+                    .content_mode(ImageContentMode::Fit)
+                    .radius(CornerRadius::Custom(cell_size * 0.2))
+                    .sampling(ImageSampling::Bicubic)
+                    .paint(icon, context);
+            }
         }
     }
 
@@ -544,7 +691,7 @@ where
             .border(BorderStyle::custom(DOCK_BORDER, 1.0))
             .paint(dock, context);
 
-        let apps = self.apps.get();
+        let apps = self.dock_apps();
 
         let hovered = self.hovered.get();
 
@@ -585,6 +732,20 @@ where
             }
         }
 
+        let pinned_count = self.pinned_visible_count();
+        if pinned_count > 0 && pinned_count < apps.len() {
+            let left = Self::item_rect(dock, pinned_count - 1);
+            let right = Self::item_rect(dock, pinned_count);
+            let x = (left.origin.x + left.size.width + right.origin.x) / 2.0;
+            Rectangle::new()
+                .color(RectangleColor::Custom(Color::rgba(0, 0, 0, 36)))
+                .radius(CornerRadius::Custom(1.0))
+                .paint(
+                    Rect::new(x, dock.origin.y + 14.0, 1.0, dock.size.height - 28.0),
+                    context,
+                );
+        }
+
         if self.menu_index.get().is_none()
             && let Some((app, icon)) = tooltip
         {
@@ -592,7 +753,9 @@ where
         }
 
         if let Some(menu_bounds) = self.menu_bounds(bounds) {
-            self.menu.paint(menu_bounds, context);
+            if let Some(index) = self.menu_index.get() {
+                self.active_menu(index).paint(menu_bounds, context);
+            }
         }
     }
 
@@ -608,22 +771,35 @@ where
                     key: Key::Escape, ..
                 }
                 | ViewEvent::FocusChanged { focused: false } => {
-                    self.menu
-                        .handle_event(menu_bounds, &ViewEvent::PointerLeft, context);
+                    if let Some(index) = self.menu_index.get() {
+                        self.active_menu(index).handle_event(
+                            menu_bounds,
+                            &ViewEvent::PointerLeft,
+                            context,
+                        );
+                    }
                     self.close_menu(bounds, context);
                     return EventResult::Consumed;
                 }
                 ViewEvent::PointerMoved { position } => {
                     if menu_bounds.contains(*position) {
                         context.set_cursor(CursorIcon::Default);
-                        return self
-                            .menu
-                            .handle_event(menu_bounds, event, context)
-                            .merge(EventResult::Consumed);
+                        if let Some(index) = self.menu_index.get() {
+                            return self
+                                .active_menu(index)
+                                .handle_event(menu_bounds, event, context)
+                                .merge(EventResult::Consumed);
+                        }
+                        return EventResult::Consumed;
                     }
 
-                    self.menu
-                        .handle_event(menu_bounds, &ViewEvent::PointerLeft, context);
+                    if let Some(index) = self.menu_index.get() {
+                        self.active_menu(index).handle_event(
+                            menu_bounds,
+                            &ViewEvent::PointerLeft,
+                            context,
+                        );
+                    }
                     return EventResult::Consumed;
                 }
                 ViewEvent::PointerPressed {
@@ -631,10 +807,13 @@ where
                     button: PointerButton::Primary,
                 } => {
                     if menu_bounds.contains(*position) {
-                        return self
-                            .menu
-                            .handle_event(menu_bounds, event, context)
-                            .merge(EventResult::Consumed);
+                        if let Some(index) = self.menu_index.get() {
+                            return self
+                                .active_menu(index)
+                                .handle_event(menu_bounds, event, context)
+                                .merge(EventResult::Consumed);
+                        }
+                        return EventResult::Consumed;
                     }
 
                     self.close_menu(bounds, context);
@@ -649,11 +828,28 @@ where
                     }
 
                     let index = self.menu_index.get();
-                    let result = self.menu.handle_event(menu_bounds, event, context);
-                    if self.menu_action_requested.replace(false) {
+                    let result = index.map_or(EventResult::Ignored, |index| {
+                        self.active_menu(index)
+                            .handle_event(menu_bounds, event, context)
+                    });
+                    if let Some(action) = self.menu_action_requested.replace(None) {
+                        let app = index.and_then(|index| self.dock_apps().get(index).cloned());
                         self.close_menu(bounds, context);
-                        if let Some(index) = index {
-                            self.activate_with_redraw(index, context);
+                        if let Some(app) = app {
+                            match action {
+                                DockMenuAction::Open => {
+                                    if let Some(index) = self
+                                        .dock_apps()
+                                        .iter()
+                                        .position(|candidate| candidate.bundle_id == app.bundle_id)
+                                    {
+                                        self.activate_with_redraw(index, context);
+                                    }
+                                }
+                                DockMenuAction::Pin => self.update_pin(&app.bundle_id, true),
+                                DockMenuAction::Unpin => self.update_pin(&app.bundle_id, false),
+                            }
+                            context.request_redraw_in(bounds);
                         }
                     }
                     return result.merge(EventResult::Consumed);
@@ -662,8 +858,13 @@ where
                     position,
                     button: PointerButton::Secondary,
                 } => {
-                    self.menu
-                        .handle_event(menu_bounds, &ViewEvent::PointerLeft, context);
+                    if let Some(index) = self.menu_index.get() {
+                        self.active_menu(index).handle_event(
+                            menu_bounds,
+                            &ViewEvent::PointerLeft,
+                            context,
+                        );
+                    }
                     if let Some(index) = self.hit_index(bounds, *position) {
                         self.open_menu(bounds, index, context);
                     } else {
@@ -672,10 +873,13 @@ where
                     return EventResult::Consumed;
                 }
                 ViewEvent::PointerLeft => {
-                    return self
-                        .menu
-                        .handle_event(menu_bounds, event, context)
-                        .merge(EventResult::Consumed);
+                    if let Some(index) = self.menu_index.get() {
+                        return self
+                            .active_menu(index)
+                            .handle_event(menu_bounds, event, context)
+                            .merge(EventResult::Consumed);
+                    }
+                    return EventResult::Consumed;
                 }
                 _ => return EventResult::Consumed,
             }
@@ -700,6 +904,30 @@ where
                     self.request_dock_redraw(bounds, previous_hovered, hit, context);
                 }
 
+                if let (Some(from), Some(to)) = (self.dragged_pin.get(), hit) {
+                    let pinned_count = self.pinned_visible_count();
+                    if from < pinned_count && to < pinned_count && from != to {
+                        let dock_apps = self.dock_apps();
+                        let from_bundle = dock_apps.get(from).map(|app| app.bundle_id.clone());
+                        let to_bundle = dock_apps.get(to).map(|app| app.bundle_id.clone());
+                        let mut moved = false;
+                        if let (Some(from_bundle), Some(to_bundle)) = (from_bundle, to_bundle) {
+                            self.preferences.update(|preferences| {
+                                moved = preferences.move_pin_bundle(&from_bundle, &to_bundle);
+                                if moved && let Err(error) = preferences.save() {
+                                    eprintln!("failed to save Dock preferences: {error}");
+                                }
+                            });
+                        }
+                        if moved {
+                            self.drag_did_move.set(true);
+                            self.dragged_pin.set(Some(to));
+                            self.pressed.set(Some(to));
+                            context.request_redraw_in(bounds);
+                        }
+                    }
+                }
+
                 if inside {
                     context.set_cursor(CursorIcon::Pointer);
 
@@ -716,6 +944,9 @@ where
                 if self.is_inside_dock(bounds, *position) {
                     let hit = self.hit_index(bounds, *position);
                     self.pressed.set(hit);
+                    self.dragged_pin
+                        .set(hit.filter(|index| *index < self.pinned_visible_count()));
+                    self.drag_did_move.set(false);
 
                     self.request_dock_redraw(bounds, hit, None, context);
 
@@ -730,8 +961,14 @@ where
                 button: PointerButton::Secondary,
             } => {
                 if let Some(index) = self.hit_index(bounds, *position) {
-                    self.open_menu(bounds, index, context);
-                    return EventResult::Consumed;
+                    if self
+                        .dock_apps()
+                        .get(index)
+                        .is_some_and(|app| app.bundle_id != APP_LIBRARY_BUNDLE_ID)
+                    {
+                        self.open_menu(bounds, index, context);
+                        return EventResult::Consumed;
+                    }
                 }
 
                 self.content.handle_event(bounds, event, context)
@@ -748,7 +985,10 @@ where
                 if pressed.is_some() {
                     self.pressed.set(None);
 
-                    if pressed == hit {
+                    self.dragged_pin.set(None);
+                    let drag_did_move = self.drag_did_move.replace(false);
+
+                    if !drag_did_move && pressed == hit {
                         if let Some(index) = hit {
                             self.activate_with_redraw(index, context);
                         }
@@ -779,6 +1019,8 @@ where
                 if self.pressed.get().is_some() {
                     self.pressed.set(None);
                 }
+                self.dragged_pin.set(None);
+                self.drag_did_move.set(false);
                 if self.pointer.get().is_some() {
                     self.pointer.set(None);
                 }
@@ -811,4 +1053,18 @@ fn snap_rect(rect: Rect) -> Rect {
     let height = rect.size.height.round().max(1.0);
 
     Rect::new(x, y, width, height)
+}
+
+fn app_library_item() -> AppInfo {
+    AppInfo {
+        root: PathBuf::new(),
+        name: String::from("App Library"),
+        bundle_id: String::from(APP_LIBRARY_BUNDLE_ID),
+        version: String::new(),
+        developer: String::new(),
+        entry: String::new(),
+        description: String::new(),
+        icon: None,
+        resources: Vec::new(),
+    }
 }

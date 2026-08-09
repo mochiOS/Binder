@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::dock_preferences::DockPreferences;
 use crate::platform::{self, AppInfo, ContextMenuModel, DesktopPlatform, SystemBarState};
 use crate::window::{DesktopWindows, WindowDrag, WindowId};
 use viewkit::prelude::*;
@@ -19,6 +20,8 @@ pub struct BinderApp {
     dock_pressed_app: Rc<Cell<Option<usize>>>,
     dock_pointer: Rc<Cell<Option<Point>>>,
     dock_running_apps: State<Vec<String>>,
+    dock_preferences: State<DockPreferences>,
+    app_library_open: State<bool>,
     cursor_pointer: Rc<Cell<Option<Point>>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, crate::ui::test::TestWindowState>>>,
     launch_failure_states:
@@ -69,6 +72,8 @@ impl App for BinderApp {
             dock_pressed_app: Rc::new(Cell::new(None)),
             dock_pointer: Rc::new(Cell::new(None)),
             dock_running_apps: State::new(Vec::new()),
+            dock_preferences: State::new(DockPreferences::load()),
+            app_library_open: State::new(false),
             cursor_pointer: Rc::new(Cell::new(None)),
             test_window_states: Rc::new(RefCell::new(HashMap::new())),
             launch_failure_states: Rc::new(RefCell::new(HashMap::new())),
@@ -107,6 +112,8 @@ impl App for BinderApp {
             Rc::clone(&self.dock_pressed_app),
             Rc::clone(&self.dock_pointer),
             self.dock_running_apps.clone(),
+            self.dock_preferences.clone(),
+            self.app_library_open.clone(),
             Rc::clone(&self.cursor_pointer),
             Rc::clone(&self.test_window_states),
             Rc::clone(&self.launch_failure_states),

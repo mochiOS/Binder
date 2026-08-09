@@ -1,4 +1,5 @@
 pub(crate) mod about;
+pub(crate) mod app_library;
 pub(crate) mod context_menu;
 pub(crate) mod cursor;
 pub(crate) mod desktop;

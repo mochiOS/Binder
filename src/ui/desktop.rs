@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use super::{dock, top_bar};
 
 use crate::desktop::WindowResize;
+use crate::dock_preferences::DockPreferences;
 
 use crate::platform::ContextMenuModel;
 use crate::platform::{AppInfo, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState};
@@ -36,6 +37,8 @@ pub(crate) fn view(
     dock_pressed: Rc<Cell<Option<usize>>>,
     dock_pointer: Rc<Cell<Option<Point>>>,
     dock_running_apps: State<Vec<String>>,
+    dock_preferences: State<DockPreferences>,
+    app_library_open: State<bool>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, super::test::TestWindowState>>>,
     launch_failure_states: Rc<
@@ -91,22 +94,33 @@ pub(crate) fn view(
         windowed_desktop,
         Rc::clone(&platform),
         windows.clone(),
-        apps,
+        apps.clone(),
         dock_hovered,
         dock_pressed,
         dock_pointer,
         dock_running_apps,
-        launch_failure_states,
+        dock_preferences.clone(),
+        app_library_open.clone(),
+        Rc::clone(&launch_failure_states),
     );
 
     let menu = super::menu::view(
         Rc::clone(&platform),
         menu_open.clone(),
-        windows,
+        windows.clone(),
         session_user,
     );
 
-    let root = super::popup_menu::PopupMenu::new(docked_desktop, menu, menu_open);
+    let root = super::app_library::AppLibraryLayer::new(
+        docked_desktop,
+        Rc::clone(&platform),
+        windows.clone(),
+        apps,
+        dock_preferences,
+        app_library_open,
+        launch_failure_states,
+    );
+    let root = super::popup_menu::PopupMenu::new(root, menu, menu_open);
     let root = super::context_menu::ContextMenuLayer::new(root, Rc::clone(&platform), context_menu);
 
     #[cfg(target_os = "mochios")]
