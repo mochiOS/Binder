@@ -3,7 +3,11 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-const DEFAULT_PINNED: [&str; 2] = ["org.mochios.files", "org.mochios.terminal"];
+const DEFAULT_PINNED: [&str; 3] = [
+    "org.mochios.files",
+    "org.mochios.terminal",
+    "org.mochios.settings",
+];
 
 #[cfg(target_os = "mochios")]
 const CONFIG_PATH: &str = "/libraries/applications/org.mochios.binder/dock.conf";
@@ -122,10 +126,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_pins_files_before_terminal() {
+    fn default_pins_files_terminal_and_settings_in_order() {
         assert_eq!(
             DockPreferences::default().pinned(),
-            ["org.mochios.files", "org.mochios.terminal"]
+            [
+                "org.mochios.files",
+                "org.mochios.terminal",
+                "org.mochios.settings"
+            ]
         );
     }
 
@@ -144,12 +152,16 @@ mod tests {
     fn pin_unpin_and_reorder_are_stable() {
         let mut preferences = DockPreferences::default();
         assert!(preferences.pin("org.mochios.viewkit-test"));
-        assert!(preferences.move_pin(2, 0));
+        assert!(preferences.move_pin(3, 0));
         assert!(preferences.move_pin_bundle("org.mochios.viewkit-test", "org.mochios.files"));
         assert!(preferences.unpin("org.mochios.terminal"));
         assert_eq!(
             preferences.pinned(),
-            ["org.mochios.files", "org.mochios.viewkit-test"]
+            [
+                "org.mochios.files",
+                "org.mochios.viewkit-test",
+                "org.mochios.settings"
+            ]
         );
     }
 }
