@@ -395,6 +395,21 @@ impl DesktopPlatform for MochiOsPlatform {
         Ok(self.system_bar.clone())
     }
 
+    fn reload_appearance(&mut self) -> Result<bool, PlatformError> {
+        #[cfg(target_os = "mochios")]
+        {
+            self._desktop_background = crate::ui::wallpaper::Wallpaper::load_default_image()
+                .and_then(|image| {
+                    viewkit::platform::mochios::DesktopBackground::from_image(image).ok()
+                });
+            return Ok(true);
+        }
+        #[cfg(not(target_os = "mochios"))]
+        {
+            Ok(false)
+        }
+    }
+
     fn open_system_settings(&self) -> Result<(), PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }

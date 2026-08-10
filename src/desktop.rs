@@ -126,4 +126,8 @@ impl App for BinderApp {
     fn handle_platform_message(&mut self, message: &[u8]) -> bool {
         self.platform.borrow_mut().handle_platform_message(message)
     }
+
+    fn appearance_changed(&mut self) {
+        let _ = self.platform.borrow_mut().reload_appearance();
+    }
 }

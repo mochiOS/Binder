@@ -226,6 +226,10 @@ pub trait DesktopPlatform {
         false
     }
 
+    fn reload_appearance(&mut self) -> Result<bool, PlatformError> {
+        Ok(false)
+    }
+
     fn refresh(&mut self) -> Result<bool, PlatformError>;
 
     fn get_apps(&self) -> Vec<AppInfo> {
