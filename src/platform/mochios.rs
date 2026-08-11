@@ -33,6 +33,10 @@ const PROCESS_RECORD_SIZE: usize = 88;
 #[cfg(target_os = "mochios")]
 const MAX_PROCESS_RECORDS: usize = 256;
 const PROCESS_STATE_TERMINATED: u64 = 4;
+#[cfg(target_os = "mochios")]
+const LINUX_SERVICE_NAME: &str = "linux.service";
+#[cfg(target_os = "mochios")]
+const LINUX_XTERM_ENTRY: &str = "linux:xterm";
 
 #[allow(unused)]
 pub struct MochiOsPlatform {
@@ -563,6 +567,10 @@ impl DesktopPlatform for MochiOsPlatform {
 
     fn launch_app(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
         match app.entry.as_str() {
+            #[cfg(target_os = "mochios")]
+            LINUX_XTERM_ENTRY => {
+                launch_linux_application(mochios_linux_gui_protocol::LinuxApplication::XTerm)
+            }
             apps::ABOUT_ENTRY | apps::TEST_ENTRY => {
                 self.launch_internal_renderer(&app.entry, app.bundle_id.clone())
             }
@@ -784,7 +792,70 @@ fn applications_root() -> PathBuf {
 }
 
 fn read_apps() -> Vec<AppInfo> {
-    read_apps_from(&applications_root())
+    let mut apps = read_apps_from(&applications_root());
+    #[cfg(target_os = "mochios")]
+    apps.push(AppInfo {
+        root: applications_root(),
+        name: String::from("XTerm (Linux)"),
+        bundle_id: String::from("org.mochios.linux.xterm"),
+        version: String::from("1"),
+        developer: String::from("X.Org"),
+        entry: String::from(LINUX_XTERM_ENTRY),
+        description: String::from("Linux X11 terminal hosted by mBoot"),
+        icon: None,
+        resources: Vec::new(),
+    });
+    apps.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.bundle_id.cmp(&right.bundle_id))
+    });
+    apps
+}
+
+#[cfg(target_os = "mochios")]
+fn launch_linux_application(
+    application: mochios_linux_gui_protocol::LinuxApplication,
+) -> Result<ProcessId, PlatformError> {
+    use mochios_linux_gui_protocol::{
+        LAUNCH_REQUEST_LEN, LAUNCH_RESPONSE_LEN, LaunchRequest, LaunchResponse,
+    };
+
+    let service = mochi_user_platform::process::find_by_name(LINUX_SERVICE_NAME)
+        .map_err(|_| PlatformError::ServiceUnavailable)?;
+    if service == 0 {
+        return Err(PlatformError::ServiceUnavailable);
+    }
+    let request_id = mochi_user_platform::time::ticks().unwrap_or(1).max(1);
+    let request = LaunchRequest {
+        request_id,
+        application,
+    };
+    let mut encoded = [0u8; LAUNCH_REQUEST_LEN];
+    request
+        .encode(&mut encoded)
+        .map_err(|_| PlatformError::InvalidResponse)?;
+    let mut response = [0u8; LAUNCH_RESPONSE_LEN];
+    let raw = mochi_user_platform::ipc::call(service, &encoded, &mut response)
+        .map_err(|_| PlatformError::TransportFailure)?;
+    let length = raw as u32 as usize;
+    let response = LaunchResponse::decode(
+        response
+            .get(..length)
+            .ok_or(PlatformError::InvalidResponse)?,
+    )
+    .map_err(|_| PlatformError::InvalidResponse)?;
+    if response.request_id != request_id {
+        return Err(PlatformError::InvalidResponse);
+    }
+    if response.status != 0 {
+        return Err(PlatformError::ProcessLaunchRejected {
+            errno: u64::from(response.status.unsigned_abs()),
+        });
+    }
+    let process_id =
+        u32::try_from(response.instance).map_err(|_| PlatformError::InvalidResponse)?;
+    Ok(ProcessId(process_id))
 }
 
 fn read_apps_from(root: &Path) -> Vec<AppInfo> {

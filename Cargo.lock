@@ -84,6 +84,7 @@ dependencies = [
  "libc",
  "mochi-user-platform",
  "mochi-user-syscall 0.1.0",
+ "mochios-linux-gui-protocol",
  "viewkit",
 ]
 
@@ -808,6 +809,10 @@ dependencies = [
 name = "mochios-capability-protocol"
 version = "0.1.0"
 source = "git+https://github.com/mochiOS/syscalls#a198c188b5490b5d7874a5100083b5c247c428fb"
+
+[[package]]
+name = "mochios-linux-gui-protocol"
+version = "0.1.0"
 
 [[package]]
 name = "moxcms"
