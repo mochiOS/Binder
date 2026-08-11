@@ -25,4 +25,4 @@ libc = "0.2"
 [target.'cfg(target_os = "mochios")'.dependencies]
 mochi-user-platform = { git = "https://github.com/mochiOS/syscalls", package = "mochi-user-platform", default-features = false, features = ["std"] }
 mochi-user-syscall = { git = "https://github.com/mochiOS/syscalls", package = "mochi-user-syscall" }
-mochios-linux-gui-protocol = { git = "https://github.com/mochiOS/syscalls", rev = "62028feef0ea1720c777a338a22e28140fb57876", package = "mochios-linux-gui-protocol" }
+mochios-linux-gui-protocol = { git = "https://github.com/mochiOS/syscalls", rev = "814cb3f1f5e0dab5fc199f1de5a443bd61fe566e", package = "mochios-linux-gui-protocol" }
