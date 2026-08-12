@@ -277,6 +277,35 @@ impl MochiOsPlatform {
         );
         Ok(process_id)
     }
+
+    #[cfg(target_os = "mochios")]
+    fn launch_linux_bundle(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
+        if let Some(process_id) = self.process_for_bundle(&app.bundle_id) {
+            return Ok(process_id);
+        }
+        let declared = app
+            .entry
+            .strip_prefix("linux:")
+            .filter(|declared| *declared == app.bundle_id)
+            .ok_or(PlatformError::ProcessLaunchFailed)?;
+        let user = std::env::var("USER")
+            .ok()
+            .filter(|user| !user.is_empty())
+            .ok_or(PlatformError::ProcessLaunchFailed)?;
+        let instance = launch_linux_bundle(declared, &user)?;
+        let process_id = self.next_process_id();
+        self.children.insert(
+            process_id,
+            ManagedApp {
+                bundle_id: app.bundle_id.clone(),
+                child: None,
+                windows: HashSet::new(),
+                track_kernel_lifecycle: false,
+                linux_instance: Some(instance),
+            },
+        );
+        Ok(process_id)
+    }
 }
 
 fn decode_live_process_ids(buffer: &[u8], record_count: usize) -> HashSet<ProcessId> {
@@ -655,6 +684,8 @@ impl DesktopPlatform for MochiOsPlatform {
             LINUX_XCLOCK_ENTRY => {
                 self.launch_linux_entry(app, mochios_linux_gui_protocol::LinuxApplication::XClock)
             }
+            #[cfg(target_os = "mochios")]
+            entry if entry.starts_with("linux:") => self.launch_linux_bundle(app),
             apps::ABOUT_ENTRY | apps::TEST_ENTRY => {
                 self.launch_internal_renderer(&app.entry, app.bundle_id.clone())
             }
@@ -963,6 +994,43 @@ fn launch_linux_application(
     }
     if response.instance == 0 {
         return Err(PlatformError::InvalidResponse);
+    }
+    Ok(response.instance)
+}
+
+#[cfg(target_os = "mochios")]
+fn launch_linux_bundle(bundle_id: &str, user: &str) -> Result<u64, PlatformError> {
+    use mochios_linux_gui_protocol::{
+        BundleLaunchRequest, BundleLaunchResponse, LAUNCH_RESPONSE_LEN, MAX_BUNDLE_ID_LEN,
+    };
+
+    let service = mochi_user_platform::process::find_by_name(LINUX_SERVICE_NAME)
+        .map_err(|_| PlatformError::ServiceUnavailable)?;
+    if service == 0 || bundle_id.len() > MAX_BUNDLE_ID_LEN {
+        return Err(PlatformError::ServiceUnavailable);
+    }
+    let request_id = mochi_user_platform::time::ticks().unwrap_or(1).max(1);
+    let request = BundleLaunchRequest {
+        request_id,
+        bundle_id,
+        user,
+    };
+    let mut encoded = [0u8; 256];
+    let length = request
+        .encode(&mut encoded)
+        .map_err(|_| PlatformError::InvalidResponse)?;
+    let mut response = [0u8; LAUNCH_RESPONSE_LEN];
+    let raw = mochi_user_platform::ipc::call(service, &encoded[..length], &mut response)
+        .map_err(|_| PlatformError::TransportFailure)?;
+    let length = raw as u32 as usize;
+    let response = BundleLaunchResponse::decode(
+        response
+            .get(..length)
+            .ok_or(PlatformError::InvalidResponse)?,
+    )
+    .map_err(|_| PlatformError::InvalidResponse)?;
+    if response.request_id != request_id || response.status != 0 || response.instance == 0 {
+        return Err(PlatformError::ProcessLaunchFailed);
     }
     Ok(response.instance)
 }
