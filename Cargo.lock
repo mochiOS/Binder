@@ -2415,6 +2415,10 @@ name = "viewkit"
 version = "1.0.1"
 
 [[patch.unused]]
+name = "mochios-linux-portal-protocol"
+version = "0.1.0"
+
+[[patch.unused]]
 name = "mochios-tls-client"
 version = "0.1.0"
 
