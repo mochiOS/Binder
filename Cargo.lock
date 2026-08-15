@@ -2429,3 +2429,7 @@ version = "0.1.0"
 [[patch.unused]]
 name = "mochios-user-protocol"
 version = "0.1.0"
+
+[[patch.unused]]
+name = "mochios-viewkit-gpu-protocol"
+version = "0.1.0"
