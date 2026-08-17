@@ -14,10 +14,10 @@ const CURSOR_SVG_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../resources/system/icons/cursor.svg"
 ));
-const CURSOR_WIDTH: f32 = 12.0;
-const CURSOR_HEIGHT: f32 = 20.0;
+const CURSOR_WIDTH: f32 = 24.0;
+const CURSOR_HEIGHT: f32 = 41.0;
 const CURSOR_HOTSPOT_X: f32 = 1.0;
-const CURSOR_HOTSPOT_Y: f32 = 1.0;
+const CURSOR_HOTSPOT_Y: f32 = 2.0;
 
 pub(crate) struct CursorLayer<C> {
     content: C,
