@@ -2,10 +2,11 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Instant;
 
 use crate::dock_preferences::DockPreferences;
 use crate::platform::{AppInfo, DesktopPlatform};
-use crate::window::{DesktopWindows, ProcessActivation};
+use crate::window::DesktopWindows;
 use viewkit::{
     draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
@@ -27,7 +28,6 @@ const SEARCH_HEIGHT: f32 = 38.0;
 const PAGE_BUTTON_SIZE: f32 = 30.0;
 const MENU_WIDTH: f32 = 190.0;
 const MENU_HEIGHT: f32 = 80.0;
-const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 
 #[cfg(target_os = "mochios")]
 const FALLBACK_APP_ICON: &str = "/applications/Binder.app/appicon.svg";
@@ -48,6 +48,36 @@ enum MenuAction {
     Unpin,
 }
 
+#[derive(Default)]
+pub(crate) struct PendingAppActivation {
+    app: Option<AppInfo>,
+    closed_frame_drawn: bool,
+}
+
+impl PendingAppActivation {
+    fn queue(&mut self, app: AppInfo) {
+        self.app = Some(app);
+        self.closed_frame_drawn = false;
+    }
+
+    fn advance(&mut self) -> PendingActivationStep {
+        if self.app.is_none() {
+            return PendingActivationStep::Idle;
+        }
+        if !self.closed_frame_drawn {
+            self.closed_frame_drawn = true;
+            return PendingActivationStep::PresentClosedFrame;
+        }
+        PendingActivationStep::Launch(self.app.take().unwrap())
+    }
+}
+
+enum PendingActivationStep {
+    Idle,
+    PresentClosedFrame,
+    Launch(AppInfo),
+}
+
 pub(crate) struct AppLibraryLayer<C> {
     content: C,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
@@ -55,6 +85,7 @@ pub(crate) struct AppLibraryLayer<C> {
     apps: State<Vec<AppInfo>>,
     preferences: State<DockPreferences>,
     open: State<bool>,
+    pending_activation: Rc<RefCell<PendingAppActivation>>,
     launch_failure_states: Rc<
         RefCell<HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>>,
     >,
@@ -83,6 +114,7 @@ where
         apps: State<Vec<AppInfo>>,
         preferences: State<DockPreferences>,
         open: State<bool>,
+        pending_activation: Rc<RefCell<PendingAppActivation>>,
         launch_failure_states: Rc<
             RefCell<
                 HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>,
@@ -101,6 +133,7 @@ where
             apps,
             preferences,
             open,
+            pending_activation,
             launch_failure_states,
             hovered: Cell::new(None),
             pressed: Cell::new(None),
@@ -319,10 +352,13 @@ where
     }
 
     fn activate(&self, app: &AppInfo, context: &mut EventContext<'_>) {
-        let before = self.visible_windows_damage();
+        self.pending_activation.borrow_mut().queue(app.clone());
         self.open.set(false);
         self.close_menu();
         context.request_redraw();
+    }
+
+    fn perform_activation(&self, app: &AppInfo) {
         let running_process = self.platform.borrow().process_id_for_bundle(&app.bundle_id);
         let process_id = match running_process {
             Some(process_id) => process_id,
@@ -340,31 +376,27 @@ where
                             .borrow_mut()
                             .insert(window_id, state);
                     }
-                    context.request_redraw_in(bounds_for_damage(
-                        before,
-                        self.visible_windows_damage(),
-                    ));
                     return;
                 }
             },
         };
-        let mut activation = ProcessActivation::NoWindow;
-        self.windows
-            .update(|desktop| activation = desktop.activate_process(process_id));
-        let after = self.visible_windows_damage();
-        if activation.changed_window_state() || before != after {
-            context.request_redraw_in(bounds_for_damage(before, after));
-        }
+        self.windows.update(|desktop| {
+            desktop.activate_process(process_id);
+        });
     }
 
-    fn visible_windows_damage(&self) -> Option<Rect> {
-        self.windows
-            .get()
-            .windows
-            .iter()
-            .filter(|window| !window.minimized)
-            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
-            .reduce(Rect::union)
+    fn advance_pending_activation(&self, context: &mut PaintContext<'_>) {
+        let step = self.pending_activation.borrow_mut().advance();
+        match step {
+            PendingActivationStep::Idle => {}
+            PendingActivationStep::PresentClosedFrame => {
+                context.request_redraw_at(Instant::now());
+            }
+            PendingActivationStep::Launch(app) => {
+                self.perform_activation(&app);
+                context.request_redraw_at(Instant::now());
+            }
+        }
     }
 
     fn load_icon(&self, path: &Path) -> CachedIcon {
@@ -413,6 +445,7 @@ where
         self.content.paint(bounds, context);
         if !self.open.get() {
             self.was_open.set(false);
+            self.advance_pending_activation(context);
             return;
         }
         self.ensure_open_session();
@@ -784,14 +817,6 @@ where
     }
 }
 
-fn bounds_for_damage(before: Option<Rect>, after: Option<Rect>) -> Rect {
-    match (before, after) {
-        (Some(before), Some(after)) => before.union(after),
-        (Some(bounds), None) | (None, Some(bounds)) => bounds,
-        (None, None) => Rect::new(0.0, 0.0, 1.0, 1.0),
-    }
-}
-
 fn matching_app_indices(apps: &[AppInfo], query: &str) -> Vec<usize> {
     let query = query.trim().to_lowercase();
     apps.iter()
@@ -867,5 +892,22 @@ mod tests {
         assert_eq!(adjacent_selection(&filtered, Some(5), -1), Some(2));
         assert_eq!(adjacent_selection(&filtered, Some(9), 1), Some(9));
         assert_eq!(adjacent_selection(&[], None, 1), None);
+    }
+
+    #[test]
+    fn pending_activation_waits_for_a_closed_frame_before_launching() {
+        let expected = app("Terminal", "org.mochios.terminal", "mochiOS");
+        let mut pending = PendingAppActivation::default();
+        assert!(matches!(pending.advance(), PendingActivationStep::Idle));
+        pending.queue(expected.clone());
+        assert!(matches!(
+            pending.advance(),
+            PendingActivationStep::PresentClosedFrame
+        ));
+        let PendingActivationStep::Launch(actual) = pending.advance() else {
+            panic!("activation did not advance after the closed frame");
+        };
+        assert_eq!(actual, expected);
+        assert!(matches!(pending.advance(), PendingActivationStep::Idle));
     }
 }

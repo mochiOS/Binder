@@ -37,6 +37,7 @@ pub(crate) fn view(
     dock_running_apps: State<Vec<String>>,
     dock_preferences: State<DockPreferences>,
     app_library_open: State<bool>,
+    pending_app_activation: Rc<RefCell<super::app_library::PendingAppActivation>>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, super::test::TestWindowState>>>,
     launch_failure_states: Rc<
@@ -116,6 +117,7 @@ pub(crate) fn view(
         apps,
         dock_preferences,
         app_library_open,
+        pending_app_activation,
         launch_failure_states,
     );
     let root = super::popup_menu::PopupMenu::new(root, menu, menu_open);
