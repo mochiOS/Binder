@@ -320,6 +320,9 @@ where
 
     fn activate(&self, app: &AppInfo, context: &mut EventContext<'_>) {
         let before = self.visible_windows_damage();
+        self.open.set(false);
+        self.close_menu();
+        context.request_redraw();
         let running_process = self.platform.borrow().process_id_for_bundle(&app.bundle_id);
         let process_id = match running_process {
             Some(process_id) => process_id,
@@ -337,7 +340,6 @@ where
                             .borrow_mut()
                             .insert(window_id, state);
                     }
-                    self.open.set(false);
                     context.request_redraw_in(bounds_for_damage(
                         before,
                         self.visible_windows_damage(),
@@ -353,7 +355,6 @@ where
         if activation.changed_window_state() || before != after {
             context.request_redraw_in(bounds_for_damage(before, after));
         }
-        self.open.set(false);
     }
 
     fn visible_windows_damage(&self) -> Option<Rect> {
@@ -737,20 +738,22 @@ where
                 } else {
                     self.pressed.set(self.hit_index(panel, *position));
                     self.selected.set(self.pressed.get());
-                    context.request_redraw_in(panel);
+                    let app = self
+                        .pressed
+                        .get()
+                        .and_then(|index| self.apps.get().get(index).cloned());
+                    if let Some(app) = app {
+                        self.activate(&app, context);
+                    } else {
+                        context.request_redraw_in(panel);
+                    }
                 }
             }
             ViewEvent::PointerReleased {
-                position,
+                position: _,
                 button: PointerButton::Primary,
             } => {
-                let pressed = self.pressed.replace(None);
-                let hit = self.hit_index(panel, *position);
-                if pressed == hit
-                    && let Some(app) = hit.and_then(|index| self.apps.get().get(index).cloned())
-                {
-                    self.activate(&app, context);
-                }
+                self.pressed.set(None);
                 context.request_redraw_in(bounds);
             }
             ViewEvent::PointerPressed {
