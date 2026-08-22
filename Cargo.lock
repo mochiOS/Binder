@@ -83,7 +83,7 @@ dependencies = [
  "binder_client",
  "libc",
  "mochi-user-platform",
- "mochi-user-syscall 0.1.0",
+ "mochi-user-syscall 0.1.0 (git+https://github.com/mochiOS/syscalls)",
  "mochios-linux-gui-protocol",
  "viewkit",
 ]
@@ -773,27 +773,22 @@ dependencies = [
 [[package]]
 name = "mnu-abi"
 version = "0.1.0"
-
-[[package]]
-name = "mnu-abi"
-version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "522a13d1239f1c600ea0cb0c871d48a98986ba36d5802417fe37c177a1245324"
 
 [[package]]
-name = "mochi-user-platform"
+name = "mnu-abi"
 version = "0.1.0"
-dependencies = [
- "mnu-abi 0.1.0",
- "mochi-user-syscall 0.1.0",
- "mochios-capability-protocol",
-]
+source = "git+https://github.com/mochiOS/mnu#6482d7ddc13e272f9b56fe99e0f98a2080130c72"
 
 [[package]]
-name = "mochi-user-syscall"
+name = "mochi-user-platform"
 version = "0.1.0"
+source = "git+https://github.com/mochiOS/syscalls#a0f3d099705c5cc9c1474e3e7f68c36a481e6148"
 dependencies = [
- "mnu-abi 0.1.0",
+ "mnu-abi 0.1.0 (git+https://github.com/mochiOS/mnu)",
+ "mochi-user-syscall 0.1.0 (git+https://github.com/mochiOS/syscalls)",
+ "mochios-capability-protocol",
 ]
 
 [[package]]
@@ -806,13 +801,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mochi-user-syscall"
+version = "0.1.0"
+source = "git+https://github.com/mochiOS/syscalls#a0f3d099705c5cc9c1474e3e7f68c36a481e6148"
+dependencies = [
+ "mnu-abi 0.1.0 (git+https://github.com/mochiOS/mnu)",
+]
+
+[[package]]
 name = "mochios-capability-protocol"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/syscalls#a198c188b5490b5d7874a5100083b5c247c428fb"
+source = "git+https://github.com/mochiOS/syscalls#a0f3d099705c5cc9c1474e3e7f68c36a481e6148"
 
 [[package]]
 name = "mochios-linux-gui-protocol"
 version = "0.1.0"
+source = "git+https://github.com/mochiOS/syscalls?rev=814cb3f1f5e0dab5fc199f1de5a443bd61fe566e#814cb3f1f5e0dab5fc199f1de5a443bd61fe566e"
 
 [[package]]
 name = "moxcms"
@@ -2385,59 +2389,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "mboot-protocol"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "viewkit"
-version = "1.0.1"
-
-[[patch.unused]]
-name = "libc"
-version = "0.2.185"
-
-[[patch.unused]]
-name = "rustc-std-workspace-alloc"
-version = "1.99.0"
-
-[[patch.unused]]
-name = "rustc-std-workspace-core"
-version = "1.99.0"
-
-[[patch.unused]]
-name = "rustc-std-workspace-std"
-version = "1.99.0"
-
-[[patch.unused]]
-name = "viewkit"
-version = "1.0.1"
-
-[[patch.unused]]
-name = "mochios-linux-portal-protocol"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-signature-protocol"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-tls-client"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-user-database"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-user-protocol"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-viewkit-gpu-protocol"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-virtio-gpu-protocol"
-version = "0.1.0"

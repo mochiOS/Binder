@@ -11,18 +11,6 @@ pub(crate) const CONTROL_WIDTH: f32 = 44.0;
 pub(crate) const CONTROL_COUNT: f32 = 3.0;
 pub(crate) const CONTROLS_WIDTH: f32 = CONTROL_WIDTH * CONTROL_COUNT;
 
-const TITLE_BAR_BACKGROUND: Color = Color::rgba(255, 255, 255, 245);
-
-const TITLE_BAR_BORDER: Color = Color::rgba(0, 0, 0, 26);
-
-const TITLE_COLOR: Color = Color::from_rgb_hex(0x171717);
-
-const CONTROL_COLOR: Color = Color::from_rgb_hex(0x202020);
-
-const CONTROL_HOVER_BACKGROUND: Color = Color::rgba(0, 0, 0, 17);
-
-const CLOSE_HOVER_BACKGROUND: Color = Color::from_rgb_hex(0xE81123);
-
 pub(crate) struct WindowDecoration {
     title: String,
     interaction: WindowInteraction,
@@ -54,21 +42,21 @@ impl WindowDecoration {
         context: &mut PaintContext<'_>,
     ) {
         let background = if close && pressed {
-            Color::from_rgb_hex(0xC50F1F)
+            Theme::current().shell.close_pressed
         } else if close && hovered {
-            CLOSE_HOVER_BACKGROUND
+            Theme::current().shell.close_hover
         } else if pressed {
-            Color::rgba(0, 0, 0, 26)
+            Theme::current().shell.title_bar_border
         } else if hovered {
-            CONTROL_HOVER_BACKGROUND
+            Theme::current().shell.control_hover
         } else {
             Color::TRANSPARENT
         };
 
         let foreground = if close && (hovered || pressed) {
-            Color::WHITE
+            Theme::current().shell.inverse_text
         } else {
-            CONTROL_COLOR
+            Theme::current().shell.control
         };
 
         Rectangle::new()
@@ -94,7 +82,9 @@ impl View for WindowDecoration {
 
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         Rectangle::new()
-            .color(RectangleColor::Custom(TITLE_BAR_BACKGROUND))
+            .color(RectangleColor::Custom(
+                Theme::current().shell.title_bar_background,
+            ))
             .radius(CornerRadius::None)
             .paint(bounds, context);
 
@@ -106,14 +96,16 @@ impl View for WindowDecoration {
         );
 
         Rectangle::new()
-            .color(RectangleColor::Custom(TITLE_BAR_BORDER))
+            .color(RectangleColor::Custom(
+                Theme::current().shell.title_bar_border,
+            ))
             .paint(border_bounds, context);
 
         Text::new(self.title.clone())
             .font_size(12.0)
             .line_height(18.0)
             .alignment(TextAlignment::Center)
-            .color(TITLE_COLOR)
+            .color(Theme::current().shell.primary_text)
             .paint(
                 Rect::new(
                     bounds.origin.x,

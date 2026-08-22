@@ -1,7 +1,6 @@
 use super::{about, launch_failure, test, window_decoration};
 use crate::apps;
 use crate::window::DesktopWindow;
-use viewkit::theme::{Shadow, ShadowSet};
 use viewkit::{
     draw_command::DrawCommand,
     event::{EventContext, EventResult, ViewEvent},
@@ -10,17 +9,6 @@ use viewkit::{
 };
 
 pub(crate) const WINDOW_CORNER_RADIUS: f32 = 14.0;
-const WINDOW_BACKGROUND: Color = Color::rgba(250, 250, 250, 235);
-const WINDOW_BORDER: Color = Color::rgba(0, 0, 0, 31);
-
-const INACTIVE_WINDOW_SHADOW: ShadowSet =
-    ShadowSet::single(Shadow::new(Color::rgba(0, 0, 0, 8), 0.0, 2.0, 5.0, 1.0));
-
-const ACTIVE_WINDOW_SHADOW: ShadowSet = ShadowSet::double(
-    Shadow::new(Color::rgba(0, 0, 0, 20), 0.0, 2.0, 5.0, 0.0),
-    Shadow::new(Color::rgba(0, 0, 0, 28), 0.0, 5.0, 14.0, 0.0),
-);
-
 struct WindowView {
     decoration: window_decoration::WindowDecoration,
     content: Box<dyn View + 'static>,
@@ -81,7 +69,9 @@ impl View for WindowView {
         });
 
         Rectangle::new()
-            .color(RectangleColor::Custom(WINDOW_BACKGROUND))
+            .color(RectangleColor::Custom(
+                Theme::current().shell.window_background,
+            ))
             .paint(bounds, context);
 
         self.decoration
@@ -95,7 +85,10 @@ impl View for WindowView {
             Rectangle::new()
                 .color(RectangleColor::Custom(Color::TRANSPARENT))
                 .radius(CornerRadius::Custom(WINDOW_CORNER_RADIUS))
-                .border(BorderStyle::custom(WINDOW_BORDER, 1.0))
+                .border(BorderStyle::custom(
+                    Theme::current().shell.window_border,
+                    1.0,
+                ))
                 .paint(bounds, context);
         }
     }
@@ -146,9 +139,9 @@ pub(crate) fn view(
         content,
 
         shadow: if focused {
-            ShadowStyle::Custom(ACTIVE_WINDOW_SHADOW)
+            ShadowStyle::Custom(Theme::current().shell.active_window_shadow)
         } else {
-            ShadowStyle::Custom(INACTIVE_WINDOW_SHADOW)
+            ShadowStyle::Custom(Theme::current().shell.inactive_window_shadow)
         },
         focused,
     }
@@ -213,13 +206,13 @@ fn remote_placeholder_view() -> impl View + 'static {
                 .line_height(32.0)
                 .weight(750)
                 .alignment(TextAlignment::Center)
-                .color(Color::from_rgb_hex(0x202020)),
+                .color(Theme::current().shell.control),
         )
         .child(
             Text::new("No compositor surface attached")
                 .font_size(13.0)
                 .line_height(18.0)
                 .alignment(TextAlignment::Center)
-                .color(Color::rgba(60, 60, 60, 170)),
+                .color(Theme::current().shell.tertiary_text),
         )
 }

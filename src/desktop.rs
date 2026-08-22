@@ -59,7 +59,6 @@ impl App for BinderApp {
         let platform = platform::current(context_menu.clone());
         let system_bar = platform.borrow().system_bar_state().unwrap_or_default();
         let apps = platform.borrow().get_apps();
-
         Self {
             platform,
             system_bar: State::new(system_bar),

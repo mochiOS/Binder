@@ -11,7 +11,6 @@ use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
     prelude::*,
-    theme::{Shadow, ShadowSet},
     view::{Constraints, MeasureContext, PaintContext},
 };
 
@@ -35,9 +34,6 @@ const FALLBACK_APP_ICON: &str = "/applications/Binder.app/appicon.svg";
 
 #[cfg(not(target_os = "mochios"))]
 const FALLBACK_APP_ICON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/appicon.svg");
-
-const PANEL_SHADOW: ShadowSet =
-    ShadowSet::single(Shadow::new(Color::rgba(0, 0, 0, 44), 0.0, 12.0, 32.0, 0.0));
 
 #[derive(Clone)]
 enum CachedIcon {
@@ -420,14 +416,19 @@ where
         }
         self.ensure_open_session();
         Rectangle::new()
-            .color(RectangleColor::Custom(Color::rgba(0, 0, 0, 72)))
+            .color(RectangleColor::Custom(Theme::current().shell.scrim))
             .paint(bounds, context);
         let panel = Self::panel_rect(bounds);
         Rectangle::new()
-            .color(RectangleColor::Custom(Color::rgba(247, 247, 249, 246)))
+            .color(RectangleColor::Custom(
+                Theme::current().shell.panel_background,
+            ))
             .radius(CornerRadius::Custom(22.0))
-            .shadow(ShadowStyle::Custom(PANEL_SHADOW))
-            .border(BorderStyle::custom(Color::rgba(255, 255, 255, 180), 1.0))
+            .shadow(ShadowStyle::Custom(Theme::current().shell.panel_shadow))
+            .border(BorderStyle::custom(
+                Theme::current().shell.panel_border,
+                1.0,
+            ))
             .paint(panel, context);
         Text::new("Applications")
             .font_size(24.0)
@@ -439,9 +440,14 @@ where
             );
         let search = Self::search_rect(panel);
         Rectangle::new()
-            .color(RectangleColor::Custom(Color::rgba(255, 255, 255, 232)))
+            .color(RectangleColor::Custom(
+                Theme::current().shell.field_background,
+            ))
             .radius(CornerRadius::Custom(11.0))
-            .border(BorderStyle::custom(Color::rgba(0, 0, 0, 30), 1.0))
+            .border(BorderStyle::custom(
+                Theme::current().shell.field_border,
+                1.0,
+            ))
             .paint(search, context);
         let query = self.query.borrow().clone();
         Text::new(if query.is_empty() {
@@ -452,9 +458,9 @@ where
         .font_size(13.0)
         .line_height(20.0)
         .color(if self.query.borrow().is_empty() {
-            Color::rgba(70, 70, 74, 150)
+            Theme::current().shell.tertiary_text.with_alpha(150)
         } else {
-            Color::from_rgb_hex(0x1d1d1f)
+            Theme::current().shell.primary_text
         })
         .paint(
             Rect::new(
@@ -477,14 +483,19 @@ where
             let item = Self::item_rect(panel, local_index);
             if self.selected.get() == Some(app_index) {
                 Rectangle::new()
-                    .color(RectangleColor::Custom(Color::rgba(0, 122, 255, 28)))
+                    .color(RectangleColor::Custom(
+                        Theme::current().shell.selection_soft,
+                    ))
                     .radius(CornerRadius::Custom(14.0))
-                    .border(BorderStyle::custom(Color::rgba(0, 122, 255, 72), 1.0))
+                    .border(BorderStyle::custom(
+                        Theme::current().shell.selection_border,
+                        1.0,
+                    ))
                     .paint(item, context);
             } else if self.hovered.get() == Some(app_index) || self.pressed.get() == Some(app_index)
             {
                 Rectangle::new()
-                    .color(RectangleColor::Custom(Color::rgba(0, 0, 0, 12)))
+                    .color(RectangleColor::Custom(Theme::current().shell.item_hover))
                     .radius(CornerRadius::Custom(14.0))
                     .paint(item, context);
             }
@@ -515,7 +526,7 @@ where
                 .font_size(14.0)
                 .line_height(22.0)
                 .alignment(TextAlignment::Center)
-                .color(Color::rgba(60, 60, 67, 170))
+                .color(Theme::current().shell.tertiary_text)
                 .paint(
                     Rect::new(
                         panel.origin.x + 80.0,
@@ -537,9 +548,9 @@ where
         ] {
             Rectangle::new()
                 .color(RectangleColor::Custom(if enabled {
-                    Color::rgba(0, 0, 0, 14)
+                    Theme::current().shell.item_enabled
                 } else {
-                    Color::rgba(0, 0, 0, 5)
+                    Theme::current().shell.item_disabled
                 }))
                 .radius(CornerRadius::Custom(PAGE_BUTTON_SIZE / 2.0))
                 .paint(button, context);
@@ -549,9 +560,9 @@ where
                 .weight(700)
                 .alignment(TextAlignment::Center)
                 .color(if enabled {
-                    Color::from_rgb_hex(0x1d1d1f)
+                    Theme::current().shell.primary_text
                 } else {
-                    Color::rgba(60, 60, 67, 70)
+                    Theme::current().shell.tertiary_text.with_alpha(70)
                 })
                 .paint(
                     Rect::new(
@@ -567,7 +578,7 @@ where
             .font_size(11.0)
             .line_height(18.0)
             .alignment(TextAlignment::Center)
-            .color(Color::rgba(60, 60, 67, 170))
+            .color(Theme::current().shell.tertiary_text)
             .paint(
                 Rect::new(
                     panel.origin.x + panel.size.width / 2.0 - 42.0,
@@ -668,6 +679,17 @@ where
                 self.query.borrow_mut().pop();
                 self.reset_selection();
                 context.request_redraw_in(panel);
+            }
+            ViewEvent::KeyPressed {
+                key: Key::Enter, ..
+            } => {
+                let app = self
+                    .selected
+                    .get()
+                    .and_then(|index| self.apps.get().get(index).cloned());
+                if let Some(app) = app {
+                    self.activate(&app, context);
+                }
             }
             ViewEvent::TextInput { text } if text.contains(['\r', '\n']) => {
                 let app = self

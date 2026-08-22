@@ -18,8 +18,6 @@ use crate::window::{DesktopWindows, WindowDrag, WindowId};
 use crate::apps;
 use viewkit::{prelude::*, view::PaintContext};
 
-const DESKTOP_BACKGROUND: Color = Color::TRANSPARENT;
-
 const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const SYSTEM_BAR_HEIGHT: f32 = 40.0;
 const DOCK_DAMAGE_HEIGHT: f32 = 150.0;
@@ -75,7 +73,7 @@ pub(crate) fn view(
         Background::new()
             .background(
                 Background::new()
-                    .background(Rectangle::new().color(RectangleColor::Custom(DESKTOP_BACKGROUND)))
+                    .background(Rectangle::new().color(RectangleColor::Custom(Color::TRANSPARENT)))
                     .content(wallpaper),
             )
             .content(content),

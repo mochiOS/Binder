@@ -10,11 +10,6 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
-const PRIMARY_TEXT: Color = Color::from_rgb_hex(0x202124);
-const SECONDARY_TEXT: Color = Color::from_rgb_hex(0x62656a);
-const DETAIL_TEXT: Color = Color::from_rgb_hex(0x777a80);
-const ALERT_COLOR: Color = Color::from_rgb_hex(0xd93025);
-
 #[derive(Clone)]
 pub(crate) struct LaunchFailureWindowState {
     app_name: String,
@@ -120,14 +115,14 @@ impl View for LaunchFailureView {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         let icon = Rect::new(bounds.origin.x + 24.0, bounds.origin.y + 28.0, 42.0, 42.0);
         Ellipse::new()
-            .color(EllipseColor::Custom(ALERT_COLOR))
+            .color(EllipseColor::Custom(Theme::current().shell.alert))
             .paint(icon, context);
         Text::new("!")
             .font_size(26.0)
             .line_height(42.0)
             .weight(750)
             .alignment(TextAlignment::Center)
-            .color(Color::WHITE)
+            .color(Theme::current().shell.inverse_text)
             .paint(icon, context);
 
         let text_x = bounds.origin.x + 82.0;
@@ -136,7 +131,7 @@ impl View for LaunchFailureView {
             .font_size(17.0)
             .line_height(24.0)
             .weight(700)
-            .color(PRIMARY_TEXT)
+            .color(Theme::current().shell.control)
             .paint(
                 Rect::new(text_x, bounds.origin.y + 24.0, text_width, 24.0),
                 context,
@@ -144,7 +139,7 @@ impl View for LaunchFailureView {
         Text::new(self.state.message.clone())
             .font_size(13.0)
             .line_height(20.0)
-            .color(SECONDARY_TEXT)
+            .color(Theme::current().shell.secondary_text)
             .paint(
                 Rect::new(text_x, bounds.origin.y + 55.0, text_width, 20.0),
                 context,
@@ -152,7 +147,7 @@ impl View for LaunchFailureView {
         Text::new(self.state.guidance.clone())
             .font_size(12.0)
             .line_height(18.0)
-            .color(SECONDARY_TEXT)
+            .color(Theme::current().shell.secondary_text)
             .paint(
                 Rect::new(text_x, bounds.origin.y + 78.0, text_width, 18.0),
                 context,
@@ -160,7 +155,7 @@ impl View for LaunchFailureView {
         Text::new(self.state.detail.clone())
             .font_size(11.0)
             .line_height(17.0)
-            .color(DETAIL_TEXT)
+            .color(Theme::current().shell.tertiary_text)
             .paint(
                 Rect::new(text_x, bounds.origin.y + 104.0, text_width, 17.0),
                 context,
@@ -168,11 +163,11 @@ impl View for LaunchFailureView {
 
         let button = Self::button_bounds(bounds);
         let button_color = if self.state.button_pressed.get() {
-            Color::from_rgb_hex(0x1557b0)
+            Theme::current().shell.action_pressed
         } else if self.state.button_hovered.get() {
-            Color::from_rgb_hex(0x2878d0)
+            Theme::current().shell.action_hover
         } else {
-            Color::from_rgb_hex(0x1a73e8)
+            Theme::current().shell.action
         };
         Rectangle::new()
             .color(RectangleColor::Custom(button_color))
@@ -183,7 +178,7 @@ impl View for LaunchFailureView {
             .line_height(32.0)
             .weight(650)
             .alignment(TextAlignment::Center)
-            .color(Color::WHITE)
+            .color(Theme::current().shell.inverse_text)
             .paint(button, context);
     }
 

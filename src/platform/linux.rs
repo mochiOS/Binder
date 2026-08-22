@@ -641,7 +641,8 @@ fn read_app_manifest(app_root: &Path) -> Option<AppInfo> {
 
     let name = parse_string_field(&content, "name")?;
 
-    let bundle_id = parse_string_field(&content, "bundle_id")?;
+    let bundle_id = parse_string_field(&content, "bundle_id")
+        .or_else(|| parse_string_field(&content, "bundle-id"))?;
 
     let entry = parse_string_field(&content, "entry")?;
 

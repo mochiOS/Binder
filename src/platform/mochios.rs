@@ -96,6 +96,14 @@ impl MochiOsPlatform {
         }
     }
 
+    fn replace_apps_if_changed(&mut self, discovered: Vec<AppInfo>) -> bool {
+        if self.apps == discovered {
+            return false;
+        }
+        self.apps = discovered;
+        true
+    }
+
     fn next_process_id(&mut self) -> ProcessId {
         let process_id = ProcessId(self.next_internal_pid);
         self.next_internal_pid = self.next_internal_pid.saturating_add(1).max(0x4000_0000);
@@ -588,6 +596,7 @@ impl DesktopPlatform for MochiOsPlatform {
         &mut self,
         _active_processes: &[ProcessId],
     ) -> Result<(), PlatformError> {
+        self.replace_apps_if_changed(read_apps());
         Ok(())
     }
 
@@ -1157,7 +1166,8 @@ fn read_app_about(app_root: &Path) -> Option<AppInfo> {
     let content = read_to_string(app_root.join("about.toml")).ok()?;
 
     let name = parse_string_field(&content, "name")?;
-    let bundle_id = parse_string_field(&content, "bundle_id")?;
+    let bundle_id = parse_string_field(&content, "bundle_id")
+        .or_else(|| parse_string_field(&content, "bundle-id"))?;
     let entry = parse_string_field(&content, "entry")?;
     let version = parse_string_field(&content, "version").unwrap_or_default();
     let developer = parse_string_field(&content, "developer").unwrap_or_default();
@@ -1401,6 +1411,29 @@ mod tests {
     fn missing_applications_root_is_an_empty_catalog() {
         let root = temporary_app_root();
         assert!(read_apps_from(&root).is_empty());
+    }
+
+    #[test]
+    fn replaces_cached_application_catalog_after_installation() {
+        let root = temporary_app_root();
+        let installed = root.join("Installed.app");
+        assert!(fs::create_dir_all(&installed).is_ok());
+        assert!(
+            fs::write(
+                installed.join("about.toml"),
+                "name = \"Installed\"\nbundle_id = \"org.test.installed\"\nentry = \"entry.elf\"\n",
+            )
+            .is_ok()
+        );
+
+        let mut platform = MochiOsPlatform::new();
+        platform.apps.clear();
+        let discovered = read_apps_from(&root);
+        assert!(platform.replace_apps_if_changed(discovered.clone()));
+        assert_eq!(platform.apps, discovered);
+        assert!(!platform.replace_apps_if_changed(discovered));
+
+        assert!(fs::remove_dir_all(root).is_ok());
     }
 
     #[test]

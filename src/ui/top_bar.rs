@@ -12,12 +12,6 @@ const VERTICAL_PADDING: f32 = 5.0;
 const CLOCK_WIDTH: f32 = 220.0;
 const CLOCK_HEIGHT: f32 = 29.0;
 
-const BAR_BACKGROUND: Color = Color::rgba(250, 250, 250, 100);
-
-const PRIMARY_TEXT: Color = Color::from_rgb_hex(0x191919);
-
-const SECONDARY_TEXT: Color = Color::from_rgb_hex(0x626262);
-
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
     menu_open: State<bool>,
@@ -33,7 +27,7 @@ pub(crate) fn view(
                 .font_size(12.0)
                 .line_height(18.0)
                 .weight(650)
-                .color(PRIMARY_TEXT)
+                .color(Theme::current().shell.primary_text)
                 .height(18.0),
         )
         .style(ButtonStyle::Ghost)
@@ -69,7 +63,9 @@ pub(crate) fn view(
         .gap(StackGap::None)
         .child(
             Background::new()
-                .background(Rectangle::new().color(RectangleColor::Custom(BAR_BACKGROUND)))
+                .background(Rectangle::new().color(RectangleColor::Custom(
+                    Theme::current().shell.bar_background,
+                )))
                 .content(Padding::symmetric(HORIZONTAL_PADDING, VERTICAL_PADDING).content(row))
                 .height(BAR_CONTENT_HEIGHT),
         )
@@ -116,7 +112,7 @@ impl View for ActiveApplicationName {
             .font_size(12.0)
             .line_height(18.0)
             .weight(650)
-            .color(PRIMARY_TEXT)
+            .color(Theme::current().shell.primary_text)
             .paint(bounds, context);
     }
 }
@@ -151,7 +147,7 @@ impl View for SystemBarClock {
                     .line_height(15.0)
                     .weight(700)
                     .alignment(TextAlignment::Center)
-                    .color(PRIMARY_TEXT)
+                    .color(Theme::current().shell.primary_text)
                     .frame(CLOCK_WIDTH, 15.0),
             );
         }
@@ -163,7 +159,7 @@ impl View for SystemBarClock {
                     .line_height(12.0)
                     .weight(600)
                     .alignment(TextAlignment::Center)
-                    .color(SECONDARY_TEXT)
+                    .color(Theme::current().shell.secondary_text)
                     .frame(CLOCK_WIDTH, 11.0),
             );
         }

@@ -13,7 +13,6 @@ use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
     prelude::*,
-    theme::{Shadow, ShadowSet},
     view::{Constraints, MeasureContext, PaintContext},
 };
 
@@ -44,21 +43,11 @@ const DOCK_TOOLTIP_MARGIN: f32 = 10.0;
 const DOCK_TOOLTIP_HORIZONTAL_PADDING: f32 = 12.0;
 const DOCK_TOOLTIP_MAX_WIDTH: f32 = 220.0;
 const DOCK_TOOLTIP_RADIUS: f32 = 12.0;
-const DOCK_TOOLTIP_BACKGROUND: Color = Color::rgba(38, 38, 38, 230);
-const DOCK_TOOLTIP_TEXT: Color = Color::rgba(255, 255, 255, 255);
-
-const DOCK_BACKGROUND: Color = Color::rgba(255, 255, 255, 190);
-
-const DOCK_BORDER: Color = Color::rgba(0, 0, 0, 28);
-
 #[cfg(target_os = "mochios")]
 const FALLBACK_APP_ICON: &str = "/applications/Binder.app/appicon.svg";
 
 #[cfg(not(target_os = "mochios"))]
 const FALLBACK_APP_ICON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/appicon.svg",);
-
-const DOCK_SHADOW: ShadowSet =
-    ShadowSet::single(Shadow::new(Color::rgba(0, 0, 0, 18), 0.0, 4.0, 12.0, 0.0));
 
 struct DockItemVisual {
     item: Rect,
@@ -559,15 +548,17 @@ where
                 .content_mode(ImageContentMode::Fit)
                 .radius(CornerRadius::Custom(10.0))
                 .sampling(ImageSampling::Bicubic)
-            .paint(bounds, context);
+                .paint(bounds, context);
         }
     }
 
     fn paint_app_library_icon(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         Rectangle::new()
-            .color(RectangleColor::Custom(DOCK_BACKGROUND))
+            .color(RectangleColor::Custom(
+                Theme::current().shell.dock_background,
+            ))
             .radius(CornerRadius::Custom(bounds.size.width * 0.3))
-            .border(BorderStyle::custom(DOCK_BORDER, 1.0))
+            .border(BorderStyle::custom(Theme::current().shell.dock_border, 1.0))
             .paint(bounds, context);
 
         let cell_size = bounds.size.width * 0.3;
@@ -588,7 +579,9 @@ where
             );
 
             Rectangle::new()
-                .color(RectangleColor::Custom(Color::rgba(255, 255, 255, 225)))
+                .color(RectangleColor::Custom(
+                    Theme::current().shell.dock_item_hover,
+                ))
                 .radius(CornerRadius::Custom(cell_size * 0.24))
                 .paint(cell, context);
 
@@ -632,7 +625,9 @@ where
         );
 
         Rectangle::new()
-            .color(RectangleColor::Custom(DOCK_TOOLTIP_BACKGROUND))
+            .color(RectangleColor::Custom(
+                Theme::current().shell.inverse_surface,
+            ))
             .radius(CornerRadius::Custom(DOCK_TOOLTIP_RADIUS))
             .paint(tooltip, context);
 
@@ -640,7 +635,7 @@ where
             .font_size(13.0)
             .line_height(DOCK_TOOLTIP_HEIGHT)
             .alignment(TextAlignment::Center)
-            .color(DOCK_TOOLTIP_TEXT)
+            .color(Theme::current().shell.inverse_text)
             .paint(tooltip, context);
     }
 
@@ -659,7 +654,9 @@ where
         let y = icon.origin.y + icon.size.height + 5.0;
 
         Ellipse::new()
-            .color(EllipseColor::Custom(Color::rgba(45, 45, 45, 210)))
+            .color(EllipseColor::Custom(
+                Theme::current().shell.running_indicator,
+            ))
             .paint(Rect::new(x, y, size, size), context);
     }
 }
@@ -680,15 +677,17 @@ where
         };
 
         Rectangle::new()
-            .color(RectangleColor::Custom(DOCK_BACKGROUND))
+            .color(RectangleColor::Custom(
+                Theme::current().shell.dock_background,
+            ))
             .radius(CornerRadius::Custom(DOCK_RADIUS))
-            .shadow(ShadowStyle::Custom(DOCK_SHADOW))
+            .shadow(ShadowStyle::Custom(Theme::current().shell.dock_shadow))
             .paint(dock, context);
 
         Rectangle::new()
             .color(RectangleColor::Custom(Color::TRANSPARENT))
             .radius(CornerRadius::Custom(DOCK_RADIUS))
-            .border(BorderStyle::custom(DOCK_BORDER, 1.0))
+            .border(BorderStyle::custom(Theme::current().shell.dock_border, 1.0))
             .paint(dock, context);
 
         let apps = self.dock_apps();
@@ -709,12 +708,12 @@ where
                 let item = snap_rect(visual.item);
 
                 Rectangle::new()
-                    .color(RectangleColor::Custom(Color::rgba(
-                        255,
-                        255,
-                        255,
-                        opacity as u8,
-                    )))
+                    .color(RectangleColor::Custom(
+                        Theme::current()
+                            .shell
+                            .dock_item_hover
+                            .with_alpha(opacity as u8),
+                    ))
                     .radius(CornerRadius::Custom(DOCK_ITEM_RADIUS))
                     .paint(item, context);
             }
@@ -738,7 +737,9 @@ where
             let right = Self::item_rect(dock, pinned_count);
             let x = (left.origin.x + left.size.width + right.origin.x) / 2.0;
             Rectangle::new()
-                .color(RectangleColor::Custom(Color::rgba(0, 0, 0, 36)))
+                .color(RectangleColor::Custom(
+                    Theme::current().shell.dock_border.with_alpha(36),
+                ))
                 .radius(CornerRadius::Custom(1.0))
                 .paint(
                     Rect::new(x, dock.origin.y + 14.0, 1.0, dock.size.height - 28.0),

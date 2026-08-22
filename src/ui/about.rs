@@ -1,14 +1,10 @@
 use viewkit::prelude::*;
 
-const CONTENT_BACKGROUND: Color = Color::from_rgb_hex(0xFAFAFA);
-
-const PRIMARY_TEXT: Color = Color::from_rgb_hex(0x171717);
-
-const SECONDARY_TEXT: Color = Color::from_rgb_hex(0x686868);
-
 pub(crate) fn view() -> impl View + 'static {
     Background::new()
-        .background(Rectangle::new().color(RectangleColor::Custom(CONTENT_BACKGROUND)))
+        .background(Rectangle::new().color(RectangleColor::Custom(
+            Theme::current().shell.content_background,
+        )))
         .content(
             Padding::all(28.0).content(
                 VStack::new()
@@ -20,21 +16,21 @@ pub(crate) fn view() -> impl View + 'static {
                             .font_size(32.0)
                             .line_height(40.0)
                             .alignment(TextAlignment::Center)
-                            .color(PRIMARY_TEXT),
+                            .color(Theme::current().shell.primary_text),
                     )
                     .child(
                         Text::new("26.0 Kinako")
                             .font_size(13.0)
                             .line_height(20.0)
                             .alignment(TextAlignment::Center)
-                            .color(SECONDARY_TEXT),
+                            .color(Theme::current().shell.secondary_text),
                     )
                     .child(
                         Text::new("Developing")
                             .font_size(12.0)
                             .line_height(18.0)
                             .alignment(TextAlignment::Center)
-                            .color(SECONDARY_TEXT),
+                            .color(Theme::current().shell.secondary_text),
                     ),
             ),
         )
