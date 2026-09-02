@@ -437,7 +437,7 @@ fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), Platfo
 
 const SPAWN_APP_OPCODE: u32 = 0x4150_5053;
 const SPAWN_APP_HEADER_LEN: usize = 24;
-const EXEC_MANIFEST_ENV_PREFIX: &str = "__MOCHI_EXEC_ENV=";
+const EXEC_MANIFEST_ENV_PREFIX: &str = "__MNU_EXEC_ENV=";
 const SESSION_ENVIRONMENT_NAMES: [&str; 4] = ["HOME", "USER", "LOGNAME", "SHELL"];
 
 fn encode_spawn_app_request(
@@ -1339,8 +1339,8 @@ mod tests {
     #[test]
     fn app_launch_request_carries_session_environment() {
         let environment = vec![
-            String::from("__MOCHI_EXEC_ENV=HOME=/home/alice"),
-            String::from("__MOCHI_EXEC_ENV=USER=alice"),
+            String::from("__MNU_EXEC_ENV=HOME=/home/alice"),
+            String::from("__MNU_EXEC_ENV=USER=alice"),
         ];
         let request = encode_spawn_app_request_with_environment(
             "/applications/test.app/entry.elf",
@@ -1351,7 +1351,7 @@ mod tests {
         .unwrap_or_default();
         assert_eq!(
             &request[SPAWN_APP_HEADER_LEN..],
-            b"/applications/test.app/entry.elf\0__MOCHI_EXEC_ENV=HOME=/home/alice\0__MOCHI_EXEC_ENV=USER=alice\0"
+            b"/applications/test.app/entry.elf\0__MNU_EXEC_ENV=HOME=/home/alice\0__MNU_EXEC_ENV=USER=alice\0"
         );
     }
 
