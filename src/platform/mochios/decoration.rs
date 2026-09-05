@@ -24,7 +24,7 @@ const DECOR_EVENT_WINDOW: u32 = 0x5749_4e44;
 const DECOR_EVENT_POINTER_BUTTON: u32 = 0x4e54_4244;
 const DECOR_EVENT_POINTER_MOTION: u32 = 0x544f_4d50;
 const DECOR_EVENT_POINTER_LEAVE: u32 = 0x5641_454c;
-const PIXEL_FORMAT_GPU_SCENE: u32 = 3;
+const PIXEL_FORMAT_XRGB8888: u32 = 1;
 const TITLE_BAR_HEIGHT: u32 = VIEW_TITLE_BAR_HEIGHT as u32;
 const CONTROL_WIDTH: u32 = 44;
 const PAGE_SIZE: usize = 4096;
@@ -47,7 +47,6 @@ struct Decoration {
     width: u32,
     surface: u64,
     buffer_virt: u64,
-    buffer_capacity: usize,
     title: String,
     interaction: WindowInteraction,
 }
@@ -83,15 +82,13 @@ impl DecorationManager {
                         .find(|decoration| decoration.window == window)
                     {
                         if decoration.width != width {
-                            let (buffer_virt, buffer_capacity) = attach_title_bar_buffer(
+                            decoration.buffer_virt = attach_title_bar_buffer(
                                 self.compositor,
                                 decoration.surface,
                                 width,
                                 title.clone(),
                                 decoration.interaction,
                             )?;
-                            decoration.buffer_virt = buffer_virt;
-                            decoration.buffer_capacity = buffer_capacity;
                             token_request(self.compositor, OP_DAMAGE, decoration.surface)?;
                             token_request(self.compositor, OP_COMMIT, decoration.surface)?;
                             decoration.width = width;
@@ -205,7 +202,7 @@ fn create_decoration(
     let reply = ipc_call(compositor, &create)?;
     let surface = read_u64(&reply, 4).ok_or(DecorationError(5))?;
     let interaction = WindowInteraction::default();
-    let (buffer_virt, buffer_capacity) =
+    let buffer_virt =
         attach_title_bar_buffer(compositor, surface, width, title.clone(), interaction)?;
     token_request(compositor, OP_DAMAGE, surface)?;
 
@@ -221,7 +218,6 @@ fn create_decoration(
         width,
         surface,
         buffer_virt,
-        buffer_capacity,
         title,
         interaction,
     })
@@ -233,13 +229,11 @@ fn attach_title_bar_buffer(
     width: u32,
     title: String,
     interaction: WindowInteraction,
-) -> Result<(u64, usize), DecorationError> {
-    let rendered = render_title_bar(title, width, interaction)?;
-    let pixel_bytes = (width as usize)
+) -> Result<u64, DecorationError> {
+    let pixel_count = (width as usize)
         .checked_mul(TITLE_BAR_HEIGHT as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
         .ok_or(DecorationError(22))?;
-    let byte_len = rendered.len().max(pixel_bytes);
+    let byte_len = pixel_count.checked_mul(4).ok_or(DecorationError(22))?;
     let page_count = byte_len
         .checked_add(PAGE_SIZE - 1)
         .map(|length| length / PAGE_SIZE)
@@ -254,11 +248,12 @@ fn attach_title_bar_buffer(
     if virt == 0 || virt & (PAGE_SIZE as u64 - 1) != 0 {
         return Err(DecorationError(5));
     }
-    let capacity = page_count
-        .checked_mul(PAGE_SIZE)
-        .ok_or(DecorationError(22))?;
-    let bytes = unsafe { std::slice::from_raw_parts_mut(virt as *mut u8, capacity) };
-    bytes[..rendered.len()].copy_from_slice(&rendered);
+    let rendered = render_title_bar(title, width, interaction)?;
+    if rendered.len() != pixel_count {
+        return Err(DecorationError(5));
+    }
+    let pixels = unsafe { std::slice::from_raw_parts_mut(virt as *mut u32, pixel_count) };
+    pixels.copy_from_slice(&rendered);
 
     let mut attach = [0u8; 28];
     put_u32(&mut attach, 0, OP_ATTACH_BUFFER)?;
@@ -266,7 +261,7 @@ fn attach_title_bar_buffer(
     put_u32(&mut attach, 12, width)?;
     put_u32(&mut attach, 16, TITLE_BAR_HEIGHT)?;
     put_u32(&mut attach, 20, width)?;
-    put_u32(&mut attach, 24, PIXEL_FORMAT_GPU_SCENE)?;
+    put_u32(&mut attach, 24, PIXEL_FORMAT_XRGB8888)?;
     ipc_call_status(compositor, &attach)?;
     syscall_result(syscall::call4(
         syscall::SyscallNumber::IpcSendPages,
@@ -275,14 +270,14 @@ fn attach_title_bar_buffer(
         page_count as u64,
         virt,
     ))?;
-    Ok((virt, capacity))
+    Ok(virt)
 }
 
 fn render_title_bar(
     title: String,
     width: u32,
     interaction: WindowInteraction,
-) -> Result<Vec<u8>, DecorationError> {
+) -> Result<Vec<u32>, DecorationError> {
     let decoration = WindowDecoration::new(title, interaction);
     let mut display_list = DisplayList::new();
     let mut text_measurer = TextMeasurer::new();
@@ -296,13 +291,8 @@ fn render_title_bar(
         Rect::new(0.0, 0.0, width as f32, TITLE_BAR_HEIGHT as f32),
         &mut context,
     );
-    viewkit::platform::mochios::render_offscreen_gpu_scene(
-        &display_list,
-        width,
-        TITLE_BAR_HEIGHT,
-        true,
-    )
-    .map_err(|_| DecorationError(5))
+    viewkit::platform::mochios::render_offscreen_xrgb(&display_list, width, TITLE_BAR_HEIGHT)
+        .map_err(|_| DecorationError(5))
 }
 
 fn redraw_title_bar(compositor: u64, decoration: &Decoration) -> Result<(), DecorationError> {
@@ -311,16 +301,15 @@ fn redraw_title_bar(compositor: u64, decoration: &Decoration) -> Result<(), Deco
         decoration.width,
         decoration.interaction,
     )?;
-    if decoration.buffer_virt == 0 || rendered.len() > decoration.buffer_capacity {
+    let pixel_count = (decoration.width as usize)
+        .checked_mul(TITLE_BAR_HEIGHT as usize)
+        .ok_or(DecorationError(22))?;
+    if decoration.buffer_virt == 0 || rendered.len() != pixel_count {
         return Err(DecorationError(5));
     }
-    let bytes = unsafe {
-        std::slice::from_raw_parts_mut(
-            decoration.buffer_virt as *mut u8,
-            decoration.buffer_capacity,
-        )
-    };
-    bytes[..rendered.len()].copy_from_slice(&rendered);
+    let pixels =
+        unsafe { std::slice::from_raw_parts_mut(decoration.buffer_virt as *mut u32, pixel_count) };
+    pixels.copy_from_slice(&rendered);
     token_request(compositor, OP_DAMAGE, decoration.surface)?;
     token_request(compositor, OP_COMMIT, decoration.surface)
 }
