@@ -16,7 +16,7 @@ develop = []
 mochios = []
 
 [dependencies]
-viewkit = "1.0.1"
+viewkit = "2.0.0"
 binder_client = { git = "https://github.com/mochiOS/Binder", package = "binder_client" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
