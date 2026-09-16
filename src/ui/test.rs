@@ -20,9 +20,10 @@ pub(crate) fn view(state: TestWindowState) -> impl View + 'static {
         .alignment(StackAlignment::Stretch)
         .gap(StackGap::Custom(6.0))
         .children((1..=24).map(|index| {
-            Text::new(format!("GPU accelerated row {index:02}"))
-                .font_size(13.0)
-                .line_height(20.0)
+            Text::styled(
+                format!("GPU accelerated row {index:02}"),
+                TextRole::Label,
+            )
                 .height(24.0)
         }));
 

@@ -201,17 +201,12 @@ fn remote_placeholder_view() -> impl View + 'static {
         .distribution(StackDistribution::Center)
         .gap(StackGap::Small)
         .child(
-            Text::new("RemoteSurface")
-                .font_size(24.0)
-                .line_height(32.0)
-                .weight(750)
+            Text::styled("RemoteSurface", TextRole::TitleMedium)
                 .alignment(TextAlignment::Center)
                 .color(Theme::current().shell.control),
         )
         .child(
-            Text::new("No compositor surface attached")
-                .font_size(13.0)
-                .line_height(18.0)
+            Text::styled("No compositor surface attached", TextRole::Label)
                 .alignment(TextAlignment::Center)
                 .color(Theme::current().shell.tertiary_text),
         )

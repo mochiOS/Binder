@@ -464,10 +464,7 @@ where
                 1.0,
             ))
             .paint(panel, context);
-        Text::new("Applications")
-            .font_size(24.0)
-            .line_height(34.0)
-            .weight(700)
+        Text::styled("Applications", TextRole::TitleLarge)
             .paint(
                 Rect::new(panel.origin.x + 34.0, panel.origin.y + 24.0, 300.0, 36.0),
                 context,
@@ -484,13 +481,11 @@ where
             ))
             .paint(search, context);
         let query = self.query.borrow().clone();
-        Text::new(if query.is_empty() {
+        Text::styled(if query.is_empty() {
             String::from("Search applications")
         } else {
             query
-        })
-        .font_size(13.0)
-        .line_height(20.0)
+        }, TextRole::Label)
         .color(if self.query.borrow().is_empty() {
             Theme::current().shell.tertiary_text.with_alpha(150)
         } else {
@@ -540,9 +535,7 @@ where
                 ICON_SIZE,
             );
             self.paint_icon(app, icon, context);
-            Text::new(app.name.clone())
-                .font_size(12.0)
-                .line_height(20.0)
+            Text::styled(app.name.clone(), TextRole::Caption)
                 .alignment(TextAlignment::Center)
                 .paint(
                     Rect::new(
@@ -556,9 +549,7 @@ where
         }
 
         if filtered.is_empty() {
-            Text::new("No applications found")
-                .font_size(14.0)
-                .line_height(22.0)
+            Text::styled("No applications found", TextRole::Body)
                 .alignment(TextAlignment::Center)
                 .color(Theme::current().shell.tertiary_text)
                 .paint(
@@ -588,9 +579,7 @@ where
                 }))
                 .radius(CornerRadius::Custom(PAGE_BUTTON_SIZE / 2.0))
                 .paint(button, context);
-            Text::new(label)
-                .font_size(15.0)
-                .line_height(22.0)
+            Text::styled(label, TextRole::Label)
                 .weight(700)
                 .alignment(TextAlignment::Center)
                 .color(if enabled {
@@ -608,9 +597,7 @@ where
                     context,
                 );
         }
-        Text::new(format!("{} / {}", page + 1, page_count))
-            .font_size(11.0)
-            .line_height(18.0)
+        Text::styled(format!("{} / {}", page + 1, page_count), TextRole::Caption)
             .alignment(TextAlignment::Center)
             .color(Theme::current().shell.tertiary_text)
             .paint(

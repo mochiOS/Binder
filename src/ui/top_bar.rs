@@ -23,12 +23,10 @@ pub(crate) fn view(
 
     let menu_button = Button::new("")
         .content(
-            Text::new("mochiOS")
-                .font_size(12.0)
-                .line_height(18.0)
+            Text::styled("mochiOS", TextRole::Caption)
                 .weight(650)
                 .color(Theme::current().shell.primary_text)
-                .height(18.0),
+                .height(Theme::current().typography.caption.line_height),
         )
         .style(ButtonStyle::Ghost)
         .alignment(ZStackAlignment::Leading)
@@ -108,9 +106,7 @@ impl ActiveApplicationName {
 
 impl View for ActiveApplicationName {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
-        Text::new(self.application_name())
-            .font_size(12.0)
-            .line_height(18.0)
+        Text::styled(self.application_name(), TextRole::Caption)
             .weight(650)
             .color(Theme::current().shell.primary_text)
             .paint(bounds, context);

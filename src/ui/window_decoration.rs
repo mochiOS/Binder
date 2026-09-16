@@ -101,17 +101,16 @@ impl View for WindowDecoration {
             ))
             .paint(border_bounds, context);
 
-        Text::new(self.title.clone())
-            .font_size(12.0)
-            .line_height(18.0)
+        let title_line_height = context.typography.caption.line_height;
+        Text::styled(self.title.clone(), TextRole::Caption)
             .alignment(TextAlignment::Center)
             .color(Theme::current().shell.primary_text)
             .paint(
                 Rect::new(
                     bounds.origin.x,
-                    bounds.origin.y + (TITLE_BAR_HEIGHT - 18.0) / 2.0,
+                    bounds.origin.y + (TITLE_BAR_HEIGHT - title_line_height) / 2.0,
                     bounds.size.width,
-                    18.0,
+                    title_line_height,
                 ),
                 context,
             );

@@ -113,11 +113,16 @@ impl View for LaunchFailureView {
     }
 
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        let mut dialog = AccessibilityNode::new(AccessibilityRole::Dialog, bounds);
+        dialog.label = Some(format!("{} could not be opened", self.state.app_name));
+        context.record_accessibility(dialog);
+
         let icon = Rect::new(bounds.origin.x + 24.0, bounds.origin.y + 28.0, 42.0, 42.0);
         Ellipse::new()
             .color(EllipseColor::Custom(Theme::current().shell.alert))
             .paint(icon, context);
         Text::new("!")
+            .accessibility_hidden(true)
             .font_size(26.0)
             .line_height(42.0)
             .weight(750)
@@ -127,34 +132,28 @@ impl View for LaunchFailureView {
 
         let text_x = bounds.origin.x + 82.0;
         let text_width = (bounds.size.width - 106.0).max(0.0);
-        Text::new(format!("{} could not be opened", self.state.app_name))
-            .font_size(17.0)
-            .line_height(24.0)
-            .weight(700)
+        Text::styled(
+            format!("{} could not be opened", self.state.app_name),
+            TextRole::TitleSmall,
+        )
             .color(Theme::current().shell.control)
             .paint(
                 Rect::new(text_x, bounds.origin.y + 24.0, text_width, 24.0),
                 context,
             );
-        Text::new(self.state.message.clone())
-            .font_size(13.0)
-            .line_height(20.0)
+        Text::styled(self.state.message.clone(), TextRole::Label)
             .color(Theme::current().shell.secondary_text)
             .paint(
                 Rect::new(text_x, bounds.origin.y + 55.0, text_width, 20.0),
                 context,
             );
-        Text::new(self.state.guidance.clone())
-            .font_size(12.0)
-            .line_height(18.0)
+        Text::styled(self.state.guidance.clone(), TextRole::Caption)
             .color(Theme::current().shell.secondary_text)
             .paint(
                 Rect::new(text_x, bounds.origin.y + 78.0, text_width, 18.0),
                 context,
             );
-        Text::new(self.state.detail.clone())
-            .font_size(11.0)
-            .line_height(17.0)
+        Text::styled(self.state.detail.clone(), TextRole::Caption)
             .color(Theme::current().shell.tertiary_text)
             .paint(
                 Rect::new(text_x, bounds.origin.y + 104.0, text_width, 17.0),
@@ -162,6 +161,10 @@ impl View for LaunchFailureView {
             );
 
         let button = Self::button_bounds(bounds);
+        let mut button_node = AccessibilityNode::new(AccessibilityRole::Button, button);
+        button_node.label = Some(String::from("OK"));
+        button_node.focusable = true;
+        context.record_accessibility(button_node);
         let button_color = if self.state.button_pressed.get() {
             Theme::current().shell.action_pressed
         } else if self.state.button_hovered.get() {
@@ -173,13 +176,22 @@ impl View for LaunchFailureView {
             .color(RectangleColor::Custom(button_color))
             .radius(CornerRadius::Custom(7.0))
             .paint(button, context);
-        Text::new("OK")
-            .font_size(13.0)
-            .line_height(32.0)
+        let button_label_style = Theme::current().typography.style(TextRole::Label);
+        Text::styled("OK", TextRole::Label)
+            .accessibility_hidden(true)
             .weight(650)
             .alignment(TextAlignment::Center)
             .color(Theme::current().shell.inverse_text)
-            .paint(button, context);
+            .paint(
+                Rect::new(
+                    button.origin.x,
+                    button.origin.y
+                        + (button.size.height - button_label_style.line_height) / 2.0,
+                    button.size.width,
+                    button_label_style.line_height,
+                ),
+                context,
+            );
     }
 
     fn handle_event(

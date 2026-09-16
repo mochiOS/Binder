@@ -631,12 +631,19 @@ where
             .radius(CornerRadius::Custom(DOCK_TOOLTIP_RADIUS))
             .paint(tooltip, context);
 
-        Text::new(app.name.clone())
-            .font_size(13.0)
-            .line_height(DOCK_TOOLTIP_HEIGHT)
+        let label_style = Theme::current().typography.style(TextRole::Label);
+        Text::styled(app.name.clone(), TextRole::Label)
             .alignment(TextAlignment::Center)
             .color(Theme::current().shell.inverse_text)
-            .paint(tooltip, context);
+            .paint(
+                Rect::new(
+                    tooltip.origin.x,
+                    tooltip.origin.y + (tooltip.size.height - label_style.line_height) / 2.0,
+                    tooltip.size.width,
+                    label_style.line_height,
+                ),
+                context,
+            );
     }
 
     fn is_running(&self, app: &AppInfo) -> bool {

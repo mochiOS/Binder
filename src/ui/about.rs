@@ -12,23 +12,17 @@ pub(crate) fn view() -> impl View + 'static {
                     .distribution(StackDistribution::Center)
                     .gap(StackGap::Custom(8.0))
                     .child(
-                        Text::new("mochiOS")
-                            .font_size(32.0)
-                            .line_height(40.0)
+                        Text::styled("mochiOS", TextRole::TitleLarge)
                             .alignment(TextAlignment::Center)
                             .color(Theme::current().shell.primary_text),
                     )
                     .child(
-                        Text::new("26.0 Kinako")
-                            .font_size(13.0)
-                            .line_height(20.0)
+                        Text::styled("26.0 Kinako", TextRole::Label)
                             .alignment(TextAlignment::Center)
                             .color(Theme::current().shell.secondary_text),
                     )
                     .child(
-                        Text::new("Developing")
-                            .font_size(12.0)
-                            .line_height(18.0)
+                        Text::styled("Developing", TextRole::Caption)
                             .alignment(TextAlignment::Center)
                             .color(Theme::current().shell.secondary_text),
                     ),
