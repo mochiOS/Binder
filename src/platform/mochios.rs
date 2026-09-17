@@ -1100,7 +1100,12 @@ fn read_apps_from(root: &Path) -> Vec<AppInfo> {
         if path.extension().and_then(|extension| extension.to_str()) != Some("app") {
             continue;
         }
-        if let Some(app) = read_app_about(&path) {
+        if path.file_name().and_then(|name| name.to_str()) == Some("Binder.app") {
+            continue;
+        }
+        if let Some(app) = read_app_about(&path)
+            && app.bundle_id != "org.mochios.binder"
+        {
             apps.push(app);
         }
     }
