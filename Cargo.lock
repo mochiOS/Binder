@@ -976,7 +976,6 @@ dependencies = [
 [[package]]
 name = "mochios-capability-protocol"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/syscalls#5ecc8a19f932099e72fe9747ac479828d7ecda94"
 
 [[package]]
 name = "mochios-linux-gui-protocol"
