@@ -16,9 +16,14 @@ use crate::platform::{AppInfo, DesktopPlatform, ProcessId, RemoteWindowId, Syste
 use crate::window::{DesktopWindows, WindowDrag, WindowId};
 
 use crate::apps;
-use viewkit::{prelude::*, view::PaintContext};
+use viewkit::{
+    event::{EventContext, EventResult, ViewEvent},
+    prelude::*,
+    view::{Constraints, MeasureContext, PaintContext},
+};
 
 const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const LAUNCH_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const SYSTEM_BAR_HEIGHT: f32 = 40.0;
 const DOCK_DAMAGE_HEIGHT: f32 = 150.0;
 const WINDOW_EFFECT_EXTENT: f32 = 20.0;
@@ -34,10 +39,12 @@ pub(crate) fn view(
     dock_hovered: Rc<Cell<Option<usize>>>,
     dock_pressed: Rc<Cell<Option<usize>>>,
     dock_pointer: Rc<Cell<Option<Point>>>,
+    dock_visibility: Rc<RefCell<dock::DockVisibility>>,
     dock_running_apps: State<Vec<String>>,
     dock_preferences: State<DockPreferences>,
     app_library_open: State<bool>,
     pending_app_activation: Rc<RefCell<super::app_library::PendingAppActivation>>,
+    fast_poll_until: Rc<Cell<Option<Instant>>>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, super::test::TestWindowState>>>,
     launch_failure_states: Rc<
@@ -53,6 +60,7 @@ pub(crate) fn view(
         windows.clone(),
         apps.clone(),
         dock_running_apps.clone(),
+        Rc::clone(&fast_poll_until),
     );
 
     let content = VStack::new()
@@ -97,9 +105,12 @@ pub(crate) fn view(
         dock_hovered,
         dock_pressed,
         dock_pointer,
+        Rc::clone(&cursor_pointer),
+        dock_visibility,
         dock_running_apps,
         dock_preferences.clone(),
         app_library_open.clone(),
+        Rc::clone(&fast_poll_until),
         Rc::clone(&launch_failure_states),
     );
 
@@ -118,20 +129,104 @@ pub(crate) fn view(
         dock_preferences,
         app_library_open,
         pending_app_activation,
+        fast_poll_until,
         launch_failure_states,
     );
     let root = super::popup_menu::PopupMenu::new(root, menu, menu_open);
     let root = super::context_menu::ContextMenuLayer::new(root, Rc::clone(&platform), context_menu);
+    let root = PointerTracker::new(root, Rc::clone(&cursor_pointer));
 
     #[cfg(target_os = "mochios")]
     {
-        let _ = cursor_pointer;
         Box::new(root)
     }
 
     #[cfg(not(target_os = "mochios"))]
     {
         Box::new(super::cursor::CursorLayer::new(root, cursor_pointer))
+    }
+}
+
+struct PointerTracker<C> {
+    content: C,
+    position: Rc<Cell<Option<Point>>>,
+}
+
+impl<C: View> PointerTracker<C> {
+    fn new(content: C, position: Rc<Cell<Option<Point>>>) -> Self {
+        Self { content, position }
+    }
+}
+
+impl<C: View> View for PointerTracker<C> {
+    fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
+        self.content.measure(constraints, context)
+    }
+
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        self.content.paint(bounds, context);
+    }
+
+    fn handle_event(&self, bounds: Rect, event: &ViewEvent, context: &mut EventContext<'_>) -> EventResult {
+        let next = match event {
+            ViewEvent::PointerMoved { position }
+            | ViewEvent::PointerPressed { position, .. }
+            | ViewEvent::PointerReleased { position, .. } => Some(Some(*position)),
+            ViewEvent::PointerLeft | ViewEvent::FocusChanged { focused: false } => Some(None),
+            _ => None,
+        };
+        if let Some(next) = next {
+            let previous = self.position.replace(next);
+            if previous != next {
+                let dock_zone = Rect::new(
+                    bounds.origin.x,
+                    bounds.origin.y + (bounds.size.height - 190.0).max(0.0),
+                    bounds.size.width,
+                    bounds.size.height.min(190.0),
+                );
+                if previous.is_some_and(|point| dock_zone.contains(point))
+                    || next.is_some_and(|point| dock_zone.contains(point))
+                {
+                    context.request_redraw_in(dock_zone);
+                }
+            }
+        }
+        self.content.handle_event(bounds, event, context)
+    }
+}
+
+#[cfg(test)]
+mod pointer_tracker_tests {
+    use super::*;
+
+    struct ConsumingView;
+
+    impl View for ConsumingView {
+        fn measure(&self, constraints: Constraints, _context: &mut MeasureContext<'_>) -> Size {
+            constraints.maximum
+        }
+
+        fn paint(&self, _bounds: Rect, _context: &mut PaintContext<'_>) {}
+
+        fn handle_event(&self, _bounds: Rect, _event: &ViewEvent, _context: &mut EventContext<'_>) -> EventResult {
+            EventResult::Consumed
+        }
+    }
+
+    #[test]
+    fn tracks_pointer_even_when_child_consumes_motion() {
+        let position = Rc::new(Cell::new(None));
+        let layer = PointerTracker::new(ConsumingView, Rc::clone(&position));
+        let theme = Theme::current();
+        let mut measurer = viewkit::typography::TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        let result = layer.handle_event(
+            Rect::new(0.0, 0.0, 1280.0, 800.0),
+            &ViewEvent::PointerMoved { position: Point::new(640.0, 790.0) },
+            &mut context,
+        );
+        assert_eq!(result, EventResult::Consumed);
+        assert_eq!(position.get(), Some(Point::new(640.0, 790.0)));
     }
 }
 
@@ -145,6 +240,8 @@ struct PlatformRefreshView {
     apps: State<Vec<AppInfo>>,
 
     dock_running_apps: State<Vec<String>>,
+    fast_poll_until: Rc<Cell<Option<Instant>>>,
+    last_refresh: Cell<Option<Instant>>,
 }
 
 impl PlatformRefreshView {
@@ -158,6 +255,7 @@ impl PlatformRefreshView {
         apps: State<Vec<AppInfo>>,
 
         dock_running_apps: State<Vec<String>>,
+        fast_poll_until: Rc<Cell<Option<Instant>>>,
     ) -> Self {
         Self {
             platform,
@@ -165,6 +263,16 @@ impl PlatformRefreshView {
             windows,
             apps,
             dock_running_apps,
+            fast_poll_until,
+            last_refresh: Cell::new(None),
+        }
+    }
+
+    fn refresh_interval(&self) -> Duration {
+        if self.fast_poll_until.get().is_some_and(|until| Instant::now() < until) {
+            LAUNCH_REFRESH_INTERVAL
+        } else {
+            PLATFORM_REFRESH_INTERVAL
         }
     }
 
@@ -214,6 +322,18 @@ impl View for PlatformRefreshView {
 
             desktop.has_pending_platform_notifications()
         };
+
+        let now = Instant::now();
+        let interval = self.refresh_interval();
+        if !needs_notifications
+            && let Some(last) = self.last_refresh.get()
+            && let Some(next) = last.checked_add(interval)
+            && now < next
+        {
+            context.request_redraw_in_at(poll_wake_region, next);
+            return;
+        }
+        self.last_refresh.set(Some(now));
 
         let (pending_close_requests, resized_notifications, focus_notifications) =
             if needs_notifications {
@@ -325,6 +445,7 @@ impl View for PlatformRefreshView {
 
         if has_window_changes {
             let before = self.visible_windows_damage();
+            let work_area = super::window_layer::window_work_area(bounds);
             self.windows.update(|desktop| {
                 for request in create_requests {
                     match request.renderer.as_str() {
@@ -378,6 +499,9 @@ impl View for PlatformRefreshView {
                 for request in failed_close_requests {
                     desktop.cancel_close_request(request.process_id, request.window);
                 }
+                // Clamp a newly spawned frame before registering its remote
+                // surface or rendering its first visible frame.
+                desktop.fit_to_work_area(work_area);
             });
             if let Some(dirty) = Self::window_change_damage(before, self.visible_windows_damage()) {
                 context.request_redraw_in_at(dirty, Instant::now());
@@ -412,7 +536,7 @@ impl View for PlatformRefreshView {
 
         if !system_bar_changed {
             context
-                .request_redraw_in_at(poll_wake_region, Instant::now() + PLATFORM_REFRESH_INTERVAL);
+                .request_redraw_in_at(poll_wake_region, Instant::now() + self.refresh_interval());
             return;
         }
 
@@ -431,6 +555,6 @@ impl View for PlatformRefreshView {
             context.request_redraw_in_at(Self::system_bar_damage(bounds), Instant::now());
         }
 
-        context.request_redraw_in_at(poll_wake_region, Instant::now() + PLATFORM_REFRESH_INTERVAL);
+        context.request_redraw_in_at(poll_wake_region, Instant::now() + self.refresh_interval());
     }
 }

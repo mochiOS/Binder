@@ -10,7 +10,7 @@ const DEFAULT_PINNED: [&str; 3] = [
 ];
 
 #[cfg(target_os = "mochios")]
-const CONFIG_PATH: &str = "/libraries/applications/org.mochios.binder/dock.conf";
+const CONFIG_PATH: &str = "/var/config/applications/org.mochios.binder/dock.conf";
 
 #[cfg(not(target_os = "mochios"))]
 const CONFIG_PATH: &str = "/tmp/mochios-binder/dock.conf";

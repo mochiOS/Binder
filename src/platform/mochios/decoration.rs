@@ -20,6 +20,7 @@ const OP_DECOR_BEGIN_MOVE: u32 = 105;
 const OP_DECOR_MINIMIZE: u32 = 107;
 const OP_DECOR_TOGGLE_MAXIMIZE: u32 = 108;
 const OP_DECOR_CLOSE_REQUEST: u32 = 109;
+const OP_DECOR_QUERY_OVERLAP: u32 = 110;
 const DECOR_EVENT_WINDOW: u32 = 0x5749_4e44;
 const DECOR_EVENT_POINTER_BUTTON: u32 = 0x4e54_4244;
 const DECOR_EVENT_POINTER_MOTION: u32 = 0x544f_4d50;
@@ -58,6 +59,26 @@ pub(super) struct DecorationManager {
 }
 
 impl DecorationManager {
+    pub(super) fn windows_overlap(&self, area: Rect) -> Result<bool, DecorationError> {
+        let left = area.origin.x.floor();
+        let top = area.origin.y.floor();
+        let right = (area.origin.x + area.size.width).ceil();
+        let bottom = (area.origin.y + area.size.height).ceil();
+        if ![left, top, right, bottom].iter().all(|value| value.is_finite())
+            || right <= left || bottom <= top
+        {
+            return Err(DecorationError(22));
+        }
+        let mut request = [0u8; 20];
+        put_u32(&mut request, 0, OP_DECOR_QUERY_OVERLAP)?;
+        put_u32(&mut request, 4, (left as i32) as u32)?;
+        put_u32(&mut request, 8, (top as i32) as u32)?;
+        put_u32(&mut request, 12, (right - left) as u32)?;
+        put_u32(&mut request, 16, (bottom - top) as u32)?;
+        let reply = ipc_call(self.compositor, &request)?;
+        Ok(read_u32(&reply, 4) == Some(1))
+    }
+
     pub(super) fn connect() -> Result<Self, DecorationError> {
         let compositor = find_compositor()?;
         let metadata_endpoint = ipc_create()?;

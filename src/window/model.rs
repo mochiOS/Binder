@@ -78,6 +78,33 @@ impl Default for DesktopWindows {
 }
 
 impl DesktopWindows {
+    /// Keep every window reachable when the display is smaller than its
+    /// requested size (or when the display resolution changes).
+    pub fn fit_to_work_area(&mut self, area: Rect) -> bool {
+        let mut changed = false;
+        for window in &mut self.windows {
+            if window.restore_frame.is_some() {
+                continue;
+            }
+            let width = window.frame.size.width.min(area.size.width.max(1.0));
+            let height = window.frame.size.height.min(area.size.height.max(1.0));
+            let x = window.frame.origin.x.clamp(
+                area.origin.x,
+                area.origin.x + area.size.width - width,
+            );
+            let y = window.frame.origin.y.clamp(
+                area.origin.y,
+                area.origin.y + area.size.height - height,
+            );
+            let next = Rect::new(x, y, width, height);
+            if next != window.frame {
+                window.frame = next;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn focused_process_id(&self) -> Option<ProcessId> {
         let focused = self.focused?;
 
@@ -644,6 +671,36 @@ pub struct WindowDrag {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_windows_fit_inside_the_display_work_area() {
+        let mut desktop = DesktopWindows::default();
+        let (first, _) = desktop.open_window(
+            ProcessId(1), String::from("settings"), String::from("Settings"), 1040, 720, true,
+        );
+        let (second, _) = desktop.open_window(
+            ProcessId(2), String::from("files"), String::from("Files"), 900, 600, true,
+        );
+        let (third, _) = desktop.open_window(
+            ProcessId(3), String::from("dialog"), String::from("Dialog"), 800, 500, false,
+        );
+        let area = Rect::new(20.0, 60.0, 600.0, 380.0);
+
+        assert!(desktop.fit_to_work_area(area));
+        for id in [first, second, third] {
+            let frame = desktop.windows.iter().find(|window| window.id == id).unwrap().frame;
+            assert!(frame.origin.x >= area.origin.x);
+            assert!(frame.origin.y >= area.origin.y);
+            assert!(frame.origin.x + frame.size.width <= area.origin.x + area.size.width);
+            assert!(frame.origin.y + frame.size.height <= area.origin.y + area.size.height);
+        }
+        assert!(!desktop.fit_to_work_area(area));
+
+        let maximized_area = Rect::new(0.0, 40.0, 1280.0, 760.0);
+        desktop.toggle_maximize(first, maximized_area);
+        assert!(!desktop.fit_to_work_area(area));
+        assert_eq!(desktop.windows.iter().find(|window| window.id == first).unwrap().frame, maximized_area);
+    }
 
     #[test]
     fn launch_failure_window_is_reused_and_focused() {

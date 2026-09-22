@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Child;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(not(target_os = "mochios"))]
 use std::process::{Command, Stdio};
@@ -36,12 +36,6 @@ const MAX_PROCESS_RECORDS: usize = 256;
 const PROCESS_STATE_TERMINATED: u64 = 4;
 #[cfg(target_os = "mochios")]
 const LINUX_SERVICE_NAME: &str = "linux.service";
-#[cfg(target_os = "mochios")]
-const LINUX_XTERM_ENTRY: &str = "linux:xterm";
-#[cfg(target_os = "mochios")]
-const LINUX_XCALC_ENTRY: &str = "linux:xcalc";
-#[cfg(target_os = "mochios")]
-const LINUX_XCLOCK_ENTRY: &str = "linux:xclock";
 
 #[allow(unused)]
 pub struct MochiOsPlatform {
@@ -52,6 +46,7 @@ pub struct MochiOsPlatform {
     close_window_requests: Vec<CloseWindowRequest>,
     exited_processes: Vec<ProcessId>,
     next_internal_pid: u32,
+    next_app_scan: Option<Instant>,
     #[cfg(target_os = "mochios")]
     decoration_manager: Option<decoration::DecorationManager>,
     #[cfg(target_os = "mochios")]
@@ -80,6 +75,7 @@ impl MochiOsPlatform {
             close_window_requests: Vec::new(),
             exited_processes: Vec::new(),
             next_internal_pid: 0x4000_0000,
+            next_app_scan: None,
             #[cfg(target_os = "mochios")]
             decoration_manager: None,
             #[cfg(target_os = "mochios")]
@@ -260,30 +256,6 @@ impl MochiOsPlatform {
             self.exited_processes.push(process_id);
         }
         changed
-    }
-
-    #[cfg(target_os = "mochios")]
-    fn launch_linux_entry(
-        &mut self,
-        app: &AppInfo,
-        application: mochios_linux_gui_protocol::LinuxApplication,
-    ) -> Result<ProcessId, PlatformError> {
-        if let Some(process_id) = self.process_for_bundle(&app.bundle_id) {
-            return Ok(process_id);
-        }
-        let instance = launch_linux_application(application)?;
-        let process_id = self.next_process_id();
-        self.children.insert(
-            process_id,
-            ManagedApp {
-                bundle_id: app.bundle_id.clone(),
-                child: None,
-                windows: HashSet::new(),
-                track_kernel_lifecycle: false,
-                linux_instance: Some(instance),
-            },
-        );
-        Ok(process_id)
     }
 
     #[cfg(target_os = "mochios")]
@@ -512,6 +484,22 @@ impl DesktopPlatform for MochiOsPlatform {
         Ok(self.system_bar.clone())
     }
 
+    fn native_windows_overlap(&self, area: viewkit::prelude::Rect) -> Result<bool, PlatformError> {
+        #[cfg(target_os = "mochios")]
+        {
+            self.decoration_manager
+                .as_ref()
+                .ok_or(PlatformError::ServiceUnavailable)?
+                .windows_overlap(area)
+                .map_err(|_| PlatformError::TransportFailure)
+        }
+        #[cfg(not(target_os = "mochios"))]
+        {
+            let _ = area;
+            Ok(false)
+        }
+    }
+
     fn reload_appearance(&mut self) -> Result<bool, PlatformError> {
         #[cfg(target_os = "mochios")]
         {
@@ -596,6 +584,11 @@ impl DesktopPlatform for MochiOsPlatform {
         &mut self,
         _active_processes: &[ProcessId],
     ) -> Result<(), PlatformError> {
+        let now = Instant::now();
+        if self.next_app_scan.is_some_and(|next| now < next) {
+            return Ok(());
+        }
+        self.next_app_scan = now.checked_add(Duration::from_secs(1));
         self.replace_apps_if_changed(read_apps());
         Ok(())
     }
@@ -681,18 +674,6 @@ impl DesktopPlatform for MochiOsPlatform {
 
     fn launch_app(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
         match app.entry.as_str() {
-            #[cfg(target_os = "mochios")]
-            LINUX_XTERM_ENTRY => {
-                self.launch_linux_entry(app, mochios_linux_gui_protocol::LinuxApplication::XTerm)
-            }
-            #[cfg(target_os = "mochios")]
-            LINUX_XCALC_ENTRY => {
-                self.launch_linux_entry(app, mochios_linux_gui_protocol::LinuxApplication::XCalc)
-            }
-            #[cfg(target_os = "mochios")]
-            LINUX_XCLOCK_ENTRY => {
-                self.launch_linux_entry(app, mochios_linux_gui_protocol::LinuxApplication::XClock)
-            }
             #[cfg(target_os = "mochios")]
             entry if entry.starts_with("linux:") => self.launch_linux_bundle(app),
             apps::ABOUT_ENTRY | apps::TEST_ENTRY => {
@@ -917,94 +898,12 @@ fn applications_root() -> PathBuf {
 
 fn read_apps() -> Vec<AppInfo> {
     let mut apps = read_apps_from(&applications_root());
-    #[cfg(target_os = "mochios")]
-    apps.extend([
-        linux_app_info(
-            "XTerm (Linux)",
-            "org.mochios.linux.xterm",
-            LINUX_XTERM_ENTRY,
-            "Linux X11 terminal hosted by mBoot",
-        ),
-        linux_app_info(
-            "XCalc (Linux)",
-            "org.mochios.linux.xcalc",
-            LINUX_XCALC_ENTRY,
-            "Linux X11 calculator hosted by mBoot",
-        ),
-        linux_app_info(
-            "XClock (Linux)",
-            "org.mochios.linux.xclock",
-            LINUX_XCLOCK_ENTRY,
-            "Linux X11 clock hosted by mBoot",
-        ),
-    ]);
     apps.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
             .then_with(|| left.bundle_id.cmp(&right.bundle_id))
     });
     apps
-}
-
-#[cfg(target_os = "mochios")]
-fn linux_app_info(name: &str, bundle_id: &str, entry: &str, description: &str) -> AppInfo {
-    AppInfo {
-        root: applications_root(),
-        name: String::from(name),
-        bundle_id: String::from(bundle_id),
-        version: String::from("1"),
-        developer: String::from("X.Org"),
-        entry: String::from(entry),
-        description: String::from(description),
-        icon: None,
-        resources: Vec::new(),
-    }
-}
-
-#[cfg(target_os = "mochios")]
-fn launch_linux_application(
-    application: mochios_linux_gui_protocol::LinuxApplication,
-) -> Result<u64, PlatformError> {
-    use mochios_linux_gui_protocol::{
-        LAUNCH_REQUEST_LEN, LAUNCH_RESPONSE_LEN, LaunchRequest, LaunchResponse,
-    };
-
-    let service = mochi_user_platform::process::find_by_name(LINUX_SERVICE_NAME)
-        .map_err(|_| PlatformError::ServiceUnavailable)?;
-    if service == 0 {
-        return Err(PlatformError::ServiceUnavailable);
-    }
-    let request_id = mochi_user_platform::time::ticks().unwrap_or(1).max(1);
-    let request = LaunchRequest {
-        request_id,
-        application,
-    };
-    let mut encoded = [0u8; LAUNCH_REQUEST_LEN];
-    request
-        .encode(&mut encoded)
-        .map_err(|_| PlatformError::InvalidResponse)?;
-    let mut response = [0u8; LAUNCH_RESPONSE_LEN];
-    let raw = mochi_user_platform::ipc::call(service, &encoded, &mut response)
-        .map_err(|_| PlatformError::TransportFailure)?;
-    let length = raw as u32 as usize;
-    let response = LaunchResponse::decode(
-        response
-            .get(..length)
-            .ok_or(PlatformError::InvalidResponse)?,
-    )
-    .map_err(|_| PlatformError::InvalidResponse)?;
-    if response.request_id != request_id {
-        return Err(PlatformError::InvalidResponse);
-    }
-    if response.status != 0 {
-        return Err(PlatformError::ProcessLaunchRejected {
-            errno: u64::from(response.status.unsigned_abs()),
-        });
-    }
-    if response.instance == 0 {
-        return Err(PlatformError::InvalidResponse);
-    }
-    Ok(response.instance)
 }
 
 #[cfg(target_os = "mochios")]

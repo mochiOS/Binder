@@ -166,6 +166,10 @@ pub enum PlatformError {
 pub trait DesktopPlatform {
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError>;
 
+    fn native_windows_overlap(&self, _area: viewkit::prelude::Rect) -> Result<bool, PlatformError> {
+        Ok(false)
+    }
+
     fn open_system_settings(&self) -> Result<(), PlatformError>;
 
     fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError>;

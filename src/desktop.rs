@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 use crate::dock_preferences::DockPreferences;
 use crate::platform::{self, AppInfo, ContextMenuModel, DesktopPlatform, SystemBarState};
@@ -19,10 +20,12 @@ pub struct BinderApp {
     dock_hovered_app: Rc<Cell<Option<usize>>>,
     dock_pressed_app: Rc<Cell<Option<usize>>>,
     dock_pointer: Rc<Cell<Option<Point>>>,
+    dock_visibility: Rc<RefCell<crate::ui::dock::DockVisibility>>,
     dock_running_apps: State<Vec<String>>,
     dock_preferences: State<DockPreferences>,
     app_library_open: State<bool>,
     pending_app_activation: Rc<RefCell<crate::ui::app_library::PendingAppActivation>>,
+    fast_poll_until: Rc<Cell<Option<Instant>>>,
     cursor_pointer: Rc<Cell<Option<Point>>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, crate::ui::test::TestWindowState>>>,
     launch_failure_states:
@@ -71,12 +74,14 @@ impl App for BinderApp {
             dock_hovered_app: Rc::new(Cell::new(None)),
             dock_pressed_app: Rc::new(Cell::new(None)),
             dock_pointer: Rc::new(Cell::new(None)),
+            dock_visibility: Rc::new(RefCell::new(crate::ui::dock::DockVisibility::default())),
             dock_running_apps: State::new(Vec::new()),
             dock_preferences: State::new(DockPreferences::load()),
             app_library_open: State::new(false),
             pending_app_activation: Rc::new(RefCell::new(
                 crate::ui::app_library::PendingAppActivation::default(),
             )),
+            fast_poll_until: Rc::new(Cell::new(None)),
             cursor_pointer: Rc::new(Cell::new(None)),
             test_window_states: Rc::new(RefCell::new(HashMap::new())),
             launch_failure_states: Rc::new(RefCell::new(HashMap::new())),
@@ -114,10 +119,12 @@ impl App for BinderApp {
             Rc::clone(&self.dock_hovered_app),
             Rc::clone(&self.dock_pressed_app),
             Rc::clone(&self.dock_pointer),
+            Rc::clone(&self.dock_visibility),
             self.dock_running_apps.clone(),
             self.dock_preferences.clone(),
             self.app_library_open.clone(),
             Rc::clone(&self.pending_app_activation),
+            Rc::clone(&self.fast_poll_until),
             Rc::clone(&self.cursor_pointer),
             Rc::clone(&self.test_window_states),
             Rc::clone(&self.launch_failure_states),

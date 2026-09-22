@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::dock_preferences::DockPreferences;
 use crate::platform::{AppInfo, DesktopPlatform};
@@ -16,7 +16,6 @@ use viewkit::{
 };
 
 const PANEL_WIDTH: f32 = 760.0;
-const PANEL_HEIGHT: f32 = 520.0;
 const GRID_COLUMNS: usize = 5;
 const GRID_ROWS: usize = 3;
 const PAGE_SIZE: usize = GRID_COLUMNS * GRID_ROWS;
@@ -28,12 +27,7 @@ const SEARCH_HEIGHT: f32 = 38.0;
 const PAGE_BUTTON_SIZE: f32 = 30.0;
 const MENU_WIDTH: f32 = 190.0;
 const MENU_HEIGHT: f32 = 80.0;
-
-#[cfg(target_os = "mochios")]
-const FALLBACK_APP_ICON: &str = "/applications/Binder.app/appicon.svg";
-
-#[cfg(not(target_os = "mochios"))]
-const FALLBACK_APP_ICON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/appicon.svg");
+const DEVELOPMENT_TEST_BUNDLE_ID: &str = "org.mochios.viewkit-test";
 
 #[derive(Clone)]
 enum CachedIcon {
@@ -86,6 +80,7 @@ pub(crate) struct AppLibraryLayer<C> {
     preferences: State<DockPreferences>,
     open: State<bool>,
     pending_activation: Rc<RefCell<PendingAppActivation>>,
+    fast_poll_until: Rc<Cell<Option<Instant>>>,
     launch_failure_states: Rc<
         RefCell<HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>>,
     >,
@@ -115,6 +110,7 @@ where
         preferences: State<DockPreferences>,
         open: State<bool>,
         pending_activation: Rc<RefCell<PendingAppActivation>>,
+        fast_poll_until: Rc<Cell<Option<Instant>>>,
         launch_failure_states: Rc<
             RefCell<
                 HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>,
@@ -134,6 +130,7 @@ where
             preferences,
             open,
             pending_activation,
+            fast_poll_until,
             launch_failure_states,
             hovered: Cell::new(None),
             pressed: Cell::new(None),
@@ -162,9 +159,12 @@ where
         }
     }
 
-    fn panel_rect(bounds: Rect) -> Rect {
+    fn panel_rect(bounds: Rect, visible_count: usize, has_multiple_pages: bool) -> Rect {
         let width = PANEL_WIDTH.min(bounds.size.width - 64.0).max(320.0);
-        let height = PANEL_HEIGHT.min(bounds.size.height - 120.0).max(280.0);
+        let rows = visible_count.div_ceil(GRID_COLUMNS).max(1).min(GRID_ROWS);
+        let desired_height = 84.0 + rows as f32 * ITEM_HEIGHT
+            + if has_multiple_pages { 60.0 } else { 34.0 };
+        let height = desired_height.min((bounds.size.height - 120.0).max(220.0));
         Rect::new(
             bounds.origin.x + (bounds.size.width - width) / 2.0,
             bounds.origin.y + (bounds.size.height - height) / 2.0 - 24.0,
@@ -363,7 +363,10 @@ where
         let process_id = match running_process {
             Some(process_id) => process_id,
             None => match self.platform.borrow_mut().launch_app(app) {
-                Ok(process_id) => process_id,
+                Ok(process_id) => {
+                    self.fast_poll_until.set(Some(Instant::now() + Duration::from_secs(5)));
+                    process_id
+                }
                 Err(error) => {
                     eprintln!("failed to launch app {}: {error:?}", app.bundle_id);
                     let state = super::launch_failure::LaunchFailureWindowState::new(app, error);
@@ -419,17 +422,17 @@ where
     }
 
     fn paint_icon(&self, app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
-        let path = app
-            .icon
-            .as_deref()
-            .unwrap_or_else(|| Path::new(FALLBACK_APP_ICON));
-        if let CachedIcon::Image(image) = self.load_icon(path) {
+        if let Some(path) = app.icon.as_deref()
+            && let CachedIcon::Image(image) = self.load_icon(path)
+        {
             Image::new(image)
                 .content_mode(ImageContentMode::Fit)
                 .sampling(ImageSampling::Bicubic)
                 .radius(CornerRadius::Custom(13.0))
                 .paint(bounds, context);
+            return;
         }
+        paint_monogram(app, bounds, context);
     }
 }
 
@@ -452,7 +455,12 @@ where
         Rectangle::new()
             .color(RectangleColor::Custom(Theme::current().shell.scrim))
             .paint(bounds, context);
-        let panel = Self::panel_rect(bounds);
+        let apps = self.apps.get();
+        let filtered = matching_app_indices(&apps, &self.query.borrow());
+        self.clamp_page(&filtered);
+        let visible = self.visible_indices(&filtered);
+        let page_count = self.page_count(&filtered);
+        let panel = Self::panel_rect(bounds, visible.len(), page_count > 1);
         Rectangle::new()
             .color(RectangleColor::Custom(
                 Theme::current().shell.panel_background,
@@ -501,10 +509,6 @@ where
             context,
         );
 
-        let apps = self.apps.get();
-        let filtered = matching_app_indices(&apps, &self.query.borrow());
-        self.clamp_page(&filtered);
-        let visible = self.visible_indices(&filtered);
         for (local_index, app_index) in visible.iter().copied().enumerate() {
             let Some(app) = apps.get(app_index) else {
                 continue;
@@ -555,7 +559,7 @@ where
                 .paint(
                     Rect::new(
                         panel.origin.x + 80.0,
-                        panel.origin.y + 220.0,
+                        panel.origin.y + 110.0,
                         panel.size.width - 160.0,
                         28.0,
                     ),
@@ -563,52 +567,53 @@ where
                 );
         }
 
-        let page_count = self.page_count(&filtered);
         let page = self.page.get();
-        let previous = Self::previous_page_rect(panel);
-        let next = Self::next_page_rect(panel);
-        for (button, enabled, label) in [
-            (previous, page > 0, "<"),
-            (next, page + 1 < page_count, ">"),
-        ] {
-            Rectangle::new()
-                .color(RectangleColor::Custom(if enabled {
-                    Theme::current().shell.item_enabled
-                } else {
-                    Theme::current().shell.item_disabled
-                }))
-                .radius(CornerRadius::Custom(PAGE_BUTTON_SIZE / 2.0))
-                .paint(button, context);
-            Text::styled(label, TextRole::Label)
-                .weight(700)
+        if page_count > 1 {
+            let previous = Self::previous_page_rect(panel);
+            let next = Self::next_page_rect(panel);
+            for (button, enabled, label) in [
+                (previous, page > 0, "<"),
+                (next, page + 1 < page_count, ">"),
+            ] {
+                Rectangle::new()
+                    .color(RectangleColor::Custom(if enabled {
+                        Theme::current().shell.item_enabled
+                    } else {
+                        Theme::current().shell.item_disabled
+                    }))
+                    .radius(CornerRadius::Custom(PAGE_BUTTON_SIZE / 2.0))
+                    .paint(button, context);
+                Text::styled(label, TextRole::Label)
+                    .weight(700)
+                    .alignment(TextAlignment::Center)
+                    .color(if enabled {
+                        Theme::current().shell.primary_text
+                    } else {
+                        Theme::current().shell.tertiary_text.with_alpha(70)
+                    })
+                    .paint(
+                        Rect::new(
+                            button.origin.x,
+                            button.origin.y + 4.0,
+                            button.size.width,
+                            22.0,
+                        ),
+                        context,
+                    );
+            }
+            Text::styled(format!("{} / {}", page + 1, page_count), TextRole::Caption)
                 .alignment(TextAlignment::Center)
-                .color(if enabled {
-                    Theme::current().shell.primary_text
-                } else {
-                    Theme::current().shell.tertiary_text.with_alpha(70)
-                })
+                .color(Theme::current().shell.tertiary_text)
                 .paint(
                     Rect::new(
-                        button.origin.x,
-                        button.origin.y + 4.0,
-                        button.size.width,
-                        22.0,
+                        panel.origin.x + panel.size.width / 2.0 - 42.0,
+                        panel.origin.y + panel.size.height - 40.0,
+                        84.0,
+                        20.0,
                     ),
                     context,
                 );
         }
-        Text::styled(format!("{} / {}", page + 1, page_count), TextRole::Caption)
-            .alignment(TextAlignment::Center)
-            .color(Theme::current().shell.tertiary_text)
-            .paint(
-                Rect::new(
-                    panel.origin.x + panel.size.width / 2.0 - 42.0,
-                    panel.origin.y + panel.size.height - 40.0,
-                    84.0,
-                    20.0,
-                ),
-                context,
-            );
         if let Some(menu_bounds) = self.menu_bounds(bounds) {
             self.active_menu().paint(menu_bounds, context);
         }
@@ -655,7 +660,13 @@ where
                 _ => return EventResult::Consumed,
             }
         }
-        let panel = Self::panel_rect(bounds);
+        let filtered = self.filtered_indices();
+        self.clamp_page(&filtered);
+        let panel = Self::panel_rect(
+            bounds,
+            self.visible_indices(&filtered).len(),
+            self.page_count(&filtered) > 1,
+        );
         match event {
             ViewEvent::KeyPressed {
                 key: Key::Escape, ..
@@ -665,41 +676,41 @@ where
             }
             ViewEvent::ArrowLeft => {
                 self.move_selection(-1);
-                context.request_redraw_in(panel);
+                context.request_redraw_in(bounds);
             }
             ViewEvent::ArrowRight => {
                 self.move_selection(1);
-                context.request_redraw_in(panel);
+                context.request_redraw_in(bounds);
             }
             ViewEvent::KeyPressed {
                 key: Key::ArrowUp, ..
             } => {
                 self.move_selection(-(GRID_COLUMNS as isize));
-                context.request_redraw_in(panel);
+                context.request_redraw_in(bounds);
             }
             ViewEvent::KeyPressed {
                 key: Key::ArrowDown,
                 ..
             } => {
                 self.move_selection(GRID_COLUMNS as isize);
-                context.request_redraw_in(panel);
+                context.request_redraw_in(bounds);
             }
             ViewEvent::KeyPressed {
                 key: Key::PageUp, ..
             } => {
                 self.select_page(self.page.get().saturating_sub(1));
-                context.request_redraw_in(panel);
+                context.request_redraw_in(bounds);
             }
             ViewEvent::KeyPressed {
                 key: Key::PageDown, ..
             } => {
                 self.select_page(self.page.get().saturating_add(1));
-                context.request_redraw_in(panel);
+                context.request_redraw_in(bounds);
             }
             ViewEvent::Backspace => {
                 self.query.borrow_mut().pop();
                 self.reset_selection();
-                context.request_redraw_in(panel);
+                context.request_redraw_in(bounds);
             }
             ViewEvent::KeyPressed {
                 key: Key::Enter, ..
@@ -731,7 +742,7 @@ where
                 }
                 drop(query);
                 self.reset_selection();
-                context.request_redraw_in(panel);
+                context.request_redraw_in(bounds);
             }
             ViewEvent::PointerMoved { position } => {
                 self.hovered.set(self.hit_index(panel, *position));
@@ -749,12 +760,14 @@ where
                 if !panel.contains(*position) {
                     self.open.set(false);
                     context.request_redraw_in(bounds);
-                } else if Self::previous_page_rect(panel).contains(*position) {
+                } else if self.page_count(&self.filtered_indices()) > 1
+                    && Self::previous_page_rect(panel).contains(*position) {
                     self.select_page(self.page.get().saturating_sub(1));
-                    context.request_redraw_in(panel);
-                } else if Self::next_page_rect(panel).contains(*position) {
+                    context.request_redraw_in(bounds);
+                } else if self.page_count(&self.filtered_indices()) > 1
+                    && Self::next_page_rect(panel).contains(*position) {
                     self.select_page(self.page.get().saturating_add(1));
-                    context.request_redraw_in(panel);
+                    context.request_redraw_in(bounds);
                 } else {
                     self.pressed.set(self.hit_index(panel, *position));
                     self.selected.set(self.pressed.get());
@@ -796,7 +809,7 @@ where
                 } else {
                     self.select_page(self.page.get().saturating_add(1));
                 }
-                context.request_redraw_in(panel);
+                context.request_redraw_in(bounds);
             }
             _ => {}
         }
@@ -804,11 +817,42 @@ where
     }
 }
 
+pub(super) fn paint_monogram(app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
+    Rectangle::new()
+        .color(RectangleColor::Custom(Theme::current().colors.accent))
+        .radius(CornerRadius::Custom(bounds.size.width * 0.22))
+        .paint(bounds, context);
+    let initial = app
+        .name
+        .chars()
+        .find(|character| character.is_alphanumeric())
+        .unwrap_or('?')
+        .to_uppercase()
+        .collect::<String>();
+    Text::styled(initial, TextRole::TitleMedium)
+        .font_size(bounds.size.width * 0.48)
+        .weight(600)
+        .alignment(TextAlignment::Center)
+        .color(Color::WHITE)
+        .paint(
+            Rect::new(
+                bounds.origin.x,
+                bounds.origin.y + bounds.size.height * 0.18,
+                bounds.size.width,
+                bounds.size.height * 0.7,
+            ),
+            context,
+        );
+}
+
 fn matching_app_indices(apps: &[AppInfo], query: &str) -> Vec<usize> {
     let query = query.trim().to_lowercase();
     apps.iter()
         .enumerate()
         .filter_map(|(index, app)| {
+            if app.bundle_id == DEVELOPMENT_TEST_BUNDLE_ID {
+                return None;
+            }
             let matches = query.is_empty()
                 || app.name.to_lowercase().contains(&query)
                 || app.bundle_id.to_lowercase().contains(&query)
@@ -865,10 +909,31 @@ mod tests {
     }
 
     #[test]
+    fn development_test_app_is_not_listed() {
+        let apps = vec![
+            app("ViewKit Test", DEVELOPMENT_TEST_BUNDLE_ID, "mochiOS"),
+            app("Files", "org.mochios.files", "mochiOS"),
+        ];
+        assert_eq!(matching_app_indices(&apps, ""), vec![1]);
+        assert!(matching_app_indices(&apps, "viewkit").is_empty());
+    }
+
+    #[test]
     fn page_count_keeps_an_empty_page_and_rounds_up() {
         assert_eq!(page_count(0), 1);
         assert_eq!(page_count(PAGE_SIZE), 1);
         assert_eq!(page_count(PAGE_SIZE + 1), 2);
+    }
+
+    #[test]
+    fn panel_height_follows_the_number_of_visible_rows() {
+        let bounds = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        let one_row = AppLibraryLayer::<Rectangle>::panel_rect(bounds, 5, false);
+        let two_rows = AppLibraryLayer::<Rectangle>::panel_rect(bounds, 6, false);
+        let paginated = AppLibraryLayer::<Rectangle>::panel_rect(bounds, PAGE_SIZE, true);
+        assert_eq!(one_row.size.height, 226.0);
+        assert_eq!(two_rows.size.height, 334.0);
+        assert_eq!(paginated.size.height, 468.0);
     }
 
     #[test]

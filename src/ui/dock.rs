@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use crate::dock_preferences::DockPreferences;
 use crate::platform::{AppInfo, DesktopPlatform};
@@ -30,6 +31,10 @@ const DOCK_RADIUS: f32 = 48.0;
 const DOCK_ITEM_RADIUS: f32 = 16.0;
 const DOCK_INTERACTION_TOP_OVERFLOW: f32 = 26.0;
 const DOCK_REDRAW_MARGIN: f32 = 20.0;
+const DOCK_REVEAL_EDGE: f32 = 9.0;
+const DOCK_SLIDE_DURATION: Duration = Duration::from_millis(210);
+const DOCK_FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
+const NATIVE_OVERLAP_CACHE_INTERVAL: Duration = Duration::from_millis(50);
 const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 const APP_LIBRARY_BUNDLE_ID: &str = "internal:app-library";
 
@@ -43,11 +48,6 @@ const DOCK_TOOLTIP_MARGIN: f32 = 10.0;
 const DOCK_TOOLTIP_HORIZONTAL_PADDING: f32 = 12.0;
 const DOCK_TOOLTIP_MAX_WIDTH: f32 = 220.0;
 const DOCK_TOOLTIP_RADIUS: f32 = 12.0;
-#[cfg(target_os = "mochios")]
-const FALLBACK_APP_ICON: &str = "/applications/Binder.app/appicon.svg";
-
-#[cfg(not(target_os = "mochios"))]
-const FALLBACK_APP_ICON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/appicon.svg",);
 
 struct DockItemVisual {
     item: Rect,
@@ -68,6 +68,51 @@ enum DockMenuAction {
     Unpin,
 }
 
+pub(crate) struct DockVisibility {
+    amount_from: f32,
+    target_visible: bool,
+    started: Instant,
+    edge_hover: bool,
+}
+
+impl Default for DockVisibility {
+    fn default() -> Self {
+        Self {
+            amount_from: 1.0,
+            target_visible: true,
+            started: Instant::now(),
+            edge_hover: false,
+        }
+    }
+}
+
+impl DockVisibility {
+    fn amount(&self, now: Instant) -> f32 {
+        let progress = (now.saturating_duration_since(self.started).as_secs_f32()
+            / DOCK_SLIDE_DURATION.as_secs_f32()).clamp(0.0, 1.0);
+        let eased = if self.target_visible {
+            1.0 - (1.0 - progress).powi(3)
+        } else {
+            progress.powi(3)
+        };
+        let destination = if self.target_visible { 1.0 } else { 0.0 };
+        self.amount_from + (destination - self.amount_from) * eased
+    }
+
+    fn set_target(&mut self, visible: bool, now: Instant) {
+        if self.target_visible != visible {
+            self.amount_from = self.amount(now);
+            self.target_visible = visible;
+            self.started = now;
+        }
+    }
+
+    fn animating(&self, now: Instant) -> bool {
+        (self.amount_from - if self.target_visible { 1.0 } else { 0.0 }).abs() > 0.001
+            && now.saturating_duration_since(self.started) < DOCK_SLIDE_DURATION
+    }
+}
+
 pub(crate) struct DockLayer<C> {
     content: C,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
@@ -76,13 +121,17 @@ pub(crate) struct DockLayer<C> {
     hovered: Rc<Cell<Option<usize>>>,
     pressed: Rc<Cell<Option<usize>>>,
     pointer: Rc<Cell<Option<Point>>>,
+    cursor_position: Rc<Cell<Option<Point>>>,
+    visibility: Rc<RefCell<DockVisibility>>,
     running_apps: State<Vec<String>>,
     preferences: State<DockPreferences>,
     app_library_open: State<bool>,
+    fast_poll_until: Rc<Cell<Option<Instant>>>,
     launch_failure_states: Rc<
         RefCell<HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>>,
     >,
     icon_cache: RefCell<HashMap<PathBuf, DockIcon>>,
+    native_overlap_cache: Cell<Option<(Instant, bool)>>,
     pin_menu: Menu,
     unpin_menu: Menu,
     menu_index: Rc<Cell<Option<usize>>>,
@@ -103,9 +152,12 @@ where
         hovered: Rc<Cell<Option<usize>>>,
         pressed: Rc<Cell<Option<usize>>>,
         pointer: Rc<Cell<Option<Point>>>,
+        cursor_position: Rc<Cell<Option<Point>>>,
+        visibility: Rc<RefCell<DockVisibility>>,
         running_apps: State<Vec<String>>,
         preferences: State<DockPreferences>,
         app_library_open: State<bool>,
+        fast_poll_until: Rc<Cell<Option<Instant>>>,
         launch_failure_states: Rc<
             RefCell<
                 HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>,
@@ -126,11 +178,15 @@ where
             hovered,
             pressed,
             pointer,
+            cursor_position,
+            visibility,
             running_apps,
             preferences,
             app_library_open,
+            fast_poll_until,
             launch_failure_states,
             icon_cache: RefCell::new(HashMap::new()),
+            native_overlap_cache: Cell::new(None),
             pin_menu: Menu::new()
                 .item(MenuItem::new("Open").on_select(move || {
                     open_action.set(Some(DockMenuAction::Open));
@@ -208,7 +264,7 @@ where
             .count()
     }
 
-    fn dock_rect(&self, bounds: Rect) -> Option<Rect> {
+    fn base_dock_rect(&self, bounds: Rect) -> Option<Rect> {
         let count = self.dock_apps().len();
 
         if count == 0 {
@@ -227,6 +283,75 @@ where
         let y = bounds.origin.y + bounds.size.height - DOCK_BOTTOM_MARGIN - DOCK_HEIGHT;
 
         Some(Rect::new(x, y, width, DOCK_HEIGHT))
+    }
+
+    fn dock_rect(&self, bounds: Rect) -> Option<Rect> {
+        let mut dock = self.base_dock_rect(bounds)?;
+        let amount = self.visibility.borrow().amount(Instant::now());
+        dock.origin.y += (1.0 - amount) * (DOCK_HEIGHT + DOCK_BOTTOM_MARGIN + 8.0);
+        Some(dock)
+    }
+
+    fn overlaps_window(&self, dock: Rect) -> bool {
+        if Self::windows_overlap_dock(&self.windows.get(), dock) {
+            return true;
+        }
+        let now = Instant::now();
+        if let Some((sampled_at, overlaps)) = self.native_overlap_cache.get()
+            && now.saturating_duration_since(sampled_at) < NATIVE_OVERLAP_CACHE_INTERVAL
+        {
+            return overlaps;
+        }
+        let overlaps = self.platform
+            .borrow()
+            .native_windows_overlap(dock)
+            .unwrap_or_else(|_| !self.running_apps.get().is_empty());
+        self.native_overlap_cache.set(Some((now, overlaps)));
+        overlaps
+    }
+
+    fn windows_overlap_dock(windows: &DesktopWindows, dock: Rect) -> bool {
+        windows.windows.iter().any(|window| {
+            !window.minimized
+                && (window.restore_frame.is_some() || window.frame.intersection(dock).is_some())
+        })
+    }
+
+    fn should_show(&self, bounds: Rect) -> bool {
+        let Some(dock) = self.base_dock_rect(bounds) else { return false; };
+        !self.overlaps_window(dock)
+            || self.visibility.borrow().edge_hover
+            || self.menu_index.get().is_some()
+    }
+
+    fn animation_damage(bounds: Rect) -> Rect {
+        let height = 190.0_f32.min(bounds.size.height);
+        Rect::new(bounds.origin.x, bounds.origin.y + bounds.size.height - height, bounds.size.width, height)
+    }
+
+    fn update_edge_hover(&self, bounds: Rect, position: Option<Point>) -> bool {
+        let Some(dock) = self.base_dock_rect(bounds) else { return false; };
+        let mut visibility = self.visibility.borrow_mut();
+        let was_hovering = visibility.edge_hover;
+        let can_retain = was_hovering || visibility.amount(Instant::now()) > 0.001;
+        visibility.edge_hover = position.is_some_and(|position| {
+            Self::edge_hover_for_position(bounds, dock, position, can_retain)
+        });
+        was_hovering != visibility.edge_hover
+    }
+
+    fn edge_hover_for_position(bounds: Rect, dock: Rect, position: Point, was_hovering: bool) -> bool {
+        let bottom = bounds.origin.y + bounds.size.height;
+        let at_bottom_edge = position.x >= bounds.origin.x
+            && position.x < bounds.origin.x + bounds.size.width
+            && position.y >= bottom - DOCK_REVEAL_EDGE
+            && position.y <= bottom;
+        let over_dock = was_hovering
+            && position.x >= dock.origin.x
+            && position.x < dock.origin.x + dock.size.width
+            && position.y >= dock.origin.y - DOCK_INTERACTION_TOP_OVERFLOW
+            && position.y <= bottom;
+        at_bottom_edge || over_dock
     }
 
     fn dock_interaction_rect(dock: Rect) -> Rect {
@@ -369,6 +494,7 @@ where
             .activate_or_launch(index)
             .is_some_and(ProcessActivation::changed_window_state);
         let after = self.visible_windows_damage();
+        context.request_redraw();
         if activation_changed || before != after {
             let dirty = match (before, self.visible_windows_damage()) {
                 (Some(before), Some(after)) => Some(before.union(after)),
@@ -455,11 +581,20 @@ where
             return Some(ProcessActivation::NoWindow);
         }
 
+        // A launch must not keep the Dock revealed merely because the pointer
+        // is still over the icon that was clicked. The bottom edge can reveal it again.
+        self.visibility.borrow_mut().edge_hover = false;
+        self.hovered.set(None);
+        self.pointer.set(None);
+
         let running_process = self.platform.borrow().process_id_for_bundle(&app.bundle_id);
         let process_id = match running_process {
             Some(process_id) => process_id,
             None => match self.platform.borrow_mut().launch_app(&app) {
-                Ok(process_id) => process_id,
+                Ok(process_id) => {
+                    self.fast_poll_until.set(Some(Instant::now() + Duration::from_secs(5)));
+                    process_id
+                }
 
                 Err(error) => {
                     eprintln!("failed to launch app {}: {error:?}", app.bundle_id,);
@@ -542,14 +677,7 @@ where
             }
         }
 
-        let fallback = PathBuf::from(FALLBACK_APP_ICON);
-        if let DockIcon::Image(image) = self.load_icon(&fallback) {
-            Image::new(image)
-                .content_mode(ImageContentMode::Fit)
-                .radius(CornerRadius::Custom(10.0))
-                .sampling(ImageSampling::Bicubic)
-                .paint(bounds, context);
-        }
+        super::app_library::paint_monogram(app, bounds, context);
     }
 
     fn paint_app_library_icon(&self, bounds: Rect, context: &mut PaintContext<'_>) {
@@ -679,6 +807,22 @@ where
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.content.paint(bounds, context);
 
+        self.update_edge_hover(bounds, self.cursor_position.get());
+        let now = Instant::now();
+        let should_show = self.should_show(bounds);
+        let amount = {
+            let mut visibility = self.visibility.borrow_mut();
+            visibility.set_target(should_show, now);
+            let amount = visibility.amount(now);
+            if visibility.animating(now) {
+                context.request_redraw_in_at(
+                    Self::animation_damage(bounds),
+                    now + DOCK_FRAME_INTERVAL,
+                );
+            }
+            amount
+        };
+        if amount <= 0.001 { return; }
         let Some(dock) = self.dock_rect(bounds) else {
             return;
         };
@@ -773,6 +917,25 @@ where
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
+        match event {
+            ViewEvent::PointerMoved { position } => {
+                if self.update_edge_hover(bounds, Some(*position)) {
+                    context.request_redraw_in(Self::animation_damage(bounds));
+                }
+            }
+            ViewEvent::PointerPressed { position, .. }
+            | ViewEvent::PointerReleased { position, .. } => {
+                if self.update_edge_hover(bounds, Some(*position)) {
+                    context.request_redraw_in(Self::animation_damage(bounds));
+                }
+            }
+            ViewEvent::PointerLeft => {
+                if self.update_edge_hover(bounds, None) {
+                    context.request_redraw_in(Self::animation_damage(bounds));
+                }
+            }
+            _ => {}
+        }
         if let Some(menu_bounds) = self.menu_bounds(bounds) {
             match event {
                 ViewEvent::KeyPressed {
@@ -1074,5 +1237,113 @@ fn app_library_item() -> AppInfo {
         description: String::new(),
         icon: None,
         resources: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+
+    struct NativeWindowPlatform;
+
+    impl DesktopPlatform for NativeWindowPlatform {
+        fn system_bar_state(&self) -> Result<crate::platform::SystemBarState, crate::platform::PlatformError> {
+            Ok(Default::default())
+        }
+
+        fn open_system_settings(&self) -> Result<(), crate::platform::PlatformError> {
+            Ok(())
+        }
+
+        fn perform_system_action(&self, _action: crate::platform::SystemAction) -> Result<(), crate::platform::PlatformError> {
+            Ok(())
+        }
+
+        fn refresh(&mut self) -> Result<bool, crate::platform::PlatformError> {
+            Ok(false)
+        }
+
+        fn native_windows_overlap(&self, _area: Rect) -> Result<bool, crate::platform::PlatformError> {
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn native_window_occludes_dock_without_a_binder_window() {
+        let platform: Rc<RefCell<dyn DesktopPlatform>> = Rc::new(RefCell::new(NativeWindowPlatform));
+        let layer = DockLayer::new(
+            Rectangle::new(),
+            platform,
+            State::new(DesktopWindows::default()),
+            State::new(Vec::new()),
+            Rc::new(Cell::new(None)),
+            Rc::new(Cell::new(None)),
+            Rc::new(Cell::new(None)),
+            Rc::new(Cell::new(None)),
+            Rc::new(RefCell::new(DockVisibility::default())),
+            State::new(Vec::new()),
+            State::new(DockPreferences::default()),
+            State::new(false),
+            Rc::new(Cell::new(None)),
+            Rc::new(RefCell::new(HashMap::new())),
+        );
+        assert!(layer.overlaps_window(Rect::new(490.0, 705.0, 300.0, DOCK_HEIGHT)));
+        let screen = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        assert!(layer.update_edge_hover(screen, Some(Point::new(640.0, 798.0))));
+        assert!(layer.update_edge_hover(screen, None));
+        assert!(layer.update_edge_hover(screen, Some(Point::new(640.0, 785.0))));
+    }
+
+    #[test]
+    fn dock_slides_offscreen_and_back() {
+        let start = Instant::now();
+        let mut visibility = DockVisibility::default();
+        visibility.set_target(false, start);
+        assert!((visibility.amount(start) - 1.0).abs() < 0.001);
+        assert!(visibility.animating(start));
+        assert!(visibility.amount(start + DOCK_SLIDE_DURATION) < 0.001);
+        visibility.set_target(true, start + DOCK_SLIDE_DURATION);
+        assert!(visibility.amount(start + DOCK_SLIDE_DURATION * 2) > 0.999);
+    }
+
+    #[test]
+    fn edge_hover_ends_when_pointer_leaves_dock_horizontally() {
+        let screen = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        let dock = Rect::new(490.0, 705.0, 300.0, DOCK_HEIGHT);
+        assert!(DockLayer::<Rectangle>::edge_hover_for_position(
+            screen, dock, Point::new(100.0, 798.0), false,
+        ));
+        assert!(DockLayer::<Rectangle>::edge_hover_for_position(
+            screen, dock, Point::new(640.0, 740.0), true,
+        ));
+        assert!(!DockLayer::<Rectangle>::edge_hover_for_position(
+            screen, dock, Point::new(100.0, 740.0), true,
+        ));
+    }
+
+    #[test]
+    fn overlapping_visible_window_requires_dock_to_hide() {
+        let dock = Rect::new(490.0, 705.0, 300.0, DOCK_HEIGHT);
+        let mut windows = DesktopWindows::default();
+        windows.open_about(crate::platform::ProcessId(1), String::from("Settings"), 980, 680, true);
+        windows.windows[0].frame = Rect::new(400.0, 230.0, 980.0, 550.0);
+        assert!(DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
+        windows.windows[0].minimized = true;
+        assert!(!DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
+    }
+
+    #[test]
+    fn maximized_window_hides_dock_even_if_its_frame_is_stale() {
+        let dock = Rect::new(490.0, 705.0, 300.0, DOCK_HEIGHT);
+        let mut windows = DesktopWindows::default();
+        let (id, _) = windows.open_about(
+            crate::platform::ProcessId(1), String::from("Settings"), 980, 680, true,
+        );
+        windows.toggle_maximize(id, Rect::new(0.0, 40.0, 1280.0, 760.0));
+        assert!(DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
+        windows.windows[0].frame = Rect::new(10.0, 40.0, 300.0, 300.0);
+        assert!(DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
+        windows.windows[0].minimized = true;
+        assert!(!DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
     }
 }

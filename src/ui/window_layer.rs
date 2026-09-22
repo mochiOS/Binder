@@ -3,6 +3,7 @@ use crate::window::{DesktopWindow, DesktopWindows, WindowControl, WindowDrag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
@@ -19,6 +20,22 @@ const RESIZE_CORNER_LENGTH: f32 = 28.0;
 const MINIMUM_WINDOW_WIDTH: f32 = 280.0;
 const MINIMUM_WINDOW_HEIGHT: f32 = 180.0;
 const WINDOW_EFFECT_EXTENT: f32 = 20.0;
+
+pub(crate) fn window_work_area(bounds: Rect) -> Rect {
+    let width = bounds.size.width.max(1.0);
+    let height = bounds.size.height.max(1.0);
+    let side_inset = 20.0_f32.min((width - 1.0) / 2.0);
+    let top_inset = (DESKTOP_TOP_INSET + 20.0).min(height - 1.0);
+    // Windows may occupy the Dock region; the Dock slides away on overlap.
+    let desired_bottom_inset: f32 = 16.0;
+    let bottom_inset = desired_bottom_inset.min(height - top_inset - 1.0);
+    Rect::new(
+        bounds.origin.x + side_inset,
+        bounds.origin.y + top_inset,
+        width - side_inset * 2.0,
+        height - top_inset - bottom_inset,
+    )
+}
 
 pub(crate) struct WindowLayer<C> {
     content: C,
@@ -511,6 +528,29 @@ where
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.content.paint(bounds, context);
 
+        // New remote windows are registered during the desktop paint above.
+        // Fit them before their first visible frame, then promptly notify the
+        // application of any resized surface on the next paint.
+        let work_area = window_work_area(bounds);
+        let needs_resize_notification = {
+            let desktop = self.windows.get();
+            desktop.windows.iter().any(|window| {
+                window.restore_frame.is_none()
+                    && (window.frame.origin.x < work_area.origin.x
+                    || window.frame.origin.y < work_area.origin.y
+                    || window.frame.origin.x + window.frame.size.width
+                        > work_area.origin.x + work_area.size.width
+                    || window.frame.origin.y + window.frame.size.height
+                        > work_area.origin.y + work_area.size.height)
+            })
+        };
+        if needs_resize_notification {
+            self.windows.update(|desktop| {
+                desktop.fit_to_work_area(work_area);
+            });
+            context.request_redraw_in_at(bounds, Instant::now());
+        }
+
         let desktop = self.windows.get();
 
         self.test_window_states.borrow_mut().retain(|id, _| {
@@ -976,6 +1016,22 @@ where
 
                 self.content.handle_event(bounds, event, context)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_work_area_stays_inside_even_a_small_display() {
+        for display in [Rect::new(0.0, 0.0, 1280.0, 800.0), Rect::new(10.0, 20.0, 40.0, 40.0)] {
+            let area = window_work_area(display);
+            assert!(area.size.width > 0.0 && area.size.height > 0.0);
+            assert!(area.origin.x >= display.origin.x && area.origin.y >= display.origin.y);
+            assert!(area.origin.x + area.size.width <= display.origin.x + display.size.width);
+            assert!(area.origin.y + area.size.height <= display.origin.y + display.size.height);
         }
     }
 }
