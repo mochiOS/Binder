@@ -818,31 +818,7 @@ where
 }
 
 pub(super) fn paint_monogram(app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
-    Rectangle::new()
-        .color(RectangleColor::Custom(Theme::current().colors.accent))
-        .radius(CornerRadius::Custom(bounds.size.width * 0.22))
-        .paint(bounds, context);
-    let initial = app
-        .name
-        .chars()
-        .find(|character| character.is_alphanumeric())
-        .unwrap_or('?')
-        .to_uppercase()
-        .collect::<String>();
-    Text::styled(initial, TextRole::TitleMedium)
-        .font_size(bounds.size.width * 0.48)
-        .weight(600)
-        .alignment(TextAlignment::Center)
-        .color(Color::WHITE)
-        .paint(
-            Rect::new(
-                bounds.origin.x,
-                bounds.origin.y + bounds.size.height * 0.18,
-                bounds.size.width,
-                bounds.size.height * 0.7,
-            ),
-            context,
-        );
+    ApplicationPlaceholder::new(app.name.clone()).paint(bounds, context);
 }
 
 fn matching_app_indices(apps: &[AppInfo], query: &str) -> Vec<usize> {
