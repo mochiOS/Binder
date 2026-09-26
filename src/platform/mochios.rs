@@ -687,6 +687,19 @@ impl DesktopPlatform for MochiOsPlatform {
         self.process_for_bundle(bundle_id)
     }
 
+    fn activate_application(&self, process_id: ProcessId) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        {
+            mochi_user_platform::workspace::activate_application(u64::from(process_id.0))
+                .map_err(|_| PlatformError::TransportFailure)
+        }
+        #[cfg(not(target_os = "mochios"))]
+        {
+            let _ = process_id;
+            Ok(())
+        }
+    }
+
     fn running_app_bundle_ids(&self) -> Vec<String> {
         self.children
             .values()

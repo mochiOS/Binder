@@ -383,6 +383,11 @@ where
                 }
             },
         };
+        if running_process.is_some()
+            && let Err(error) = self.platform.borrow().activate_application(process_id)
+        {
+            eprintln!("failed to activate app {}: {error:?}", app.bundle_id);
+        }
         self.windows.update(|desktop| {
             desktop.activate_process(process_id);
         });

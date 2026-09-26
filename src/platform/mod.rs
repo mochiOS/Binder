@@ -248,6 +248,10 @@ pub trait DesktopPlatform {
         None
     }
 
+    fn activate_application(&self, _process_id: ProcessId) -> Result<(), PlatformError> {
+        Ok(())
+    }
+
     fn running_app_bundle_ids(&self) -> Vec<String> {
         Vec::new()
     }

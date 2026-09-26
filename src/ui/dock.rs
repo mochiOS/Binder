@@ -615,6 +615,12 @@ where
             },
         };
 
+        if running_process.is_some()
+            && let Err(error) = self.platform.borrow().activate_application(process_id)
+        {
+            eprintln!("failed to activate app {}: {error:?}", app.bundle_id);
+        }
+
         let mut activation = ProcessActivation::NoWindow;
         self.windows.update(|desktop| {
             activation = desktop.activate_process(process_id);
