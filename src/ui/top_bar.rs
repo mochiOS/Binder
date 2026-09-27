@@ -49,7 +49,7 @@ pub(crate) fn view(
         .alignment(StackAlignment::Center)
         .gap(StackGap::None)
         .child(Spacer::new())
-        .child(InputModeIndicator::new(system_bar).frame(28.0, CLOCK_HEIGHT));
+        .child(input_mode_control(system_bar).frame(82.0, 28.0));
 
     let row = HStack::new()
         .alignment(StackAlignment::Center)
@@ -72,36 +72,26 @@ pub(crate) fn view(
         .child(Divider::new())
 }
 
-struct InputModeIndicator {
-    system_bar: State<SystemBarState>,
-}
-
-impl InputModeIndicator {
-    fn new(system_bar: State<SystemBarState>) -> Self {
-        Self { system_bar }
-    }
-}
-
-impl View for InputModeIndicator {
-    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
-        let label = if self.system_bar.get().japanese_input {
-            "あ"
-        } else {
-            "A"
-        };
-        VStack::new()
-            .alignment(StackAlignment::Stretch)
-            .distribution(StackDistribution::Center)
-            .child(
-                Text::styled(label, TextRole::Caption)
-                    .weight(700)
-                    .line_height(16.0)
-                    .alignment(TextAlignment::Center)
-                    .color(Theme::current().shell.primary_text)
-                    .height(16.0),
-            )
-            .paint(bounds, context);
-    }
+fn input_mode_control(system_bar: State<SystemBarState>) -> SegmentedControl {
+    let selection = State::new(usize::from(system_bar.get().japanese_input));
+    let state = system_bar.clone();
+    SegmentedControl::new(selection.binding())
+        .item(0, "A")
+        .item(1, "あ")
+        .accessibility_label("Input mode")
+        .on_change(move |selection| {
+            let requested = selection == 1;
+            let current = viewkit::platform::input_method::enabled()
+                .unwrap_or_else(|| state.get().japanese_input);
+            let enabled = if current == requested {
+                current
+            } else {
+                viewkit::platform::input_method::toggle().unwrap_or(requested)
+            };
+            state.update_if_changed(|system_bar| {
+                system_bar.japanese_input = enabled;
+            });
+        })
 }
 
 struct ActiveApplicationName {
