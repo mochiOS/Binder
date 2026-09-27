@@ -30,9 +30,11 @@ const MAX_APP_ITEMS: usize = 8;
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ItemAction {
     ToggleInput,
+    ShowNetwork,
     OpenSettings,
     Lock,
     OpenApplication(String),
+    ShowApplicationCard { bundle_id: String, item_id: String },
 }
 
 #[derive(Clone, Debug)]
@@ -55,6 +57,7 @@ pub(crate) struct CustomizationItem {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Hit {
     Edit,
+    Back,
     Mute,
     Item { id: String },
 }
@@ -84,6 +87,19 @@ pub(crate) struct ControlCenterLayer<C> {
     app_item_cache: RefCell<AppItemCache>,
     volume_level: State<f32>,
     volume_interaction: SliderInteractionState,
+    detail: State<Option<ControlCenterDetail>>,
+    network_enabled: State<bool>,
+    network_switch: Switch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ControlCenterDetail {
+    Network,
+    Application {
+        bundle_id: String,
+        item_id: String,
+        fallback_title: String,
+    },
 }
 
 impl<C: View> ControlCenterLayer<C> {
@@ -100,6 +116,7 @@ impl<C: View> ControlCenterLayer<C> {
         fast_poll_until: Rc<Cell<Option<Instant>>>,
     ) -> Self {
         let volume_level = State::new(f32::from(system_bar.get().volume.level));
+        let network_enabled = State::new(system_bar.get().network.enabled());
         Self {
             content,
             open,
@@ -113,6 +130,9 @@ impl<C: View> ControlCenterLayer<C> {
             app_item_cache: RefCell::new(AppItemCache::default()),
             volume_level,
             volume_interaction: SliderInteractionState::new(),
+            detail: State::new(None),
+            network_enabled: network_enabled.clone(),
+            network_switch: Switch::new(network_enabled.binding()),
         }
     }
 
@@ -127,7 +147,7 @@ impl<C: View> ControlCenterLayer<C> {
                 "builtin.network",
                 "Network",
                 SymbolName::Network,
-                ItemAction::OpenSettings,
+                ItemAction::ShowNetwork,
                 network_on,
             ),
             Item::builtin(
@@ -194,6 +214,15 @@ impl<C: View> ControlCenterLayer<C> {
     }
 
     fn panel(&self, bounds: Rect, visible: usize) -> Rect {
+        if self.detail.get().is_some() {
+            return Rect::new(
+                bounds.origin.x
+                    + (bounds.size.width - PANEL_WIDTH - PANEL_MARGIN).max(PANEL_MARGIN),
+                bounds.origin.y + PANEL_TOP,
+                PANEL_WIDTH.min(bounds.size.width - PANEL_MARGIN * 2.0),
+                330.0_f32.min(bounds.size.height - PANEL_TOP - PANEL_MARGIN),
+            );
+        }
         let visible_rows = visible.div_ceil(TILE_COLUMNS).max(1);
         let height = PANEL_PADDING * 2.0
             + HEADER_HEIGHT
@@ -215,6 +244,19 @@ impl<C: View> ControlCenterLayer<C> {
             panel.origin.y + 12.0,
             54.0,
             28.0,
+        )
+    }
+
+    fn back_rect(panel: Rect) -> Rect {
+        Rect::new(panel.origin.x + 10.0, panel.origin.y + 10.0, 32.0, 30.0)
+    }
+
+    fn network_switch_rect(panel: Rect) -> Rect {
+        Rect::new(
+            panel.origin.x + panel.size.width - 78.0,
+            panel.origin.y + 59.0,
+            58.0,
+            40.0,
         )
     }
 
@@ -271,6 +313,11 @@ impl<C: View> ControlCenterLayer<C> {
         if !panel.contains(position) {
             return None;
         }
+        if self.detail.get().is_some() {
+            return Self::back_rect(panel)
+                .contains(position)
+                .then_some(Hit::Back);
+        }
         if Self::edit_rect(panel).contains(position) {
             return Some(Hit::Edit);
         }
@@ -315,6 +362,27 @@ impl<C: View> ControlCenterLayer<C> {
                 self.system_bar
                     .update_if_changed(|state| state.japanese_input = enabled);
             }
+            ItemAction::ShowNetwork => {
+                self.network_enabled
+                    .set_if_changed(self.system_bar.get().network.enabled());
+                self.detail.set(Some(ControlCenterDetail::Network));
+            }
+            ItemAction::ShowApplicationCard { bundle_id, item_id } => {
+                let registered = self
+                    .platform
+                    .borrow()
+                    .control_center_cards()
+                    .into_iter()
+                    .any(|card| card.bundle_id == *bundle_id && card.item_id == *item_id);
+                if !registered {
+                    self.open_application(bundle_id);
+                }
+                self.detail.set(Some(ControlCenterDetail::Application {
+                    bundle_id: bundle_id.clone(),
+                    item_id: item_id.clone(),
+                    fallback_title: item.title.clone(),
+                }));
+            }
             ItemAction::OpenSettings => self.open_application("org.mochios.settings"),
             ItemAction::Lock => {
                 if let Err(error) = self
@@ -350,6 +418,21 @@ impl<C: View> ControlCenterLayer<C> {
                     .update_if_changed(|state| state.volume = volume);
             }
             Err(error) => eprintln!("failed to set output mute: {error:?}"),
+        }
+    }
+
+    fn set_network_enabled(&self, enabled: bool) {
+        match self.platform.borrow_mut().set_network_enabled(enabled) {
+            Ok(network) => {
+                self.network_enabled.set_if_changed(network.enabled());
+                self.system_bar
+                    .update_if_changed(|state| state.network = network);
+            }
+            Err(error) => {
+                self.network_enabled
+                    .set_if_changed(self.system_bar.get().network.enabled());
+                eprintln!("failed to change network state: {error:?}");
+            }
         }
     }
 
@@ -389,6 +472,276 @@ impl<C: View> ControlCenterLayer<C> {
         .paint(mute, context);
         self.volume_slider()
             .paint(Self::volume_slider_rect(panel), context);
+    }
+
+    fn paint_network_detail(&self, panel: Rect, context: &mut PaintContext<'_>) {
+        let state = self.system_bar.get().network;
+        if !self.network_switch.interaction().is_pressed() {
+            self.network_enabled.set_if_changed(state.enabled());
+        }
+
+        let back = Self::back_rect(panel);
+        if self.interaction.borrow().hovered == Some(Hit::Back) {
+            Rectangle::new()
+                .color(RectangleColor::Custom(Theme::current().shell.item_hover))
+                .radius(CornerRadius::Medium)
+                .paint(back, context);
+        }
+        Icon::new(SymbolName::ChevronLeft)
+            .size(12.0)
+            .color(Theme::current().shell.primary_text)
+            .accessibility_label("Back")
+            .paint(back, context);
+        Text::styled("Network", TextRole::TitleSmall)
+            .weight(700)
+            .alignment(TextAlignment::Center)
+            .color(Theme::current().shell.primary_text)
+            .paint(
+                Rect::new(
+                    panel.origin.x + 44.0,
+                    panel.origin.y + 12.0,
+                    panel.size.width - 88.0,
+                    28.0,
+                ),
+                context,
+            );
+
+        let summary = Rect::new(
+            panel.origin.x + PANEL_PADDING,
+            panel.origin.y + 50.0,
+            panel.size.width - PANEL_PADDING * 2.0,
+            62.0,
+        );
+        Rectangle::new()
+            .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+            .radius(CornerRadius::Large)
+            .paint(summary, context);
+        let icon = Rect::new(summary.origin.x + 10.0, summary.origin.y + 11.0, 40.0, 40.0);
+        Rectangle::new()
+            .color(RectangleColor::Custom(if state.enabled() {
+                Theme::current().colors.accent
+            } else {
+                Theme::current().shell.control_hover
+            }))
+            .radius(CornerRadius::Medium)
+            .paint(icon, context);
+        Icon::new(SymbolName::Network)
+            .size(18.0)
+            .color(if state.enabled() {
+                Color::WHITE
+            } else {
+                Theme::current().shell.primary_text
+            })
+            .paint(icon, context);
+        let (status, network_name, interface, address) = match &state {
+            NetworkState::Unavailable => ("Unavailable", "—", "—", "—"),
+            NetworkState::Disabled => ("Off", "—", "—", "—"),
+            NetworkState::Disconnected => ("Not Connected", "—", "—", "—"),
+            NetworkState::Connecting => ("Connecting…", "—", "—", "—"),
+            NetworkState::Connected {
+                network_name,
+                interface,
+                address,
+                ..
+            } => (
+                "Connected",
+                network_name.as_deref().unwrap_or("Connected network"),
+                interface.as_deref().unwrap_or("—"),
+                address.as_deref().unwrap_or("—"),
+            ),
+        };
+        Text::styled(status, TextRole::Label)
+            .weight(650)
+            .color(Theme::current().shell.primary_text)
+            .paint(
+                Rect::new(
+                    summary.origin.x + 60.0,
+                    summary.origin.y + 11.0,
+                    126.0,
+                    22.0,
+                ),
+                context,
+            );
+        Text::styled(
+            if state.available() {
+                "Network"
+            } else {
+                "No service"
+            },
+            TextRole::Caption,
+        )
+        .color(Theme::current().shell.secondary_text)
+        .paint(
+            Rect::new(
+                summary.origin.x + 60.0,
+                summary.origin.y + 33.0,
+                126.0,
+                18.0,
+            ),
+            context,
+        );
+        self.network_switch
+            .paint(Self::network_switch_rect(panel), context);
+
+        let details = [
+            ("Network", network_name),
+            ("Interface", interface),
+            ("IP Address", address),
+        ];
+        for (index, (label, value)) in details.into_iter().enumerate() {
+            let row = Rect::new(
+                summary.origin.x,
+                summary.origin.y + summary.size.height + 10.0 + index as f32 * 50.0,
+                summary.size.width,
+                42.0,
+            );
+            Rectangle::new()
+                .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+                .radius(CornerRadius::Medium)
+                .paint(row, context);
+            Text::styled(label, TextRole::Caption)
+                .weight(650)
+                .color(Theme::current().shell.secondary_text)
+                .paint(
+                    Rect::new(row.origin.x + 12.0, row.origin.y, 94.0, row.size.height),
+                    context,
+                );
+            Text::styled(value, TextRole::Label)
+                .alignment(TextAlignment::End)
+                .color(Theme::current().shell.primary_text)
+                .paint(
+                    Rect::new(
+                        row.origin.x + 106.0,
+                        row.origin.y,
+                        row.size.width - 118.0,
+                        row.size.height,
+                    ),
+                    context,
+                );
+        }
+    }
+
+    fn paint_application_detail(
+        &self,
+        panel: Rect,
+        bundle_id: &str,
+        item_id: &str,
+        fallback_title: &str,
+        context: &mut PaintContext<'_>,
+    ) {
+        let card = self
+            .platform
+            .borrow()
+            .control_center_cards()
+            .into_iter()
+            .find(|card| card.bundle_id == bundle_id && card.item_id == item_id);
+        let title = card
+            .as_ref()
+            .map(|card| card.title.as_str())
+            .unwrap_or(fallback_title);
+        let back = Self::back_rect(panel);
+        if self.interaction.borrow().hovered == Some(Hit::Back) {
+            Rectangle::new()
+                .color(RectangleColor::Custom(Theme::current().shell.item_hover))
+                .radius(CornerRadius::Medium)
+                .paint(back, context);
+        }
+        Icon::new(SymbolName::ChevronLeft)
+            .size(12.0)
+            .color(Theme::current().shell.primary_text)
+            .accessibility_label("Back")
+            .paint(back, context);
+        Text::styled(title, TextRole::TitleSmall)
+            .weight(700)
+            .alignment(TextAlignment::Center)
+            .color(Theme::current().shell.primary_text)
+            .paint(
+                Rect::new(
+                    panel.origin.x + 44.0,
+                    panel.origin.y + 12.0,
+                    panel.size.width - 88.0,
+                    28.0,
+                ),
+                context,
+            );
+
+        let Some(card) = card else {
+            Rectangle::new()
+                .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+                .radius(CornerRadius::Large)
+                .paint(
+                    Rect::new(
+                        panel.origin.x + PANEL_PADDING,
+                        panel.origin.y + 54.0,
+                        panel.size.width - PANEL_PADDING * 2.0,
+                        82.0,
+                    ),
+                    context,
+                );
+            Text::styled("Loading card…", TextRole::Label)
+                .weight(650)
+                .alignment(TextAlignment::Center)
+                .color(Theme::current().shell.primary_text)
+                .paint(
+                    Rect::new(
+                        panel.origin.x + PANEL_PADDING + 12.0,
+                        panel.origin.y + 68.0,
+                        panel.size.width - PANEL_PADDING * 2.0 - 24.0,
+                        24.0,
+                    ),
+                    context,
+                );
+            Text::styled("Waiting for the application provider", TextRole::Caption)
+                .alignment(TextAlignment::Center)
+                .color(Theme::current().shell.secondary_text)
+                .paint(
+                    Rect::new(
+                        panel.origin.x + PANEL_PADDING + 12.0,
+                        panel.origin.y + 94.0,
+                        panel.size.width - PANEL_PADDING * 2.0 - 24.0,
+                        20.0,
+                    ),
+                    context,
+                );
+            return;
+        };
+
+        for (index, row) in card.rows.iter().take(4).enumerate() {
+            let bounds = Rect::new(
+                panel.origin.x + PANEL_PADDING,
+                panel.origin.y + 54.0 + index as f32 * 52.0,
+                panel.size.width - PANEL_PADDING * 2.0,
+                44.0,
+            );
+            Rectangle::new()
+                .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+                .radius(CornerRadius::Medium)
+                .paint(bounds, context);
+            Text::styled(row.label.clone(), TextRole::Caption)
+                .weight(650)
+                .color(Theme::current().shell.secondary_text)
+                .paint(
+                    Rect::new(
+                        bounds.origin.x + 12.0,
+                        bounds.origin.y,
+                        100.0,
+                        bounds.size.height,
+                    ),
+                    context,
+                );
+            Text::styled(row.value.clone(), TextRole::Label)
+                .alignment(TextAlignment::End)
+                .color(Theme::current().shell.primary_text)
+                .paint(
+                    Rect::new(
+                        bounds.origin.x + 112.0,
+                        bounds.origin.y,
+                        bounds.size.width - 124.0,
+                        bounds.size.height,
+                    ),
+                    context,
+                );
+        }
     }
 
     fn open_application(&self, bundle_id: &str) {
@@ -490,6 +843,23 @@ impl<C: View> View for ControlCenterLayer<C> {
                 1.0,
             ))
             .paint(panel, context);
+        if let Some(detail) = self.detail.get() {
+            match detail {
+                ControlCenterDetail::Network => self.paint_network_detail(panel, context),
+                ControlCenterDetail::Application {
+                    bundle_id,
+                    item_id,
+                    fallback_title,
+                } => self.paint_application_detail(
+                    panel,
+                    &bundle_id,
+                    &item_id,
+                    &fallback_title,
+                    context,
+                ),
+            }
+            return;
+        }
         Text::styled("Control Center", TextRole::TitleSmall)
             .weight(700)
             .color(Theme::current().shell.primary_text)
@@ -530,10 +900,69 @@ impl<C: View> View for ControlCenterLayer<C> {
         context: &mut EventContext<'_>,
     ) -> EventResult {
         if !self.open.get() {
+            self.detail.set_if_changed(None);
             return self.content.handle_event(bounds, event, context);
         }
         let visible = self.ordered_items();
         let panel = self.panel(bounds, visible.len());
+        if let Some(detail) = self.detail.get() {
+            if detail == ControlCenterDetail::Network {
+                let before = self.network_enabled.get();
+                let switch_result = self.network_switch.handle_event(
+                    Self::network_switch_rect(panel),
+                    event,
+                    context,
+                );
+                let after = self.network_enabled.get();
+                if before != after {
+                    self.set_network_enabled(after);
+                }
+                if switch_result == EventResult::Consumed {
+                    return EventResult::Consumed;
+                }
+            }
+            match event {
+                ViewEvent::KeyPressed {
+                    key: Key::Escape, ..
+                } => {
+                    self.detail.set(None);
+                    self.interaction.borrow_mut().hovered = None;
+                    context.request_redraw();
+                }
+                ViewEvent::PointerMoved { position } => {
+                    let hit = self.hit(bounds, *position);
+                    if self.interaction.borrow().hovered != hit {
+                        self.interaction.borrow_mut().hovered = hit;
+                        context.request_redraw_in(panel);
+                    }
+                }
+                ViewEvent::PointerPressed {
+                    position,
+                    button: PointerButton::Primary,
+                } => {
+                    let hit = self.hit(bounds, *position);
+                    if !panel.contains(*position) {
+                        self.detail.set(None);
+                        self.open.set(false);
+                    }
+                    self.interaction.borrow_mut().pressed = hit;
+                    context.request_redraw();
+                }
+                ViewEvent::PointerReleased {
+                    position,
+                    button: PointerButton::Primary,
+                } => {
+                    let released = self.hit(bounds, *position);
+                    let pressed = self.interaction.borrow_mut().pressed.take();
+                    if pressed == Some(Hit::Back) && released == Some(Hit::Back) {
+                        self.detail.set(None);
+                    }
+                    context.request_redraw_in(panel);
+                }
+                _ => {}
+            }
+            return EventResult::Consumed;
+        }
         let before_volume = self.volume_level.get();
         let slider_result =
             self.volume_slider()
@@ -550,6 +979,7 @@ impl<C: View> View for ControlCenterLayer<C> {
                 key: Key::Escape, ..
             } => {
                 self.open.set(false);
+                self.detail.set(None);
                 self.interaction.borrow_mut().hovered = None;
                 context.request_redraw();
             }
@@ -567,6 +997,7 @@ impl<C: View> View for ControlCenterLayer<C> {
                 let hit = self.hit(bounds, *position);
                 if hit.is_none() {
                     self.open.set(false);
+                    self.detail.set(None);
                 }
                 self.interaction.borrow_mut().pressed = hit;
                 context.request_redraw();
@@ -584,9 +1015,16 @@ impl<C: View> View for ControlCenterLayer<C> {
                         if id == released =>
                     {
                         if let Some(item) = self.items().into_iter().find(|item| item.id == id) {
+                            let keeps_control_center_open = matches!(
+                                &item.action,
+                                ItemAction::ShowNetwork | ItemAction::ShowApplicationCard { .. }
+                            );
                             self.activate(&item);
+                            if !keeps_control_center_open {
+                                self.open.set(false);
+                                self.detail.set(None);
+                            }
                         }
-                        self.open.set(false);
                     }
                     _ => {}
                 }
@@ -688,18 +1126,22 @@ fn parse_app_items(text: &str, app: &AppInfo) -> Result<Vec<Item>, &'static str>
         let symbol = field("symbol")
             .and_then(SymbolName::from_asset_name)
             .ok_or("invalid symbol")?;
-        if !valid_local_id(id)
-            || title.is_empty()
-            || title.len() > 40
-            || field("action") != Some("open-application")
-        {
+        if !valid_local_id(id) || title.is_empty() || title.len() > 40 {
             return Err("invalid item fields");
         }
+        let action = match field("action") {
+            Some("open-application") => ItemAction::OpenApplication(app.bundle_id.clone()),
+            Some("show-card") => ItemAction::ShowApplicationCard {
+                bundle_id: app.bundle_id.clone(),
+                item_id: id.to_string(),
+            },
+            _ => return Err("invalid item fields"),
+        };
         result.push(Item {
             id: format!("app.{}:{id}", app.bundle_id),
             title: title.to_string(),
             symbol,
-            action: ItemAction::OpenApplication(app.bundle_id.clone()),
+            action,
             is_on: true,
         });
     }
@@ -762,6 +1204,22 @@ mod tests {
                 &app()
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_application_card_registration() {
+        let items = parse_app_items(
+            "format=1\n[[application.control_center_items]]\nid=\"status\"\ntitle=\"Status\"\nsymbol=\"info\"\naction=\"show-card\"",
+            &app(),
+        )
+        .unwrap();
+        assert_eq!(
+            items[0].action,
+            ItemAction::ShowApplicationCard {
+                bundle_id: String::from("org.mochios.edit"),
+                item_id: String::from("status"),
+            }
         );
     }
 }

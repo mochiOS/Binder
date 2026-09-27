@@ -36,4 +36,5 @@ requires = [
     "system.time.read",
     "window.create",
     "window.overlay",
+    "control-center.read",
 ]

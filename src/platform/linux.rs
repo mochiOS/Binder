@@ -351,6 +351,15 @@ impl DesktopPlatform for LinuxPlatform {
         Ok(self.system_bar.volume.clone())
     }
 
+    fn set_network_enabled(&mut self, enabled: bool) -> Result<super::NetworkState, PlatformError> {
+        self.system_bar.network = if enabled {
+            super::NetworkState::Disconnected
+        } else {
+            super::NetworkState::Disabled
+        };
+        Ok(self.system_bar.network.clone())
+    }
+
     fn perform_system_action(&self, _action: SystemAction) -> Result<(), PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }

@@ -16,8 +16,9 @@ mod context_menu;
 mod decoration;
 
 use super::{
-    AppInfo, ClockState, CloseWindowRequest, ContextMenuModel, CreateWindowRequest,
-    DesktopPlatform, PlatformError, ProcessId, RemoteWindowId, SystemAction, SystemBarState,
+    AppInfo, ClockState, CloseWindowRequest, ContextMenuModel, ControlCenterCard,
+    ControlCenterCardRow, CreateWindowRequest, DesktopPlatform, PlatformError, ProcessId,
+    RemoteWindowId, SystemAction, SystemBarState,
 };
 use viewkit::prelude::State;
 
@@ -53,6 +54,7 @@ pub struct MochiOsPlatform {
     #[cfg(target_os = "mochios")]
     decoration_connect_attempted: bool,
     context_menu_state: State<Option<ContextMenuModel>>,
+    control_center_cards: Vec<ControlCenterCard>,
     #[cfg(target_os = "mochios")]
     context_menu_manager: Option<context_menu::ContextMenuManager>,
     #[cfg(target_os = "mochios")]
@@ -82,6 +84,7 @@ impl MochiOsPlatform {
             #[cfg(target_os = "mochios")]
             decoration_connect_attempted: false,
             context_menu_state,
+            control_center_cards: Vec::new(),
             #[cfg(target_os = "mochios")]
             context_menu_manager: None,
             #[cfg(target_os = "mochios")]
@@ -533,6 +536,22 @@ impl DesktopPlatform for MochiOsPlatform {
         Ok(self.system_bar.volume.clone())
     }
 
+    fn set_network_enabled(&mut self, enabled: bool) -> Result<super::NetworkState, PlatformError> {
+        #[cfg(target_os = "mochios")]
+        {
+            mochi_user_platform::mboot_wifi::set_enabled(enabled)
+                .map_err(|_| PlatformError::TransportFailure)?;
+            let state = read_network_state();
+            self.system_bar.network = state.clone();
+            Ok(state)
+        }
+        #[cfg(not(target_os = "mochios"))]
+        {
+            let _ = enabled;
+            Err(PlatformError::UnsupportedOperation)
+        }
+    }
+
     fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError> {
         #[cfg(not(target_os = "mochios"))]
         {
@@ -685,11 +704,31 @@ impl DesktopPlatform for MochiOsPlatform {
             self.system_bar.japanese_input = japanese_input;
         }
 
-        Ok(children_changed || clock_changed || input_method_changed)
+        let network = read_network_state();
+        let network_changed = self.system_bar.network != network;
+        if network_changed {
+            self.system_bar.network = network;
+        }
+
+        let cards = read_control_center_cards();
+        let cards_changed = self.control_center_cards != cards;
+        if cards_changed {
+            self.control_center_cards = cards;
+        }
+
+        Ok(children_changed
+            || clock_changed
+            || input_method_changed
+            || network_changed
+            || cards_changed)
     }
 
     fn get_apps(&self) -> Vec<AppInfo> {
         self.apps.clone()
+    }
+
+    fn control_center_cards(&self) -> Vec<ControlCenterCard> {
+        self.control_center_cards.clone()
     }
 
     fn launch_app(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
@@ -804,6 +843,61 @@ fn read_clock() -> Result<ClockState, PlatformError> {
         .map_err(|_| PlatformError::InvalidResponse)?;
 
     clock_from_unix_seconds(seconds)
+}
+
+#[cfg(target_os = "mochios")]
+fn read_network_state() -> super::NetworkState {
+    use mochi_user_platform::mboot_wifi;
+
+    let Ok(status) = mboot_wifi::status() else {
+        return super::NetworkState::Unavailable;
+    };
+    if !status.available {
+        return super::NetworkState::Unavailable;
+    }
+    if !status.enabled {
+        return super::NetworkState::Disabled;
+    }
+    if !status.connected {
+        return super::NetworkState::Disconnected;
+    }
+    super::NetworkState::Connected {
+        network_name: (!status.ssid.is_empty()).then_some(status.ssid),
+        signal_strength: None,
+        interface: (!status.interface.is_empty()).then_some(status.interface),
+        address: (!status.address.is_empty()).then_some(status.address),
+    }
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn read_network_state() -> super::NetworkState {
+    super::NetworkState::Unavailable
+}
+
+#[cfg(target_os = "mochios")]
+fn read_control_center_cards() -> Vec<ControlCenterCard> {
+    mochi_user_platform::workspace::control_center_cards()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|card| ControlCenterCard {
+            bundle_id: card.bundle_id,
+            item_id: card.item_id,
+            title: card.title,
+            rows: card
+                .rows
+                .into_iter()
+                .map(|row| ControlCenterCardRow {
+                    label: row.label,
+                    value: row.value,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn read_control_center_cards() -> Vec<ControlCenterCard> {
+    Vec::new()
 }
 
 fn clock_from_unix_seconds(seconds: i64) -> Result<ClockState, PlatformError> {

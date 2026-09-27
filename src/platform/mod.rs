@@ -71,13 +71,26 @@ pub enum SystemAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetworkState {
     Unavailable,
+    Disabled,
     Disconnected,
     Connecting,
 
     Connected {
         network_name: Option<String>,
         signal_strength: Option<u8>,
+        interface: Option<String>,
+        address: Option<String>,
     },
+}
+
+impl NetworkState {
+    pub fn available(&self) -> bool {
+        !matches!(self, Self::Unavailable)
+    }
+
+    pub fn enabled(&self) -> bool {
+        !matches!(self, Self::Unavailable | Self::Disabled)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +121,20 @@ pub struct ContextMenuModel {
     pub request_id: u64,
     pub position: viewkit::prelude::Point,
     pub entries: Vec<ContextMenuEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlCenterCardRow {
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlCenterCard {
+    pub bundle_id: String,
+    pub item_id: String,
+    pub title: String,
+    pub rows: Vec<ControlCenterCardRow>,
 }
 
 impl AppInfo {
@@ -191,6 +218,10 @@ pub trait DesktopPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
+    fn set_network_enabled(&mut self, _enabled: bool) -> Result<NetworkState, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
     fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError>;
 
     fn launch_internal_window(&mut self, _entry: &str) -> Result<ProcessId, PlatformError> {
@@ -242,6 +273,10 @@ pub trait DesktopPlatform {
     }
 
     fn take_exited_processes(&mut self) -> Vec<ProcessId> {
+        Vec::new()
+    }
+
+    fn control_center_cards(&self) -> Vec<ControlCenterCard> {
         Vec::new()
     }
 
