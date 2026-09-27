@@ -43,6 +43,7 @@ pub(crate) fn view(
     dock_running_apps: State<Vec<String>>,
     dock_preferences: State<DockPreferences>,
     app_library_open: State<bool>,
+    app_switcher: Rc<RefCell<super::app_switcher::AppSwitcherState>>,
     pending_app_activation: Rc<RefCell<super::app_library::PendingAppActivation>>,
     fast_poll_until: Rc<Cell<Option<Instant>>>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
@@ -107,7 +108,7 @@ pub(crate) fn view(
         dock_pointer,
         Rc::clone(&cursor_pointer),
         dock_visibility,
-        dock_running_apps,
+        dock_running_apps.clone(),
         dock_preferences.clone(),
         app_library_open.clone(),
         Rc::clone(&fast_poll_until),
@@ -125,12 +126,20 @@ pub(crate) fn view(
         docked_desktop,
         Rc::clone(&platform),
         windows.clone(),
-        apps,
+        apps.clone(),
         dock_preferences,
         app_library_open,
         pending_app_activation,
         fast_poll_until,
         launch_failure_states,
+    );
+    let root = super::app_switcher::AppSwitcherLayer::new(
+        root,
+        Rc::clone(&platform),
+        windows.clone(),
+        apps,
+        dock_running_apps,
+        app_switcher,
     );
     let root = super::popup_menu::PopupMenu::new(root, menu, menu_open);
     let root = super::context_menu::ContextMenuLayer::new(root, Rc::clone(&platform), context_menu);
