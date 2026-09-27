@@ -79,12 +79,7 @@ fn input_mode_control(system_bar: State<SystemBarState>) -> Button {
         "A"
     };
     let state = system_bar.clone();
-    Button::new("")
-        .content(
-            Text::styled(label, TextRole::Label)
-                .alignment(TextAlignment::Center)
-                .color(Theme::current().shell.primary_text),
-        )
+    Button::new(label)
         .style(ButtonStyle::Ghost)
         .accessibility_label("Input mode")
         .on_click(move || {
