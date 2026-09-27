@@ -118,16 +118,9 @@ impl View for LaunchFailureView {
         context.record_accessibility(dialog);
 
         let icon = Rect::new(bounds.origin.x + 24.0, bounds.origin.y + 28.0, 42.0, 42.0);
-        Ellipse::new()
-            .color(EllipseColor::Custom(Theme::current().shell.alert))
-            .paint(icon, context);
-        Text::new("!")
-            .accessibility_hidden(true)
-            .font_size(26.0)
-            .line_height(42.0)
-            .weight(750)
-            .alignment(TextAlignment::Center)
-            .color(Theme::current().shell.inverse_text)
+        Icon::new(SymbolName::Error)
+            .size(icon.size.width)
+            .color(Theme::current().shell.alert)
             .paint(icon, context);
 
         let text_x = bounds.origin.x + 82.0;
@@ -136,11 +129,11 @@ impl View for LaunchFailureView {
             format!("{} could not be opened", self.state.app_name),
             TextRole::TitleSmall,
         )
-            .color(Theme::current().shell.control)
-            .paint(
-                Rect::new(text_x, bounds.origin.y + 24.0, text_width, 24.0),
-                context,
-            );
+        .color(Theme::current().shell.control)
+        .paint(
+            Rect::new(text_x, bounds.origin.y + 24.0, text_width, 24.0),
+            context,
+        );
         Text::styled(self.state.message.clone(), TextRole::Label)
             .color(Theme::current().shell.secondary_text)
             .paint(
@@ -185,8 +178,7 @@ impl View for LaunchFailureView {
             .paint(
                 Rect::new(
                     button.origin.x,
-                    button.origin.y
-                        + (button.size.height - button_label_style.line_height) / 2.0,
+                    button.origin.y + (button.size.height - button_label_style.line_height) / 2.0,
                     button.size.width,
                     button_label_style.line_height,
                 ),
