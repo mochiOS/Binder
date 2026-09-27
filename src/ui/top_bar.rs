@@ -89,10 +89,17 @@ impl View for InputModeIndicator {
         } else {
             "A"
         };
-        Text::styled(label, TextRole::Caption)
-            .weight(700)
-            .alignment(TextAlignment::Center)
-            .color(Theme::current().shell.primary_text)
+        VStack::new()
+            .alignment(StackAlignment::Stretch)
+            .distribution(StackDistribution::Center)
+            .child(
+                Text::styled(label, TextRole::Caption)
+                    .weight(700)
+                    .line_height(16.0)
+                    .alignment(TextAlignment::Center)
+                    .color(Theme::current().shell.primary_text)
+                    .height(16.0),
+            )
             .paint(bounds, context);
     }
 }
