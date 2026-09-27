@@ -338,6 +338,19 @@ impl DesktopPlatform for LinuxPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
+    fn set_output_volume(&mut self, level: u8) -> Result<super::VolumeState, PlatformError> {
+        self.system_bar.volume.available = true;
+        self.system_bar.volume.level = level.min(100);
+        self.system_bar.volume.muted = self.system_bar.volume.level == 0;
+        Ok(self.system_bar.volume.clone())
+    }
+
+    fn set_output_muted(&mut self, muted: bool) -> Result<super::VolumeState, PlatformError> {
+        self.system_bar.volume.available = true;
+        self.system_bar.volume.muted = muted;
+        Ok(self.system_bar.volume.clone())
+    }
+
     fn perform_system_action(&self, _action: SystemAction) -> Result<(), PlatformError> {
         Err(PlatformError::UnsupportedOperation)
     }
@@ -492,7 +505,8 @@ impl DesktopPlatform for LinuxPlatform {
             self.handle_transport_event(event);
         }
 
-        let next = read_system_bar_state()?;
+        let mut next = read_system_bar_state()?;
+        next.volume = self.system_bar.volume.clone();
 
         let changed = next != self.system_bar;
 

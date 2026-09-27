@@ -128,11 +128,21 @@ impl Default for NetworkState {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VolumeState {
     pub available: bool,
     pub muted: bool,
     pub level: u8,
+}
+
+impl Default for VolumeState {
+    fn default() -> Self {
+        Self {
+            available: true,
+            muted: false,
+            level: 70,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -172,6 +182,14 @@ pub trait DesktopPlatform {
     }
 
     fn open_system_settings(&self) -> Result<(), PlatformError>;
+
+    fn set_output_volume(&mut self, _level: u8) -> Result<VolumeState, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn set_output_muted(&mut self, _muted: bool) -> Result<VolumeState, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
 
     fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError>;
 

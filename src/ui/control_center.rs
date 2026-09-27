@@ -18,6 +18,8 @@ const PANEL_MARGIN: f32 = 10.0;
 const PANEL_TOP: f32 = 46.0;
 const PANEL_PADDING: f32 = 16.0;
 const HEADER_HEIGHT: f32 = 34.0;
+const VOLUME_ROW_HEIGHT: f32 = 52.0;
+const VOLUME_ROW_GAP: f32 = 12.0;
 const TILE_COLUMNS: usize = 4;
 const TILE_GAP: f32 = 12.0;
 const TILE_HEIGHT: f32 = 56.0;
@@ -45,7 +47,14 @@ struct Item {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Hit {
     Edit,
+    Mute,
     Item { id: String, hidden: bool },
+}
+
+#[derive(Default)]
+struct AppItemCache {
+    apps: Vec<AppInfo>,
+    items: Vec<Item>,
 }
 
 #[derive(Default)]
@@ -65,6 +74,9 @@ pub(crate) struct ControlCenterLayer<C> {
     windows: State<DesktopWindows>,
     apps: State<Vec<AppInfo>>,
     fast_poll_until: Rc<Cell<Option<Instant>>>,
+    app_item_cache: RefCell<AppItemCache>,
+    volume_level: State<f32>,
+    volume_interaction: SliderInteractionState,
 }
 
 impl<C: View> ControlCenterLayer<C> {
@@ -81,6 +93,7 @@ impl<C: View> ControlCenterLayer<C> {
         apps: State<Vec<AppInfo>>,
         fast_poll_until: Rc<Cell<Option<Instant>>>,
     ) -> Self {
+        let volume_level = State::new(f32::from(system_bar.get().volume.level));
         Self {
             content,
             open,
@@ -92,6 +105,9 @@ impl<C: View> ControlCenterLayer<C> {
             windows,
             apps,
             fast_poll_until,
+            app_item_cache: RefCell::new(AppItemCache::default()),
+            volume_level,
+            volume_interaction: SliderInteractionState::new(),
         }
     }
 
@@ -101,7 +117,6 @@ impl<C: View> ControlCenterLayer<C> {
             &state.network,
             NetworkState::Connected { .. } | NetworkState::Connecting
         );
-        let sound_on = state.volume.available && !state.volume.muted && state.volume.level > 0;
         let mut items = vec![
             Item::builtin(
                 "builtin.network",
@@ -109,13 +124,6 @@ impl<C: View> ControlCenterLayer<C> {
                 SymbolName::Network,
                 ItemAction::OpenSettings,
                 network_on,
-            ),
-            Item::builtin(
-                "builtin.volume",
-                "Sound",
-                SymbolName::Volume2,
-                ItemAction::OpenSettings,
-                sound_on,
             ),
             Item::builtin(
                 "builtin.appearance",
@@ -146,10 +154,19 @@ impl<C: View> ControlCenterLayer<C> {
                 true,
             ),
         ];
-        for app in self.apps.get() {
-            items.extend(read_app_items(&app));
-        }
+        items.extend(self.cached_app_items());
         items
+    }
+
+    fn cached_app_items(&self) -> Vec<Item> {
+        self.apps.with(|apps| {
+            let mut cache = self.app_item_cache.borrow_mut();
+            if cache.apps != *apps {
+                cache.items = apps.iter().flat_map(read_app_items).collect();
+                cache.apps.clone_from(apps);
+            }
+            cache.items.clone()
+        })
     }
 
     fn ordered_items(&self) -> (Vec<Item>, Vec<Item>) {
@@ -179,6 +196,8 @@ impl<C: View> ControlCenterLayer<C> {
         };
         let height = PANEL_PADDING * 2.0
             + HEADER_HEIGHT
+            + VOLUME_ROW_HEIGHT
+            + VOLUME_ROW_GAP
             + visible_rows as f32 * TILE_HEIGHT
             + visible_rows.saturating_sub(1) as f32 * TILE_GAP
             + hidden_rows as f32 * (TILE_HEIGHT + TILE_GAP);
@@ -210,6 +229,42 @@ impl<C: View> ControlCenterLayer<C> {
         )
     }
 
+    fn volume_row_rect(panel: Rect) -> Rect {
+        Rect::new(
+            panel.origin.x + PANEL_PADDING,
+            panel.origin.y + PANEL_PADDING + HEADER_HEIGHT,
+            panel.size.width - PANEL_PADDING * 2.0,
+            VOLUME_ROW_HEIGHT,
+        )
+    }
+
+    fn mute_rect(panel: Rect) -> Rect {
+        let row = Self::volume_row_rect(panel);
+        Rect::new(row.origin.x + 6.0, row.origin.y + 6.0, 40.0, 40.0)
+    }
+
+    fn volume_slider_rect(panel: Rect) -> Rect {
+        let row = Self::volume_row_rect(panel);
+        Rect::new(
+            row.origin.x + 56.0,
+            row.origin.y + 8.0,
+            row.size.width - 68.0,
+            row.size.height - 16.0,
+        )
+    }
+
+    fn tile_start_y(panel: Rect) -> f32 {
+        let row = Self::volume_row_rect(panel);
+        row.origin.y + row.size.height + VOLUME_ROW_GAP
+    }
+
+    fn volume_slider(&self) -> Slider {
+        Slider::with_interaction(self.volume_level.binding(), self.volume_interaction.clone())
+            .range(0.0..=100.0)
+            .step(1.0)
+            .enabled(self.system_bar.get().volume.available)
+    }
+
     fn hit(&self, bounds: Rect, position: Point) -> Option<Hit> {
         let (visible, hidden) = self.ordered_items();
         let panel = self.panel(bounds, visible.len(), hidden.len());
@@ -219,7 +274,10 @@ impl<C: View> ControlCenterLayer<C> {
         if Self::edit_rect(panel).contains(position) {
             return Some(Hit::Edit);
         }
-        let start_y = panel.origin.y + PANEL_PADDING + HEADER_HEIGHT;
+        if Self::mute_rect(panel).contains(position) {
+            return Some(Hit::Mute);
+        }
+        let start_y = Self::tile_start_y(panel);
         for (index, item) in visible.iter().enumerate() {
             if Self::tile_rect(panel, index, start_y).contains(position) {
                 return Some(Hit::Item {
@@ -269,6 +327,68 @@ impl<C: View> ControlCenterLayer<C> {
             }
             ItemAction::OpenApplication(bundle_id) => self.open_application(bundle_id),
         }
+    }
+
+    fn set_volume(&self, level: f32) {
+        let level = level.round().clamp(0.0, 100.0) as u8;
+        match self.platform.borrow_mut().set_output_volume(level) {
+            Ok(volume) => {
+                self.volume_level.set_if_changed(f32::from(volume.level));
+                self.system_bar
+                    .update_if_changed(|state| state.volume = volume);
+            }
+            Err(error) => eprintln!("failed to set output volume: {error:?}"),
+        }
+    }
+
+    fn toggle_mute(&self) {
+        let muted = !self.system_bar.get().volume.muted;
+        match self.platform.borrow_mut().set_output_muted(muted) {
+            Ok(volume) => {
+                self.volume_level.set_if_changed(f32::from(volume.level));
+                self.system_bar
+                    .update_if_changed(|state| state.volume = volume);
+            }
+            Err(error) => eprintln!("failed to set output mute: {error:?}"),
+        }
+    }
+
+    fn paint_volume(&self, panel: Rect, context: &mut PaintContext<'_>) {
+        let row = Self::volume_row_rect(panel);
+        Rectangle::new()
+            .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+            .radius(CornerRadius::Custom(16.0))
+            .paint(row, context);
+
+        let volume = self.system_bar.get().volume;
+        if !self.volume_interaction.is_dragging() {
+            self.volume_level.set_if_changed(f32::from(volume.level));
+        }
+        let mute = Self::mute_rect(panel);
+        let muted = !volume.available || volume.muted || volume.level == 0;
+        Rectangle::new()
+            .color(RectangleColor::Custom(if muted {
+                Theme::current().shell.control_hover
+            } else {
+                Theme::current().colors.accent
+            }))
+            .radius(CornerRadius::Custom(20.0))
+            .paint(mute, context);
+        Icon::new(if muted {
+            SymbolName::VolumeMute
+        } else {
+            SymbolName::VolumeHigh
+        })
+        .size(18.0)
+        .color(if muted {
+            Theme::current().shell.primary_text
+        } else {
+            Color::WHITE
+        })
+        .accessibility_label(if muted { "Unmute" } else { "Mute" })
+        .paint(mute, context);
+        self.volume_slider()
+            .paint(Self::volume_slider_rect(panel), context);
     }
 
     fn open_application(&self, bundle_id: &str) {
@@ -418,7 +538,9 @@ impl<C: View> View for ControlCenterLayer<C> {
         .color(Theme::current().colors.accent)
         .paint(edit, context);
 
-        let start_y = panel.origin.y + PANEL_PADDING + HEADER_HEIGHT;
+        self.paint_volume(panel, context);
+
+        let start_y = Self::tile_start_y(panel);
         for (index, item) in visible.iter().enumerate() {
             self.paint_tile(item, Self::tile_rect(panel, index, start_y), false, context);
         }
@@ -451,6 +573,19 @@ impl<C: View> View for ControlCenterLayer<C> {
     ) -> EventResult {
         if !self.open.get() {
             return self.content.handle_event(bounds, event, context);
+        }
+        let (visible, hidden) = self.ordered_items();
+        let panel = self.panel(bounds, visible.len(), hidden.len());
+        let before_volume = self.volume_level.get();
+        let slider_result =
+            self.volume_slider()
+                .handle_event(Self::volume_slider_rect(panel), event, context);
+        let after_volume = self.volume_level.get();
+        if (before_volume - after_volume).abs() >= 0.5 {
+            self.set_volume(after_volume);
+        }
+        if slider_result == EventResult::Consumed {
+            return EventResult::Consumed;
         }
         match event {
             ViewEvent::KeyPressed {
@@ -488,6 +623,7 @@ impl<C: View> View for ControlCenterLayer<C> {
                 let pressed = self.interaction.borrow_mut().pressed.take();
                 match (pressed, released) {
                     (Some(Hit::Edit), Some(Hit::Edit)) => self.editing.set(!self.editing.get()),
+                    (Some(Hit::Mute), Some(Hit::Mute)) => self.toggle_mute(),
                     (
                         Some(Hit::Item {
                             id: from,

@@ -194,7 +194,12 @@ impl<C: View> View for PointerTracker<C> {
         self.content.paint(bounds, context);
     }
 
-    fn handle_event(&self, bounds: Rect, event: &ViewEvent, context: &mut EventContext<'_>) -> EventResult {
+    fn handle_event(
+        &self,
+        bounds: Rect,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> EventResult {
         let next = match event {
             ViewEvent::PointerMoved { position }
             | ViewEvent::PointerPressed { position, .. }
@@ -235,7 +240,12 @@ mod pointer_tracker_tests {
 
         fn paint(&self, _bounds: Rect, _context: &mut PaintContext<'_>) {}
 
-        fn handle_event(&self, _bounds: Rect, _event: &ViewEvent, _context: &mut EventContext<'_>) -> EventResult {
+        fn handle_event(
+            &self,
+            _bounds: Rect,
+            _event: &ViewEvent,
+            _context: &mut EventContext<'_>,
+        ) -> EventResult {
             EventResult::Consumed
         }
     }
@@ -249,7 +259,9 @@ mod pointer_tracker_tests {
         let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
         let result = layer.handle_event(
             Rect::new(0.0, 0.0, 1280.0, 800.0),
-            &ViewEvent::PointerMoved { position: Point::new(640.0, 790.0) },
+            &ViewEvent::PointerMoved {
+                position: Point::new(640.0, 790.0),
+            },
             &mut context,
         );
         assert_eq!(result, EventResult::Consumed);
@@ -296,7 +308,11 @@ impl PlatformRefreshView {
     }
 
     fn refresh_interval(&self) -> Duration {
-        if self.fast_poll_until.get().is_some_and(|until| Instant::now() < until) {
+        if self
+            .fast_poll_until
+            .get()
+            .is_some_and(|until| Instant::now() < until)
+        {
             LAUNCH_REFRESH_INTERVAL
         } else {
             PLATFORM_REFRESH_INTERVAL
@@ -323,13 +339,14 @@ impl PlatformRefreshView {
     }
 
     fn visible_windows_damage(&self) -> Option<Rect> {
-        self.windows
-            .get()
-            .windows
-            .iter()
-            .filter(|window| !window.minimized)
-            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
-            .reduce(Rect::union)
+        self.windows.with(|desktop| {
+            desktop
+                .windows
+                .iter()
+                .filter(|window| !window.minimized)
+                .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+                .reduce(Rect::union)
+        })
     }
 
     fn window_change_damage(before: Option<Rect>, after: Option<Rect>) -> Option<Rect> {
@@ -344,11 +361,9 @@ impl PlatformRefreshView {
 impl View for PlatformRefreshView {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         let poll_wake_region = Rect::new(bounds.origin.x, bounds.origin.y, 1.0, 1.0);
-        let needs_notifications = {
-            let desktop = self.windows.get();
-
-            desktop.has_pending_platform_notifications()
-        };
+        let needs_notifications = self
+            .windows
+            .with(DesktopWindows::has_pending_platform_notifications);
 
         let now = Instant::now();
         let interval = self.refresh_interval();
@@ -381,11 +396,7 @@ impl View for PlatformRefreshView {
                 (Vec::new(), Vec::new(), Vec::new())
             };
 
-        let active_processes = {
-            let desktop = self.windows.get();
-
-            desktop.process_ids()
-        };
+        let active_processes = self.windows.with(DesktopWindows::process_ids);
 
         let (
             system_bar_changed,
@@ -453,12 +464,15 @@ impl View for PlatformRefreshView {
             )
         };
 
-        if self.apps.get() != discovered_apps {
+        if self.apps.with(|apps| apps != &discovered_apps) {
             self.apps.set(discovered_apps);
             context.request_redraw_in_at(Self::dock_damage(bounds), Instant::now());
         }
 
-        if self.dock_running_apps.get() != running_apps {
+        if self
+            .dock_running_apps
+            .with(|current| current != &running_apps)
+        {
             self.dock_running_apps.set(running_apps);
             context.request_redraw_in_at(Self::dock_damage(bounds), Instant::now());
         }

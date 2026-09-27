@@ -34,6 +34,7 @@ const PROCESS_RECORD_SIZE: usize = 88;
 #[cfg(target_os = "mochios")]
 const MAX_PROCESS_RECORDS: usize = 256;
 const PROCESS_STATE_TERMINATED: u64 = 4;
+const APPLICATION_SCAN_INTERVAL: Duration = Duration::from_secs(5);
 #[cfg(target_os = "mochios")]
 const LINUX_SERVICE_NAME: &str = "linux.service";
 
@@ -519,6 +520,19 @@ impl DesktopPlatform for MochiOsPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
+    fn set_output_volume(&mut self, level: u8) -> Result<super::VolumeState, PlatformError> {
+        self.system_bar.volume.available = true;
+        self.system_bar.volume.level = level.min(100);
+        self.system_bar.volume.muted = self.system_bar.volume.level == 0;
+        Ok(self.system_bar.volume.clone())
+    }
+
+    fn set_output_muted(&mut self, muted: bool) -> Result<super::VolumeState, PlatformError> {
+        self.system_bar.volume.available = true;
+        self.system_bar.volume.muted = muted;
+        Ok(self.system_bar.volume.clone())
+    }
+
     fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError> {
         #[cfg(not(target_os = "mochios"))]
         {
@@ -588,7 +602,7 @@ impl DesktopPlatform for MochiOsPlatform {
         if self.next_app_scan.is_some_and(|next| now < next) {
             return Ok(());
         }
-        self.next_app_scan = now.checked_add(Duration::from_secs(1));
+        self.next_app_scan = now.checked_add(APPLICATION_SCAN_INTERVAL);
         self.replace_apps_if_changed(read_apps());
         Ok(())
     }

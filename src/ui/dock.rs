@@ -89,7 +89,8 @@ impl Default for DockVisibility {
 impl DockVisibility {
     fn amount(&self, now: Instant) -> f32 {
         let progress = (now.saturating_duration_since(self.started).as_secs_f32()
-            / DOCK_SLIDE_DURATION.as_secs_f32()).clamp(0.0, 1.0);
+            / DOCK_SLIDE_DURATION.as_secs_f32())
+        .clamp(0.0, 1.0);
         let eased = if self.target_visible {
             1.0 - (1.0 - progress).powi(3)
         } else {
@@ -293,7 +294,10 @@ where
     }
 
     fn overlaps_window(&self, dock: Rect) -> bool {
-        if Self::windows_overlap_dock(&self.windows.get(), dock) {
+        if self
+            .windows
+            .with(|windows| Self::windows_overlap_dock(windows, dock))
+        {
             return true;
         }
         let now = Instant::now();
@@ -302,7 +306,8 @@ where
         {
             return overlaps;
         }
-        let overlaps = self.platform
+        let overlaps = self
+            .platform
             .borrow()
             .native_windows_overlap(dock)
             .unwrap_or_else(|_| !self.running_apps.get().is_empty());
@@ -318,7 +323,9 @@ where
     }
 
     fn should_show(&self, bounds: Rect) -> bool {
-        let Some(dock) = self.base_dock_rect(bounds) else { return false; };
+        let Some(dock) = self.base_dock_rect(bounds) else {
+            return false;
+        };
         !self.overlaps_window(dock)
             || self.visibility.borrow().edge_hover
             || self.menu_index.get().is_some()
@@ -326,11 +333,18 @@ where
 
     fn animation_damage(bounds: Rect) -> Rect {
         let height = 190.0_f32.min(bounds.size.height);
-        Rect::new(bounds.origin.x, bounds.origin.y + bounds.size.height - height, bounds.size.width, height)
+        Rect::new(
+            bounds.origin.x,
+            bounds.origin.y + bounds.size.height - height,
+            bounds.size.width,
+            height,
+        )
     }
 
     fn update_edge_hover(&self, bounds: Rect, position: Option<Point>) -> bool {
-        let Some(dock) = self.base_dock_rect(bounds) else { return false; };
+        let Some(dock) = self.base_dock_rect(bounds) else {
+            return false;
+        };
         let mut visibility = self.visibility.borrow_mut();
         let was_hovering = visibility.edge_hover;
         let can_retain = was_hovering || visibility.amount(Instant::now()) > 0.001;
@@ -340,7 +354,12 @@ where
         was_hovering != visibility.edge_hover
     }
 
-    fn edge_hover_for_position(bounds: Rect, dock: Rect, position: Point, was_hovering: bool) -> bool {
+    fn edge_hover_for_position(
+        bounds: Rect,
+        dock: Rect,
+        position: Point,
+        was_hovering: bool,
+    ) -> bool {
         let bottom = bounds.origin.y + bounds.size.height;
         let at_bottom_edge = position.x >= bounds.origin.x
             && position.x < bounds.origin.x + bounds.size.width
@@ -592,7 +611,8 @@ where
             Some(process_id) => process_id,
             None => match self.platform.borrow_mut().launch_app(&app) {
                 Ok(process_id) => {
-                    self.fast_poll_until.set(Some(Instant::now() + Duration::from_secs(5)));
+                    self.fast_poll_until
+                        .set(Some(Instant::now() + Duration::from_secs(5)));
                     process_id
                 }
 
@@ -828,7 +848,9 @@ where
             }
             amount
         };
-        if amount <= 0.001 { return; }
+        if amount <= 0.001 {
+            return;
+        }
         let Some(dock) = self.dock_rect(bounds) else {
             return;
         };
@@ -1253,7 +1275,9 @@ mod visibility_tests {
     struct NativeWindowPlatform;
 
     impl DesktopPlatform for NativeWindowPlatform {
-        fn system_bar_state(&self) -> Result<crate::platform::SystemBarState, crate::platform::PlatformError> {
+        fn system_bar_state(
+            &self,
+        ) -> Result<crate::platform::SystemBarState, crate::platform::PlatformError> {
             Ok(Default::default())
         }
 
@@ -1261,7 +1285,10 @@ mod visibility_tests {
             Ok(())
         }
 
-        fn perform_system_action(&self, _action: crate::platform::SystemAction) -> Result<(), crate::platform::PlatformError> {
+        fn perform_system_action(
+            &self,
+            _action: crate::platform::SystemAction,
+        ) -> Result<(), crate::platform::PlatformError> {
             Ok(())
         }
 
@@ -1269,14 +1296,18 @@ mod visibility_tests {
             Ok(false)
         }
 
-        fn native_windows_overlap(&self, _area: Rect) -> Result<bool, crate::platform::PlatformError> {
+        fn native_windows_overlap(
+            &self,
+            _area: Rect,
+        ) -> Result<bool, crate::platform::PlatformError> {
             Ok(true)
         }
     }
 
     #[test]
     fn native_window_occludes_dock_without_a_binder_window() {
-        let platform: Rc<RefCell<dyn DesktopPlatform>> = Rc::new(RefCell::new(NativeWindowPlatform));
+        let platform: Rc<RefCell<dyn DesktopPlatform>> =
+            Rc::new(RefCell::new(NativeWindowPlatform));
         let layer = DockLayer::new(
             Rectangle::new(),
             platform,
@@ -1317,13 +1348,22 @@ mod visibility_tests {
         let screen = Rect::new(0.0, 0.0, 1280.0, 800.0);
         let dock = Rect::new(490.0, 705.0, 300.0, DOCK_HEIGHT);
         assert!(DockLayer::<Rectangle>::edge_hover_for_position(
-            screen, dock, Point::new(100.0, 798.0), false,
+            screen,
+            dock,
+            Point::new(100.0, 798.0),
+            false,
         ));
         assert!(DockLayer::<Rectangle>::edge_hover_for_position(
-            screen, dock, Point::new(640.0, 740.0), true,
+            screen,
+            dock,
+            Point::new(640.0, 740.0),
+            true,
         ));
         assert!(!DockLayer::<Rectangle>::edge_hover_for_position(
-            screen, dock, Point::new(100.0, 740.0), true,
+            screen,
+            dock,
+            Point::new(100.0, 740.0),
+            true,
         ));
     }
 
@@ -1331,11 +1371,19 @@ mod visibility_tests {
     fn overlapping_visible_window_requires_dock_to_hide() {
         let dock = Rect::new(490.0, 705.0, 300.0, DOCK_HEIGHT);
         let mut windows = DesktopWindows::default();
-        windows.open_about(crate::platform::ProcessId(1), String::from("Settings"), 980, 680, true);
+        windows.open_about(
+            crate::platform::ProcessId(1),
+            String::from("Settings"),
+            980,
+            680,
+            true,
+        );
         windows.windows[0].frame = Rect::new(400.0, 230.0, 980.0, 550.0);
         assert!(DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
         windows.windows[0].minimized = true;
-        assert!(!DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
+        assert!(!DockLayer::<Rectangle>::windows_overlap_dock(
+            &windows, dock
+        ));
     }
 
     #[test]
@@ -1343,13 +1391,19 @@ mod visibility_tests {
         let dock = Rect::new(490.0, 705.0, 300.0, DOCK_HEIGHT);
         let mut windows = DesktopWindows::default();
         let (id, _) = windows.open_about(
-            crate::platform::ProcessId(1), String::from("Settings"), 980, 680, true,
+            crate::platform::ProcessId(1),
+            String::from("Settings"),
+            980,
+            680,
+            true,
         );
         windows.toggle_maximize(id, Rect::new(0.0, 40.0, 1280.0, 760.0));
         assert!(DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
         windows.windows[0].frame = Rect::new(10.0, 40.0, 300.0, 300.0);
         assert!(DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
         windows.windows[0].minimized = true;
-        assert!(!DockLayer::<Rectangle>::windows_overlap_dock(&windows, dock));
+        assert!(!DockLayer::<Rectangle>::windows_overlap_dock(
+            &windows, dock
+        ));
     }
 }

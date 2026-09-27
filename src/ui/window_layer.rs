@@ -127,29 +127,21 @@ where
 
         let delta_y = pointer.y - drag.pointer_origin.y;
 
-        let desktop = self.windows.get();
-        let window = desktop
-            .windows
-            .iter()
-            .find(|window| window.id == drag.window)?;
-
+        let previous = self.windows.with(|desktop| {
+            desktop
+                .windows
+                .iter()
+                .find(|window| window.id == drag.window)
+                .map(|window| window.frame)
+        })?;
         let minimum_x = bounds.origin.x;
-
         let minimum_y = bounds.origin.y + DESKTOP_TOP_INSET;
-
-        let maximum_x =
-            (bounds.origin.x + bounds.size.width - window.frame.size.width).max(minimum_x);
-
+        let maximum_x = (bounds.origin.x + bounds.size.width - previous.size.width).max(minimum_x);
         let maximum_y =
-            (bounds.origin.y + bounds.size.height - window.frame.size.height).max(minimum_y);
-
+            (bounds.origin.y + bounds.size.height - previous.size.height).max(minimum_y);
         let x = (drag.window_origin.x + delta_x).clamp(minimum_x, maximum_x);
-
         let y = (drag.window_origin.y + delta_y).clamp(minimum_y, maximum_y);
-
-        let previous = window.frame;
         let next = Rect::new(x, y, previous.size.width, previous.size.height);
-        drop(desktop);
 
         if next == previous {
             return None;
@@ -169,22 +161,24 @@ where
     }
 
     fn window_effect_damage(&self, window_id: crate::window::WindowId) -> Option<Rect> {
-        self.windows
-            .get()
-            .windows
-            .iter()
-            .find(|window| window.id == window_id)
-            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+        self.windows.with(|desktop| {
+            desktop
+                .windows
+                .iter()
+                .find(|window| window.id == window_id)
+                .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+        })
     }
 
     fn visible_windows_damage(&self) -> Option<Rect> {
-        self.windows
-            .get()
-            .windows
-            .iter()
-            .filter(|window| !window.minimized)
-            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
-            .reduce(Rect::union)
+        self.windows.with(|desktop| {
+            desktop
+                .windows
+                .iter()
+                .filter(|window| !window.minimized)
+                .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+                .reduce(Rect::union)
+        })
     }
 
     fn request_window_state_damage(
@@ -220,28 +214,24 @@ where
     }
 
     fn update_hovered_control(&self, position: Point) -> Option<Rect> {
-        let desktop = self.windows.get();
-
-        let target = Self::topmost_window_at(&desktop, position).and_then(|window| {
-            Self::control_at(window.frame, position).map(|control| (window.id, control))
+        let (target, damage) = self.windows.with(|desktop| {
+            let target = Self::topmost_window_at(desktop, position).and_then(|window| {
+                Self::control_at(window.frame, position).map(|control| (window.id, control))
+            });
+            let damage = desktop
+                .windows
+                .iter()
+                .filter_map(|window| {
+                    let expected = match target {
+                        Some((id, control)) if id == window.id => Some(control),
+                        _ => None,
+                    };
+                    (window.interaction.hovered != expected)
+                        .then_some(window.frame.expanded(WINDOW_EFFECT_EXTENT))
+                })
+                .reduce(Rect::union);
+            (target, damage)
         });
-
-        let damage = desktop
-            .windows
-            .iter()
-            .filter_map(|window| {
-                let expected = match target {
-                    Some((id, control)) if id == window.id => Some(control),
-
-                    _ => None,
-                };
-
-                (window.interaction.hovered != expected)
-                    .then_some(window.frame.expanded(WINDOW_EFFECT_EXTENT))
-            })
-            .reduce(Rect::union);
-
-        drop(desktop);
 
         if damage.is_some() {
             self.windows.update(|desktop| {
@@ -253,18 +243,16 @@ where
     }
 
     fn clear_interactions(&self) -> Option<Rect> {
-        let desktop = self.windows.get();
-
-        let damage = desktop
-            .windows
-            .iter()
-            .filter(|window| {
-                window.interaction.hovered.is_some() || window.interaction.pressed.is_some()
-            })
-            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
-            .reduce(Rect::union);
-
-        drop(desktop);
+        let damage = self.windows.with(|desktop| {
+            desktop
+                .windows
+                .iter()
+                .filter(|window| {
+                    window.interaction.hovered.is_some() || window.interaction.pressed.is_some()
+                })
+                .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+                .reduce(Rect::union)
+        });
 
         if damage.is_some() {
             self.windows.update(|desktop| {
@@ -394,9 +382,9 @@ where
         position: Point,
         context: &mut EventContext<'_>,
     ) -> Option<ResizeEdge> {
-        let desktop = self.windows.get();
-
-        let edge = Self::topmost_resize_window_at(&desktop, position).map(|(_, edge)| edge);
+        let edge = self.windows.with(|desktop| {
+            Self::topmost_resize_window_at(desktop, position).map(|(_, edge)| edge)
+        });
 
         let cursor = match edge {
             Some(edge) => Self::cursor_for_resize_edge(edge),
@@ -486,18 +474,15 @@ where
         let height = (bottom - top).max(MINIMUM_WINDOW_HEIGHT);
 
         let next = Rect::new(left, top, width, height);
-        let desktop = self.windows.get();
-        let window = desktop
-            .windows
-            .iter()
-            .find(|window| window.id == resize.window)?;
-
-        if !window.resizable || window.restore_frame.is_some() {
-            return None;
-        }
-
-        let previous = window.frame;
-        drop(desktop);
+        let previous = self.windows.with(|desktop| {
+            desktop
+                .windows
+                .iter()
+                .find(|window| {
+                    window.id == resize.window && window.resizable && window.restore_frame.is_none()
+                })
+                .map(|window| window.frame)
+        })?;
 
         if next == previous {
             return None;
@@ -532,18 +517,17 @@ where
         // Fit them before their first visible frame, then promptly notify the
         // application of any resized surface on the next paint.
         let work_area = window_work_area(bounds);
-        let needs_resize_notification = {
-            let desktop = self.windows.get();
+        let needs_resize_notification = self.windows.with(|desktop| {
             desktop.windows.iter().any(|window| {
                 window.restore_frame.is_none()
                     && (window.frame.origin.x < work_area.origin.x
-                    || window.frame.origin.y < work_area.origin.y
-                    || window.frame.origin.x + window.frame.size.width
-                        > work_area.origin.x + work_area.size.width
-                    || window.frame.origin.y + window.frame.size.height
-                        > work_area.origin.y + work_area.size.height)
+                        || window.frame.origin.y < work_area.origin.y
+                        || window.frame.origin.x + window.frame.size.width
+                            > work_area.origin.x + work_area.size.width
+                        || window.frame.origin.y + window.frame.size.height
+                            > work_area.origin.y + work_area.size.height)
             })
-        };
+        });
         if needs_resize_notification {
             self.windows.update(|desktop| {
                 desktop.fit_to_work_area(work_area);
@@ -551,40 +535,40 @@ where
             context.request_redraw_in_at(bounds, Instant::now());
         }
 
-        let desktop = self.windows.get();
+        self.windows.with(|desktop| {
+            self.test_window_states.borrow_mut().retain(|id, _| {
+                desktop
+                    .windows
+                    .iter()
+                    .any(|window| window.id == *id && window.renderer == crate::apps::TEST_ENTRY)
+            });
 
-        self.test_window_states.borrow_mut().retain(|id, _| {
-            desktop
-                .windows
-                .iter()
-                .any(|window| window.id == *id && window.renderer == crate::apps::TEST_ENTRY)
-        });
+            self.launch_failure_states.borrow_mut().retain(|id, _| {
+                desktop.windows.iter().any(|window| {
+                    window.id == *id && window.renderer == crate::apps::LAUNCH_FAILURE_ENTRY
+                })
+            });
 
-        self.launch_failure_states.borrow_mut().retain(|id, _| {
-            desktop.windows.iter().any(|window| {
-                window.id == *id && window.renderer == crate::apps::LAUNCH_FAILURE_ENTRY
-            })
-        });
+            for desktop_window in &desktop.windows {
+                if desktop_window.minimized {
+                    continue;
+                }
 
-        for desktop_window in &desktop.windows {
-            if desktop_window.minimized {
-                continue;
+                let focused = desktop.focused == Some(desktop_window.id);
+
+                window::view(
+                    desktop_window,
+                    focused,
+                    self.test_state(desktop_window),
+                    self.launch_failure_states
+                        .borrow()
+                        .get(&desktop_window.id)
+                        .cloned(),
+                    self.windows.clone(),
+                )
+                .paint(desktop_window.frame, context);
             }
-
-            let focused = desktop.focused == Some(desktop_window.id);
-
-            window::view(
-                desktop_window,
-                focused,
-                self.test_state(desktop_window),
-                self.launch_failure_states
-                    .borrow()
-                    .get(&desktop_window.id)
-                    .cloned(),
-                self.windows.clone(),
-            )
-            .paint(desktop_window.frame, context);
-        }
+        });
     }
 
     fn handle_event(
@@ -744,20 +728,19 @@ where
                     context.request_redraw_in(dirty);
                 }
 
-                let desktop = self.windows.get();
-
-                let hovered_window = Self::topmost_window_at(&desktop, *position);
+                let hovered_window = self.windows.with(|desktop| {
+                    Self::topmost_window_at(desktop, *position).map(|window| {
+                        let focused = desktop.focused == Some(window.id);
+                        (window, focused)
+                    })
+                });
 
                 if resize_edge.is_some() {
                     EventResult::Consumed
-                } else if let Some(window) = hovered_window {
-                    let focused = desktop.focused == Some(window.id);
-                    drop(desktop);
+                } else if let Some((window, focused)) = hovered_window {
                     self.dispatch_window_event(&window, focused, event, context);
                     EventResult::Consumed
                 } else {
-                    drop(desktop);
-
                     self.content.handle_event(bounds, event, context)
                 }
             }
@@ -770,11 +753,9 @@ where
                  * リサイズ領域は通常の
                  * 角丸ヒットテストより先に調べる。
                  */
-                let resize_target = {
-                    let desktop = self.windows.get();
-
-                    Self::topmost_resize_window_at(&desktop, *position)
-                };
+                let resize_target = self
+                    .windows
+                    .with(|desktop| Self::topmost_resize_window_at(desktop, *position));
 
                 if let Some((resize_window, edge)) = resize_target {
                     let before = self.visible_windows_damage();
@@ -811,11 +792,9 @@ where
 
                 context.set_cursor(CursorIcon::Default);
 
-                let hit_window = {
-                    let desktop = self.windows.get();
-
-                    Self::topmost_window_at(&desktop, *position)
-                };
+                let hit_window = self
+                    .windows
+                    .with(|desktop| Self::topmost_window_at(desktop, *position));
 
                 let Some(hit_window) = hit_window else {
                     let is_desktop_area = position.y >= bounds.origin.y + DESKTOP_TOP_INSET;
@@ -825,15 +804,13 @@ where
                      * Window関連Stateを変更しない。
                      */
                     if is_desktop_area {
-                        let desktop = self.windows.get();
-
-                        let changed = desktop.focused.is_some()
-                            || desktop.windows.iter().any(|window| {
-                                window.interaction.hovered.is_some()
-                                    || window.interaction.pressed.is_some()
-                            });
-
-                        drop(desktop);
+                        let changed = self.windows.with(|desktop| {
+                            desktop.focused.is_some()
+                                || desktop.windows.iter().any(|window| {
+                                    window.interaction.hovered.is_some()
+                                        || window.interaction.pressed.is_some()
+                                })
+                        });
 
                         if changed {
                             let before = self.visible_windows_damage();
@@ -895,16 +872,14 @@ where
                 position,
                 button: PointerButton::Primary,
             } => {
-                let pressed = {
-                    let desktop = self.windows.get();
-
+                let pressed = self.windows.with(|desktop| {
                     desktop.windows.iter().find_map(|window| {
                         window
                             .interaction
                             .pressed
                             .map(|control| (window.id, control, window.frame))
                     })
-                };
+                });
 
                 if let Some((window_id, pressed_control, frame)) = pressed {
                     let before = self.visible_windows_damage();
@@ -951,19 +926,19 @@ where
 
                 let resize_edge = self.update_resize_cursor(*position, context);
 
-                let desktop = self.windows.get();
-                let hovered_window = Self::topmost_window_at(&desktop, *position);
+                let hovered_window = self.windows.with(|desktop| {
+                    Self::topmost_window_at(desktop, *position).map(|window| {
+                        let focused = desktop.focused == Some(window.id);
+                        (window, focused)
+                    })
+                });
 
                 if resize_edge.is_some() {
                     EventResult::Consumed
-                } else if let Some(window) = hovered_window {
-                    let focused = desktop.focused == Some(window.id);
-                    drop(desktop);
+                } else if let Some((window, focused)) = hovered_window {
                     self.dispatch_window_event(&window, focused, event, context);
                     EventResult::Consumed
                 } else {
-                    drop(desktop);
-
                     self.content.handle_event(bounds, event, context)
                 }
             }
@@ -975,10 +950,20 @@ where
                     context.request_redraw_in(dirty);
                 }
 
-                let desktop = self.windows.get();
-                for window in desktop.windows.iter().filter(|window| !window.minimized) {
-                    let focused = desktop.focused == Some(window.id);
-                    self.dispatch_window_event(window, focused, event, context);
+                let windows = self.windows.with(|desktop| {
+                    desktop
+                        .windows
+                        .iter()
+                        .filter(|window| !window.minimized)
+                        .cloned()
+                        .map(|window| {
+                            let focused = desktop.focused == Some(window.id);
+                            (window, focused)
+                        })
+                        .collect::<Vec<_>>()
+                });
+                for (window, focused) in windows {
+                    self.dispatch_window_event(&window, focused, event, context);
                 }
 
                 self.content.handle_event(bounds, event, context)
@@ -986,30 +971,32 @@ where
 
             _ => {
                 if let Some(position) = event.position() {
-                    let desktop = self.windows.get();
-
-                    let resize_hit = Self::topmost_resize_window_at(&desktop, position).is_some();
-
-                    let window_hit = Self::topmost_window_at(&desktop, position);
+                    let (resize_hit, window_hit) = self.windows.with(|desktop| {
+                        (
+                            Self::topmost_resize_window_at(desktop, position).is_some(),
+                            Self::topmost_window_at(desktop, position).map(|window| {
+                                let focused = desktop.focused == Some(window.id);
+                                (window, focused)
+                            }),
+                        )
+                    });
 
                     if resize_hit {
                         return EventResult::Consumed;
                     }
 
-                    if let Some(window) = window_hit {
-                        let focused = desktop.focused == Some(window.id);
-                        drop(desktop);
+                    if let Some((window, focused)) = window_hit {
                         self.dispatch_window_event(&window, focused, event, context);
                         return EventResult::Consumed;
                     }
                 } else {
-                    let desktop = self.windows.get();
-                    if let Some(window) = desktop
-                        .focused
-                        .and_then(|id| desktop.windows.iter().find(|window| window.id == id))
-                        .cloned()
-                    {
-                        drop(desktop);
+                    let focused_window = self.windows.with(|desktop| {
+                        desktop
+                            .focused
+                            .and_then(|id| desktop.windows.iter().find(|window| window.id == id))
+                            .cloned()
+                    });
+                    if let Some(window) = focused_window {
                         return self.dispatch_window_event(&window, true, event, context);
                     }
                 }
@@ -1026,7 +1013,10 @@ mod tests {
 
     #[test]
     fn initial_work_area_stays_inside_even_a_small_display() {
-        for display in [Rect::new(0.0, 0.0, 1280.0, 800.0), Rect::new(10.0, 20.0, 40.0, 40.0)] {
+        for display in [
+            Rect::new(0.0, 0.0, 1280.0, 800.0),
+            Rect::new(10.0, 20.0, 40.0, 40.0),
+        ] {
             let area = window_work_area(display);
             assert!(area.size.width > 0.0 && area.size.height > 0.0);
             assert!(area.origin.x >= display.origin.x && area.origin.y >= display.origin.y);

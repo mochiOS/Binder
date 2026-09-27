@@ -131,15 +131,18 @@ impl ActiveApplicationName {
     }
 
     fn application_name(&self) -> String {
-        let process_id = self.windows.get().focused_process_id();
-        let apps = self.apps.get();
+        let process_id = self.windows.with(DesktopWindows::focused_process_id);
         let platform = self.platform.borrow();
 
         process_id
             .and_then(|process_id| {
-                apps.iter()
-                    .find(|app| platform.process_id_for_bundle(&app.bundle_id) == Some(process_id))
-                    .map(|app| app.name.clone())
+                self.apps.with(|apps| {
+                    apps.iter()
+                        .find(|app| {
+                            platform.process_id_for_bundle(&app.bundle_id) == Some(process_id)
+                        })
+                        .map(|app| app.name.clone())
+                })
             })
             .unwrap_or_else(|| String::from("Binder"))
     }
