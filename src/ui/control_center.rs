@@ -324,12 +324,6 @@ impl<C: View> ControlCenterLayer<C> {
             }))
             .radius(CornerRadius::Custom(CONTROL_SIZE / 2.0))
             .paint(control, context);
-        let icon = Rect::new(
-            control.origin.x + (CONTROL_SIZE - ICON_SIZE) / 2.0,
-            control.origin.y + (CONTROL_SIZE - ICON_SIZE) / 2.0,
-            ICON_SIZE,
-            ICON_SIZE,
-        );
         Icon::new(item.symbol)
             .size(ICON_SIZE)
             .color(if is_on {
@@ -338,7 +332,7 @@ impl<C: View> ControlCenterLayer<C> {
                 Theme::current().shell.primary_text
             })
             .accessibility_label(item.title.clone())
-            .paint(icon, context);
+            .paint(control, context);
         if self.editing.get() {
             let badge = Rect::new(bounds.origin.x - 5.0, bounds.origin.y - 5.0, 24.0, 24.0);
             Rectangle::new()

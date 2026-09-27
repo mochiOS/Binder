@@ -53,7 +53,7 @@ pub(crate) fn view(
     let control_center_button = Button::new("")
         .content(
             Icon::new(SymbolName::ChevronDown)
-                .size(16.0)
+                .size(8.0)
                 .color(Theme::current().shell.primary_text),
         )
         .style(ButtonStyle::Ghost)
