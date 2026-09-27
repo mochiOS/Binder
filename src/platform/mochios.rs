@@ -1021,7 +1021,7 @@ fn read_apps_from(root: &Path) -> Vec<AppInfo> {
         if path.file_name().and_then(|name| name.to_str()) == Some("Binder.app") {
             continue;
         }
-        if let Some(app) = read_app_about(&path)
+        if let Some(app) = read_app_manifest(&path)
             && app.bundle_id != "org.mochios.binder"
         {
             apps.push(app);
@@ -1085,15 +1085,14 @@ fn transient_pause() {
     }
 }
 
-fn read_app_about(app_root: &Path) -> Option<AppInfo> {
-    let content = read_to_string(app_root.join("about.toml")).ok()?;
+fn read_app_manifest(app_root: &Path) -> Option<AppInfo> {
+    let content = read_to_string(app_root.join("manifest.toml")).ok()?;
 
     let name = parse_string_field(&content, "name")?;
-    let bundle_id = parse_string_field(&content, "bundle_id")
-        .or_else(|| parse_string_field(&content, "bundle-id"))?;
+    let bundle_id = parse_string_field(&content, "id")?;
     let entry = parse_string_field(&content, "entry")?;
     let version = parse_string_field(&content, "version").unwrap_or_default();
-    let developer = parse_string_field(&content, "developer").unwrap_or_default();
+    let developer = parse_string_field(&content, "vendor").unwrap_or_default();
     let description = parse_string_field(&content, "description").unwrap_or_default();
     let icon = parse_string_field(&content, "icon").map(|path| resolve_app_path(app_root, &path));
     let resources = parse_string_array_field(&content, "resources")
@@ -1300,22 +1299,22 @@ mod tests {
         assert!(fs::create_dir_all(&broken).is_ok());
         assert!(
             fs::write(
-                alpha.join("about.toml"),
-                "name = \"Alpha\"\nbundle_id = \"org.test.alpha\"\nentry = \"entry.elf\"\nicon = \"icon.png\"\n",
+                alpha.join("manifest.toml"),
+                "[package]\nname = \"Alpha\"\nid = \"org.test.alpha\"\n[application]\nentry = \"entry.elf\"\nicon = \"icon.png\"\n",
             )
             .is_ok()
         );
         assert!(
             fs::write(
-                zeta.join("about.toml"),
-                "name = \"Zeta\"\nbundle_id = \"org.test.zeta\"\nentry = \"internal:test\"\n",
+                zeta.join("manifest.toml"),
+                "[package]\nname = \"Zeta\"\nid = \"org.test.zeta\"\n[application]\nentry = \"internal:test\"\n",
             )
             .is_ok()
         );
         assert!(
             fs::write(
-                broken.join("about.toml"),
-                "name = \"Broken\"\nbundle_id = \"org.test.broken\"\n",
+                broken.join("manifest.toml"),
+                "[package]\nname = \"Broken\"\nid = \"org.test.broken\"\n",
             )
             .is_ok()
         );
@@ -1343,8 +1342,8 @@ mod tests {
         assert!(fs::create_dir_all(&installed).is_ok());
         assert!(
             fs::write(
-                installed.join("about.toml"),
-                "name = \"Installed\"\nbundle_id = \"org.test.installed\"\nentry = \"entry.elf\"\n",
+                installed.join("manifest.toml"),
+                "[package]\nname = \"Installed\"\nid = \"org.test.installed\"\n[application]\nentry = \"entry.elf\"\n",
             )
             .is_ok()
         );

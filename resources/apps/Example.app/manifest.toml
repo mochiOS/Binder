@@ -1,11 +1,14 @@
+format = 1
+
+[package]
+id = "com.example.app"
 name = "Example application"
-bundle_id = "com.example.app"
 version = "0.1.0"
-developer = "tas0dev"
+vendor = "tas0dev"
+kind = "application"
+
+[application]
 entry = "internal:about"
 description = "Example application for demonstrating Binder"
 icon = "icon.png"
-
-resources = [
-    "icon.png"
-]
+resources = ["icon.png"]

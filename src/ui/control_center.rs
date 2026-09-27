@@ -566,7 +566,7 @@ impl<C: View> View for ControlCenterLayer<C> {
 }
 
 fn read_app_items(app: &AppInfo) -> Vec<Item> {
-    let Ok(text) = fs::read_to_string(app.root.join("control-center.toml")) else {
+    let Ok(text) = fs::read_to_string(app.root.join("manifest.toml")) else {
         return Vec::new();
     };
     parse_app_items(&text, app).unwrap_or_else(|error| {
@@ -587,7 +587,11 @@ fn parse_app_items(text: &str, app: &AppInfo) -> Result<Vec<Item>, &'static str>
         return Err("unsupported format");
     }
     let mut result = Vec::new();
-    for section in text.split("[[item]]").skip(1).take(MAX_APP_ITEMS + 1) {
+    for section in text
+        .split("[[application.control_center_items]]")
+        .skip(1)
+        .take(MAX_APP_ITEMS + 1)
+    {
         if result.len() == MAX_APP_ITEMS {
             return Err("too many items");
         }
@@ -653,7 +657,7 @@ mod tests {
     #[test]
     fn parses_safe_application_registration() {
         let items = parse_app_items(
-            "format = 1\n[[item]]\nid = \"new-document\"\ntitle = \"New document\"\nsymbol = \"pencil\"\naction = \"open-application\"\n",
+            "format = 1\n[[application.control_center_items]]\nid = \"new-document\"\ntitle = \"New document\"\nsymbol = \"pencil\"\naction = \"open-application\"\n",
             &app(),
         ).unwrap();
         assert_eq!(items.len(), 1);
@@ -668,14 +672,14 @@ mod tests {
     fn rejects_arbitrary_actions_and_symbols() {
         assert!(
             parse_app_items(
-                "format=1\n[[item]]\nid=\"x\"\ntitle=\"X\"\nsymbol=\"missing\"\naction=\"shell\"",
+                "format=1\n[[application.control_center_items]]\nid=\"x\"\ntitle=\"X\"\nsymbol=\"missing\"\naction=\"shell\"",
                 &app()
             )
             .is_err()
         );
         assert!(
             parse_app_items(
-                "format=2\n[[item]]\nid=\"x\"\ntitle=\"X\"\nsymbol=\"pencil\"\naction=\"open-application\"",
+                "format=2\n[[application.control_center_items]]\nid=\"x\"\ntitle=\"X\"\nsymbol=\"pencil\"\naction=\"open-application\"",
                 &app()
             )
             .is_err()

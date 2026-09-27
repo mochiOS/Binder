@@ -1,6 +1,12 @@
+format = 1
+
+[package]
+id = "com.example.test"
 name = "Test application"
-bundle_id = "com.example.test"
 version = "0.1.0"
-developer = "tas0dev"
+vendor = "tas0dev"
+kind = "application"
+
+[application]
 entry = "internal:test"
 description = "Test application for demonstrating Binder"

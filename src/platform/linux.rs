@@ -635,20 +635,19 @@ fn read_apps() -> Vec<AppInfo> {
 }
 
 fn read_app_manifest(app_root: &Path) -> Option<AppInfo> {
-    let manifest_path = app_root.join("about.toml");
+    let manifest_path = app_root.join("manifest.toml");
 
     let content = fs::read_to_string(manifest_path).ok()?;
 
     let name = parse_string_field(&content, "name")?;
 
-    let bundle_id = parse_string_field(&content, "bundle_id")
-        .or_else(|| parse_string_field(&content, "bundle-id"))?;
+    let bundle_id = parse_string_field(&content, "id")?;
 
     let entry = parse_string_field(&content, "entry")?;
 
     let version = parse_string_field(&content, "version").unwrap_or_default();
 
-    let developer = parse_string_field(&content, "developer").unwrap_or_default();
+    let developer = parse_string_field(&content, "vendor").unwrap_or_default();
 
     let description = parse_string_field(&content, "description").unwrap_or_default();
 
