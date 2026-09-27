@@ -52,8 +52,8 @@ pub(crate) fn view(
     let menu_for_center = menu_open.clone();
     let control_center_button = Button::new("")
         .content(
-            Icon::new(SymbolName::More)
-                .size(18.0)
+            Icon::new(SymbolName::ChevronDown)
+                .size(16.0)
                 .color(Theme::current().shell.primary_text),
         )
         .style(ButtonStyle::Ghost)

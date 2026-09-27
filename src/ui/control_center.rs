@@ -13,13 +13,16 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
-const PANEL_WIDTH: f32 = 372.0;
+const PANEL_WIDTH: f32 = 300.0;
 const PANEL_MARGIN: f32 = 10.0;
 const PANEL_TOP: f32 = 46.0;
 const PANEL_PADDING: f32 = 16.0;
 const HEADER_HEIGHT: f32 = 34.0;
-const TILE_GAP: f32 = 10.0;
-const TILE_HEIGHT: f32 = 76.0;
+const TILE_COLUMNS: usize = 4;
+const TILE_GAP: f32 = 12.0;
+const TILE_HEIGHT: f32 = 56.0;
+const CONTROL_SIZE: f32 = 52.0;
+const ICON_SIZE: f32 = 20.0;
 const MAX_APP_ITEMS: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,9 +37,9 @@ enum ItemAction {
 struct Item {
     id: String,
     title: String,
-    subtitle: String,
     symbol: SymbolName,
     action: ItemAction,
+    is_on: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,67 +97,53 @@ impl<C: View> ControlCenterLayer<C> {
 
     fn items(&self) -> Vec<Item> {
         let state = self.system_bar.get();
-        let network = match state.network {
-            NetworkState::Connected { network_name, .. } => {
-                network_name.unwrap_or_else(|| String::from("Connected"))
-            }
-            NetworkState::Connecting => String::from("Connecting"),
-            NetworkState::Disconnected => String::from("Not connected"),
-            NetworkState::Unavailable => String::from("Unavailable"),
-        };
-        let volume = if !state.volume.available {
-            String::from("Unavailable")
-        } else if state.volume.muted {
-            String::from("Muted")
-        } else {
-            format!("{}%", state.volume.level)
-        };
+        let network_on = matches!(
+            &state.network,
+            NetworkState::Connected { .. } | NetworkState::Connecting
+        );
+        let sound_on = state.volume.available && !state.volume.muted && state.volume.level > 0;
         let mut items = vec![
             Item::builtin(
                 "builtin.network",
                 "Network",
-                network,
                 SymbolName::Network,
                 ItemAction::OpenSettings,
+                network_on,
             ),
             Item::builtin(
                 "builtin.volume",
                 "Sound",
-                volume,
                 SymbolName::Volume2,
                 ItemAction::OpenSettings,
+                sound_on,
             ),
             Item::builtin(
                 "builtin.appearance",
                 "Appearance",
-                "Display settings",
                 SymbolName::Paintbrush,
                 ItemAction::OpenSettings,
+                true,
             ),
             Item::builtin(
                 "builtin.input",
                 "Input",
-                if state.japanese_input {
-                    "Japanese"
-                } else {
-                    "Roman"
-                },
                 SymbolName::Keyboard,
                 ItemAction::ToggleInput,
+                state.japanese_input,
             ),
             Item::builtin(
                 "builtin.settings",
                 "Settings",
-                "System settings",
                 SymbolName::Settings,
                 ItemAction::OpenSettings,
+                true,
             ),
             Item::builtin(
                 "builtin.lock",
                 "Lock",
-                "Lock this session",
                 SymbolName::Lock,
                 ItemAction::Lock,
+                true,
             ),
         ];
         for app in self.apps.get() {
@@ -182,9 +171,9 @@ impl<C: View> ControlCenterLayer<C> {
     }
 
     fn panel(&self, bounds: Rect, visible: usize, hidden: usize) -> Rect {
-        let visible_rows = visible.div_ceil(2).max(1);
+        let visible_rows = visible.div_ceil(TILE_COLUMNS).max(1);
         let hidden_rows = if self.editing.get() && hidden > 0 {
-            hidden.div_ceil(2) + 1
+            hidden.div_ceil(TILE_COLUMNS) + 1
         } else {
             0
         };
@@ -211,10 +200,11 @@ impl<C: View> ControlCenterLayer<C> {
     }
 
     fn tile_rect(panel: Rect, index: usize, start_y: f32) -> Rect {
-        let width = (panel.size.width - PANEL_PADDING * 2.0 - TILE_GAP) / 2.0;
+        let width = (panel.size.width - PANEL_PADDING * 2.0 - TILE_GAP * (TILE_COLUMNS - 1) as f32)
+            / TILE_COLUMNS as f32;
         Rect::new(
-            panel.origin.x + PANEL_PADDING + (index % 2) as f32 * (width + TILE_GAP),
-            start_y + (index / 2) as f32 * (TILE_HEIGHT + TILE_GAP),
+            panel.origin.x + PANEL_PADDING + (index % TILE_COLUMNS) as f32 * (width + TILE_GAP),
+            start_y + (index / TILE_COLUMNS) as f32 * (TILE_HEIGHT + TILE_GAP),
             width,
             TILE_HEIGHT,
         )
@@ -239,7 +229,7 @@ impl<C: View> ControlCenterLayer<C> {
             }
         }
         if self.editing.get() {
-            let visible_rows = visible.len().div_ceil(2).max(1);
+            let visible_rows = visible.len().div_ceil(TILE_COLUMNS).max(1);
             let hidden_y = start_y + visible_rows as f32 * (TILE_HEIGHT + TILE_GAP) + 24.0;
             for (index, item) in hidden.iter().enumerate() {
                 if Self::tile_rect(panel, index, hidden_y).contains(position) {
@@ -313,46 +303,42 @@ impl<C: View> ControlCenterLayer<C> {
             hidden,
         };
         let hovered = self.interaction.borrow().hovered.as_ref() == Some(&hit);
+        let control = Rect::new(
+            bounds.origin.x + (bounds.size.width - CONTROL_SIZE) / 2.0,
+            bounds.origin.y + (bounds.size.height - CONTROL_SIZE) / 2.0,
+            CONTROL_SIZE,
+            CONTROL_SIZE,
+        );
+        let is_on = item.is_on && !hidden;
         Rectangle::new()
-            .color(RectangleColor::Custom(if hovered {
-                Theme::current().shell.item_hover
+            .color(RectangleColor::Custom(if is_on {
+                if hovered {
+                    Theme::current().shell.action_hover
+                } else {
+                    Theme::current().colors.accent
+                }
+            } else if hovered {
+                Theme::current().shell.control_hover
             } else {
                 Theme::current().shell.item_enabled
             }))
-            .radius(CornerRadius::Custom(16.0))
-            .paint(bounds, context);
-        let icon = Rect::new(bounds.origin.x + 14.0, bounds.origin.y + 18.0, 40.0, 40.0);
-        Rectangle::new()
-            .color(RectangleColor::Custom(Theme::current().colors.accent))
-            .radius(CornerRadius::Custom(20.0))
-            .paint(icon, context);
+            .radius(CornerRadius::Custom(CONTROL_SIZE / 2.0))
+            .paint(control, context);
+        let icon = Rect::new(
+            control.origin.x + (CONTROL_SIZE - ICON_SIZE) / 2.0,
+            control.origin.y + (CONTROL_SIZE - ICON_SIZE) / 2.0,
+            ICON_SIZE,
+            ICON_SIZE,
+        );
         Icon::new(item.symbol)
-            .size(20.0)
-            .color(Color::WHITE)
+            .size(ICON_SIZE)
+            .color(if is_on {
+                Color::WHITE
+            } else {
+                Theme::current().shell.primary_text
+            })
+            .accessibility_label(item.title.clone())
             .paint(icon, context);
-        Text::styled(item.title.clone(), TextRole::Body)
-            .weight(650)
-            .color(Theme::current().shell.primary_text)
-            .paint(
-                Rect::new(
-                    bounds.origin.x + 64.0,
-                    bounds.origin.y + 15.0,
-                    bounds.size.width - 74.0,
-                    22.0,
-                ),
-                context,
-            );
-        Text::styled(item.subtitle.clone(), TextRole::Caption)
-            .color(Theme::current().shell.secondary_text)
-            .paint(
-                Rect::new(
-                    bounds.origin.x + 64.0,
-                    bounds.origin.y + 39.0,
-                    bounds.size.width - 74.0,
-                    20.0,
-                ),
-                context,
-            );
         if self.editing.get() {
             let badge = Rect::new(bounds.origin.x - 5.0, bounds.origin.y - 5.0, 24.0, 24.0);
             Rectangle::new()
@@ -376,19 +362,13 @@ impl<C: View> ControlCenterLayer<C> {
 }
 
 impl Item {
-    fn builtin(
-        id: &str,
-        title: &str,
-        subtitle: impl Into<String>,
-        symbol: SymbolName,
-        action: ItemAction,
-    ) -> Self {
+    fn builtin(id: &str, title: &str, symbol: SymbolName, action: ItemAction, is_on: bool) -> Self {
         Self {
             id: id.to_string(),
             title: title.to_string(),
-            subtitle: subtitle.into(),
             symbol,
             action,
+            is_on,
         }
     }
 }
@@ -449,7 +429,7 @@ impl<C: View> View for ControlCenterLayer<C> {
             self.paint_tile(item, Self::tile_rect(panel, index, start_y), false, context);
         }
         if self.editing.get() && !hidden.is_empty() {
-            let visible_rows = visible.len().div_ceil(2).max(1);
+            let visible_rows = visible.len().div_ceil(TILE_COLUMNS).max(1);
             let label_y = start_y + visible_rows as f32 * (TILE_HEIGHT + TILE_GAP);
             Text::styled("MORE CONTROLS", TextRole::Caption)
                 .weight(650)
@@ -619,9 +599,9 @@ fn parse_app_items(text: &str, app: &AppInfo) -> Result<Vec<Item>, &'static str>
         result.push(Item {
             id: format!("app.{}:{id}", app.bundle_id),
             title: title.to_string(),
-            subtitle: app.name.clone(),
             symbol,
             action: ItemAction::OpenApplication(app.bundle_id.clone()),
+            is_on: true,
         });
     }
     Ok(result)
