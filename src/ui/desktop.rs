@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::{dock, top_bar};
 
+use crate::control_center_preferences::ControlCenterPreferences;
 use crate::desktop::WindowResize;
 use crate::dock_preferences::DockPreferences;
 
@@ -32,6 +33,10 @@ pub(crate) fn view(
     system_bar: State<SystemBarState>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     menu_open: State<bool>,
+    control_center_open: State<bool>,
+    control_center_editing: State<bool>,
+    control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
+    control_center_interaction: Rc<RefCell<super::control_center::ControlCenterInteraction>>,
     windows: State<DesktopWindows>,
     window_drag: State<Option<WindowDrag>>,
     resize: State<Option<WindowResize>>,
@@ -69,8 +74,9 @@ pub(crate) fn view(
         .gap(StackGap::None)
         .child(
             top_bar::view(
-                system_bar,
+                system_bar.clone(),
                 menu_open.clone(),
+                control_center_open.clone(),
                 Rc::clone(&platform),
                 windows.clone(),
                 apps.clone(),
@@ -130,19 +136,31 @@ pub(crate) fn view(
         dock_preferences,
         app_library_open,
         pending_app_activation,
-        fast_poll_until,
+        Rc::clone(&fast_poll_until),
         launch_failure_states,
     );
     let root = super::app_switcher::AppSwitcherLayer::new(
         root,
         Rc::clone(&platform),
         windows.clone(),
-        apps,
+        apps.clone(),
         dock_running_apps,
         app_switcher,
     );
     let root = super::popup_menu::PopupMenu::new(root, menu, menu_open);
     let root = super::context_menu::ContextMenuLayer::new(root, Rc::clone(&platform), context_menu);
+    let root = super::control_center::ControlCenterLayer::new(
+        root,
+        control_center_open,
+        control_center_editing,
+        system_bar,
+        control_center_preferences,
+        control_center_interaction,
+        Rc::clone(&platform),
+        windows,
+        apps,
+        fast_poll_until,
+    );
     let root = PointerTracker::new(root, Rc::clone(&cursor_pointer));
 
     #[cfg(target_os = "mochios")]

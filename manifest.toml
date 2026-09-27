@@ -16,6 +16,7 @@ path = "/applications/Binder.app/entry.elf"
 kind = "application"
 requires = [
     "fs.read.all",
+    "fs.write.user",
     "ipc.client",
     "ipc.server",
     "process.inspect",

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
+use crate::control_center_preferences::ControlCenterPreferences;
 use crate::dock_preferences::DockPreferences;
 use crate::platform::{self, AppInfo, ContextMenuModel, DesktopPlatform, SystemBarState};
 use crate::window::{DesktopWindows, WindowDrag, WindowId};
@@ -13,6 +14,10 @@ pub struct BinderApp {
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     system_bar: State<SystemBarState>,
     mochios_menu_open: State<bool>,
+    control_center_open: State<bool>,
+    control_center_editing: State<bool>,
+    control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
+    control_center_interaction: Rc<RefCell<crate::ui::control_center::ControlCenterInteraction>>,
     windows: State<DesktopWindows>,
     window_drag: State<Option<WindowDrag>>,
     window_resize: State<Option<WindowResize>>,
@@ -68,6 +73,12 @@ impl App for BinderApp {
             platform,
             system_bar: State::new(system_bar),
             mochios_menu_open: State::new(false),
+            control_center_open: State::new(false),
+            control_center_editing: State::new(false),
+            control_center_preferences: Rc::new(RefCell::new(ControlCenterPreferences::load())),
+            control_center_interaction: Rc::new(RefCell::new(
+                crate::ui::control_center::ControlCenterInteraction::default(),
+            )),
             windows: State::new(DesktopWindows::default()),
             window_drag: State::new(None),
             window_resize: State::new(None),
@@ -116,6 +127,10 @@ impl App for BinderApp {
             self.system_bar.clone(),
             Rc::clone(&self.platform),
             self.mochios_menu_open.clone(),
+            self.control_center_open.clone(),
+            self.control_center_editing.clone(),
+            Rc::clone(&self.control_center_preferences),
+            Rc::clone(&self.control_center_interaction),
             self.windows.clone(),
             self.window_drag.clone(),
             self.window_resize.clone(),

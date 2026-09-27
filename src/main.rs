@@ -1,4 +1,5 @@
 mod apps;
+mod control_center_preferences;
 mod desktop;
 mod dock_preferences;
 mod ipc;

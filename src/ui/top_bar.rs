@@ -15,11 +15,13 @@ const CLOCK_HEIGHT: f32 = 29.0;
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
     menu_open: State<bool>,
+    control_center_open: State<bool>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     windows: State<DesktopWindows>,
     apps: State<Vec<AppInfo>>,
 ) -> impl View + 'static {
     let menu_open_on_click = menu_open.clone();
+    let control_center_for_menu = control_center_open.clone();
 
     let menu_button = Button::new("")
         .content(
@@ -33,6 +35,7 @@ pub(crate) fn view(
         .on_click(move || {
             let next = !menu_open_on_click.get();
 
+            control_center_for_menu.set(false);
             menu_open_on_click.set(next);
         });
 
@@ -45,11 +48,27 @@ pub(crate) fn view(
 
     let clock = SystemBarClock::new(system_bar.clone());
 
+    let center_open = control_center_open.clone();
+    let menu_for_center = menu_open.clone();
+    let control_center_button = Button::new("")
+        .content(
+            Icon::new(SymbolName::More)
+                .size(18.0)
+                .color(Theme::current().shell.primary_text),
+        )
+        .style(ButtonStyle::Ghost)
+        .accessibility_label("Control Center")
+        .on_click(move || {
+            menu_for_center.set(false);
+            center_open.set(!center_open.get());
+        });
+
     let trailing = HStack::new()
         .alignment(StackAlignment::Center)
         .gap(StackGap::None)
         .child(Spacer::new())
-        .child(input_mode_control(system_bar).frame(36.0, 28.0));
+        .child(input_mode_control(system_bar).frame(36.0, 28.0))
+        .child(control_center_button.frame(36.0, 28.0));
 
     let row = HStack::new()
         .alignment(StackAlignment::Center)
