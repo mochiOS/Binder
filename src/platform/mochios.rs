@@ -665,7 +665,13 @@ impl DesktopPlatform for MochiOsPlatform {
             self.system_bar.clock = clock;
         }
 
-        Ok(children_changed || clock_changed)
+        let japanese_input = viewkit::platform::input_method::enabled().unwrap_or(false);
+        let input_method_changed = self.system_bar.japanese_input != japanese_input;
+        if input_method_changed {
+            self.system_bar.japanese_input = japanese_input;
+        }
+
+        Ok(children_changed || clock_changed || input_method_changed)
     }
 
     fn get_apps(&self) -> Vec<AppInfo> {

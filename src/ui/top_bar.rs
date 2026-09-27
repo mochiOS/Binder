@@ -43,11 +43,13 @@ pub(crate) fn view(
         .child(ActiveApplicationName::new(platform, windows, apps).width(180.0))
         .child(Spacer::new());
 
-    let clock = SystemBarClock::new(system_bar);
+    let clock = SystemBarClock::new(system_bar.clone());
 
     let trailing = HStack::new()
         .alignment(StackAlignment::Center)
-        .gap(StackGap::None);
+        .gap(StackGap::None)
+        .child(Spacer::new())
+        .child(InputModeIndicator::new(system_bar).frame(28.0, CLOCK_HEIGHT));
 
     let row = HStack::new()
         .alignment(StackAlignment::Center)
@@ -68,6 +70,31 @@ pub(crate) fn view(
                 .height(BAR_CONTENT_HEIGHT),
         )
         .child(Divider::new())
+}
+
+struct InputModeIndicator {
+    system_bar: State<SystemBarState>,
+}
+
+impl InputModeIndicator {
+    fn new(system_bar: State<SystemBarState>) -> Self {
+        Self { system_bar }
+    }
+}
+
+impl View for InputModeIndicator {
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        let label = if self.system_bar.get().japanese_input {
+            "あ"
+        } else {
+            "A"
+        };
+        Text::styled(label, TextRole::Caption)
+            .weight(700)
+            .alignment(TextAlignment::Center)
+            .color(Theme::current().shell.primary_text)
+            .paint(bounds, context);
+    }
 }
 
 struct ActiveApplicationName {

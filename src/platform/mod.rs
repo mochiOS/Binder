@@ -145,6 +145,7 @@ pub struct BatteryState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SystemBarState {
     pub clock: ClockState,
+    pub japanese_input: bool,
     pub notifications: NotificationState,
     pub network: NetworkState,
     pub volume: VolumeState,
