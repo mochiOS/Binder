@@ -34,9 +34,11 @@ pub(crate) fn view(
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     menu_open: State<bool>,
     control_center_open: State<bool>,
-    control_center_editing: State<bool>,
     control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
     control_center_interaction: Rc<RefCell<super::control_center::ControlCenterInteraction>>,
+    control_center_editor_interaction: Rc<
+        RefCell<super::control_center_editor::ControlCenterEditorInteraction>,
+    >,
     windows: State<DesktopWindows>,
     window_drag: State<Option<WindowDrag>>,
     resize: State<Option<WindowResize>>,
@@ -102,6 +104,9 @@ pub(crate) fn view(
         resize,
         test_window_states,
         Rc::clone(&launch_failure_states),
+        Rc::clone(&control_center_preferences),
+        control_center_editor_interaction,
+        apps.clone(),
     );
 
     let docked_desktop = dock::DockLayer::new(
@@ -152,7 +157,6 @@ pub(crate) fn view(
     let root = super::control_center::ControlCenterLayer::new(
         root,
         control_center_open,
-        control_center_editing,
         system_bar,
         control_center_preferences,
         control_center_interaction,

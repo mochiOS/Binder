@@ -88,14 +88,16 @@ impl DesktopWindows {
             }
             let width = window.frame.size.width.min(area.size.width.max(1.0));
             let height = window.frame.size.height.min(area.size.height.max(1.0));
-            let x = window.frame.origin.x.clamp(
-                area.origin.x,
-                area.origin.x + area.size.width - width,
-            );
-            let y = window.frame.origin.y.clamp(
-                area.origin.y,
-                area.origin.y + area.size.height - height,
-            );
+            let x = window
+                .frame
+                .origin
+                .x
+                .clamp(area.origin.x, area.origin.x + area.size.width - width);
+            let y = window
+                .frame
+                .origin
+                .y
+                .clamp(area.origin.y, area.origin.y + area.size.height - height);
             let next = Rect::new(x, y, width, height);
             if next != window.frame {
                 window.frame = next;
@@ -119,6 +121,35 @@ impl DesktopWindows {
             .iter()
             .find(|window| window.renderer == apps::ABOUT_ENTRY)
             .map(|window| window.id)
+    }
+
+    pub fn open_control_center_editor(&mut self) -> WindowId {
+        if let Some(id) = self
+            .windows
+            .iter()
+            .find(|window| window.renderer == apps::CONTROL_CENTER_EDITOR_ENTRY)
+            .map(|window| window.id)
+        {
+            self.focus(id);
+            return id;
+        }
+
+        let id = self.allocate_id();
+        self.windows.push(DesktopWindow {
+            id,
+            title: String::from("Customize Control Center"),
+            frame: Rect::new(370.0, 110.0, 540.0, 590.0),
+            resizable: false,
+            minimized: false,
+            close_requested: false,
+            renderer: String::from(apps::CONTROL_CENTER_EDITOR_ENTRY),
+            process_id: None,
+            remote_window: None,
+            interaction: WindowInteraction::default(),
+            restore_frame: None,
+        });
+        self.focused = Some(id);
+        id
     }
 
     pub fn open_launch_failure(&mut self) -> WindowId {
@@ -676,19 +707,39 @@ mod tests {
     fn new_windows_fit_inside_the_display_work_area() {
         let mut desktop = DesktopWindows::default();
         let (first, _) = desktop.open_window(
-            ProcessId(1), String::from("settings"), String::from("Settings"), 1040, 720, true,
+            ProcessId(1),
+            String::from("settings"),
+            String::from("Settings"),
+            1040,
+            720,
+            true,
         );
         let (second, _) = desktop.open_window(
-            ProcessId(2), String::from("files"), String::from("Files"), 900, 600, true,
+            ProcessId(2),
+            String::from("files"),
+            String::from("Files"),
+            900,
+            600,
+            true,
         );
         let (third, _) = desktop.open_window(
-            ProcessId(3), String::from("dialog"), String::from("Dialog"), 800, 500, false,
+            ProcessId(3),
+            String::from("dialog"),
+            String::from("Dialog"),
+            800,
+            500,
+            false,
         );
         let area = Rect::new(20.0, 60.0, 600.0, 380.0);
 
         assert!(desktop.fit_to_work_area(area));
         for id in [first, second, third] {
-            let frame = desktop.windows.iter().find(|window| window.id == id).unwrap().frame;
+            let frame = desktop
+                .windows
+                .iter()
+                .find(|window| window.id == id)
+                .unwrap()
+                .frame;
             assert!(frame.origin.x >= area.origin.x);
             assert!(frame.origin.y >= area.origin.y);
             assert!(frame.origin.x + frame.size.width <= area.origin.x + area.size.width);
@@ -699,7 +750,15 @@ mod tests {
         let maximized_area = Rect::new(0.0, 40.0, 1280.0, 760.0);
         desktop.toggle_maximize(first, maximized_area);
         assert!(!desktop.fit_to_work_area(area));
-        assert_eq!(desktop.windows.iter().find(|window| window.id == first).unwrap().frame, maximized_area);
+        assert_eq!(
+            desktop
+                .windows
+                .iter()
+                .find(|window| window.id == first)
+                .unwrap()
+                .frame,
+            maximized_area
+        );
     }
 
     #[test]
@@ -714,6 +773,26 @@ mod tests {
         assert_eq!(desktop.focused, Some(first));
         assert_eq!(desktop.windows.len(), 1);
         assert!(!desktop.windows[0].minimized);
+        assert_eq!(desktop.windows[0].process_id, None);
+        assert_eq!(desktop.windows[0].remote_window, None);
+    }
+
+    #[test]
+    fn control_center_editor_is_a_reused_internal_window() {
+        let mut desktop = DesktopWindows::default();
+
+        let first = desktop.open_control_center_editor();
+        desktop.minimize(first);
+        let second = desktop.open_control_center_editor();
+
+        assert_eq!(first, second);
+        assert_eq!(desktop.focused, Some(first));
+        assert_eq!(desktop.windows.len(), 1);
+        assert!(!desktop.windows[0].minimized);
+        assert_eq!(
+            desktop.windows[0].renderer,
+            apps::CONTROL_CENTER_EDITOR_ENTRY
+        );
         assert_eq!(desktop.windows[0].process_id, None);
         assert_eq!(desktop.windows[0].remote_window, None);
     }

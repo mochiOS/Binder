@@ -79,6 +79,31 @@ impl ControlCenterPreferences {
         true
     }
 
+    pub(crate) fn move_by(&mut self, id: &str, offset: isize, available: &[String]) -> bool {
+        let mut order = self.ordered_ids(available.iter().map(String::as_str));
+        let Some(index) = order.iter().position(|candidate| candidate == id) else {
+            return false;
+        };
+        let target = index
+            .saturating_add_signed(offset)
+            .min(order.len().saturating_sub(1));
+        if target == index {
+            return false;
+        }
+        order.swap(index, target);
+        self.order = order;
+        true
+    }
+
+    pub(crate) fn reconcile(&mut self, available: &[String]) -> bool {
+        let available = available.iter().map(String::as_str).collect::<HashSet<_>>();
+        let previous_order_len = self.order.len();
+        let previous_hidden_len = self.hidden.len();
+        self.order.retain(|id| available.contains(id.as_str()));
+        self.hidden.retain(|id| available.contains(id.as_str()));
+        previous_order_len != self.order.len() || previous_hidden_len != self.hidden.len()
+    }
+
     pub(crate) fn save(&self) -> io::Result<()> {
         let path = Path::new(CONFIG_PATH);
         let Some(parent) = path.parent() else {
@@ -157,5 +182,22 @@ mod tests {
             preferences.ordered_ids(available.iter().map(String::as_str)),
             ["c", "b", "a"]
         );
+        assert!(preferences.move_by("c", 1, &available));
+        assert_eq!(
+            preferences.ordered_ids(available.iter().map(String::as_str)),
+            ["b", "c", "a"]
+        );
+        assert!(!preferences.move_by("a", 1, &available));
+    }
+
+    #[test]
+    fn removes_preferences_for_uninstalled_items() {
+        let mut preferences = ControlCenterPreferences::parse(
+            "item=removed\nitem=kept\nhidden=removed\nhidden=kept\n",
+        );
+        assert!(preferences.reconcile(&[String::from("kept")]));
+        assert_eq!(preferences.order, ["kept"]);
+        assert!(!preferences.is_hidden("removed"));
+        assert!(preferences.is_hidden("kept"));
     }
 }

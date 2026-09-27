@@ -1,4 +1,6 @@
+use crate::control_center_preferences::ControlCenterPreferences;
 use crate::desktop::{ResizeEdge, WindowResize};
+use crate::platform::AppInfo;
 use crate::window::{DesktopWindow, DesktopWindows, WindowControl, WindowDrag};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -46,6 +48,10 @@ pub(crate) struct WindowLayer<C> {
     launch_failure_states: Rc<
         RefCell<HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>>,
     >,
+    control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
+    control_center_editor_interaction:
+        Rc<RefCell<super::control_center_editor::ControlCenterEditorInteraction>>,
+    apps: State<Vec<AppInfo>>,
 }
 
 #[derive(Clone, Copy)]
@@ -70,6 +76,11 @@ where
                 HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>,
             >,
         >,
+        control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
+        control_center_editor_interaction: Rc<
+            RefCell<super::control_center_editor::ControlCenterEditorInteraction>,
+        >,
+        apps: State<Vec<AppInfo>>,
     ) -> Self {
         Self {
             content,
@@ -78,6 +89,9 @@ where
             resize,
             test_window_states,
             launch_failure_states,
+            control_center_preferences,
+            control_center_editor_interaction,
+            apps,
         }
     }
 
@@ -107,6 +121,9 @@ where
             self.test_state(window),
             self.launch_failure_states.borrow().get(&window.id).cloned(),
             self.windows.clone(),
+            Rc::clone(&self.control_center_preferences),
+            Rc::clone(&self.control_center_editor_interaction),
+            self.apps.clone(),
         )
         .handle_event(window.frame, event, context)
     }
@@ -565,6 +582,9 @@ where
                         .get(&desktop_window.id)
                         .cloned(),
                     self.windows.clone(),
+                    Rc::clone(&self.control_center_preferences),
+                    Rc::clone(&self.control_center_editor_interaction),
+                    self.apps.clone(),
                 )
                 .paint(desktop_window.frame, context);
             }

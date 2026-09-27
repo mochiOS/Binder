@@ -3,6 +3,7 @@ pub(crate) mod app_library;
 pub(crate) mod app_switcher;
 pub(crate) mod context_menu;
 pub(crate) mod control_center;
+pub(crate) mod control_center_editor;
 pub(crate) mod cursor;
 pub(crate) mod desktop;
 pub(crate) mod dock;

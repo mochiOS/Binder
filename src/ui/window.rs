@@ -1,6 +1,10 @@
-use super::{about, launch_failure, test, window_decoration};
+use super::{about, control_center_editor, launch_failure, test, window_decoration};
 use crate::apps;
+use crate::control_center_preferences::ControlCenterPreferences;
+use crate::platform::AppInfo;
 use crate::window::DesktopWindow;
+use std::cell::RefCell;
+use std::rc::Rc;
 use viewkit::{
     draw_command::DrawCommand,
     event::{EventContext, EventResult, ViewEvent},
@@ -118,6 +122,11 @@ pub(crate) fn view(
     test_state: Option<test::TestWindowState>,
     launch_failure_state: Option<launch_failure::LaunchFailureWindowState>,
     windows: State<crate::window::DesktopWindows>,
+    control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
+    control_center_editor_interaction: Rc<
+        RefCell<control_center_editor::ControlCenterEditorInteraction>,
+    >,
+    apps: State<Vec<AppInfo>>,
 ) -> impl View + 'static {
     let content: Box<dyn View + 'static> = match window.renderer.as_str() {
         apps::ABOUT_ENTRY => Box::new(about::view()),
@@ -125,6 +134,11 @@ pub(crate) fn view(
             launch_failure_state.unwrap_or_default(),
             window.id,
             windows,
+        )),
+        apps::CONTROL_CENTER_EDITOR_ENTRY => Box::new(control_center_editor::view(
+            control_center_preferences,
+            control_center_editor_interaction,
+            apps,
         )),
         apps::TEST_ENTRY => Box::new(test::view(test_state.unwrap_or_default())),
         _ => Box::new(remote_placeholder_view()),

@@ -44,11 +44,19 @@ struct Item {
     is_on: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct CustomizationItem {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) source: String,
+    pub(crate) symbol: SymbolName,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Hit {
     Edit,
     Mute,
-    Item { id: String, hidden: bool },
+    Item { id: String },
 }
 
 #[derive(Default)]
@@ -66,7 +74,6 @@ pub(crate) struct ControlCenterInteraction {
 pub(crate) struct ControlCenterLayer<C> {
     content: C,
     open: State<bool>,
-    editing: State<bool>,
     system_bar: State<SystemBarState>,
     preferences: Rc<RefCell<ControlCenterPreferences>>,
     interaction: Rc<RefCell<ControlCenterInteraction>>,
@@ -84,7 +91,6 @@ impl<C: View> ControlCenterLayer<C> {
     pub(crate) fn new(
         content: C,
         open: State<bool>,
-        editing: State<bool>,
         system_bar: State<SystemBarState>,
         preferences: Rc<RefCell<ControlCenterPreferences>>,
         interaction: Rc<RefCell<ControlCenterInteraction>>,
@@ -97,7 +103,6 @@ impl<C: View> ControlCenterLayer<C> {
         Self {
             content,
             open,
-            editing,
             system_bar,
             preferences,
             interaction,
@@ -169,7 +174,7 @@ impl<C: View> ControlCenterLayer<C> {
         })
     }
 
-    fn ordered_items(&self) -> (Vec<Item>, Vec<Item>) {
+    fn ordered_items(&self) -> Vec<Item> {
         let mut items = self.items();
         let ordered = self
             .preferences
@@ -184,23 +189,18 @@ impl<C: View> ControlCenterLayer<C> {
         let preferences = self.preferences.borrow();
         items
             .into_iter()
-            .partition(|item| !preferences.is_hidden(&item.id))
+            .filter(|item| !preferences.is_hidden(&item.id))
+            .collect()
     }
 
-    fn panel(&self, bounds: Rect, visible: usize, hidden: usize) -> Rect {
+    fn panel(&self, bounds: Rect, visible: usize) -> Rect {
         let visible_rows = visible.div_ceil(TILE_COLUMNS).max(1);
-        let hidden_rows = if self.editing.get() && hidden > 0 {
-            hidden.div_ceil(TILE_COLUMNS) + 1
-        } else {
-            0
-        };
         let height = PANEL_PADDING * 2.0
             + HEADER_HEIGHT
             + VOLUME_ROW_HEIGHT
             + VOLUME_ROW_GAP
             + visible_rows as f32 * TILE_HEIGHT
-            + visible_rows.saturating_sub(1) as f32 * TILE_GAP
-            + hidden_rows as f32 * (TILE_HEIGHT + TILE_GAP);
+            + visible_rows.saturating_sub(1) as f32 * TILE_GAP;
         Rect::new(
             bounds.origin.x + (bounds.size.width - PANEL_WIDTH - PANEL_MARGIN).max(PANEL_MARGIN),
             bounds.origin.y + PANEL_TOP,
@@ -266,8 +266,8 @@ impl<C: View> ControlCenterLayer<C> {
     }
 
     fn hit(&self, bounds: Rect, position: Point) -> Option<Hit> {
-        let (visible, hidden) = self.ordered_items();
-        let panel = self.panel(bounds, visible.len(), hidden.len());
+        let visible = self.ordered_items();
+        let panel = self.panel(bounds, visible.len());
         if !panel.contains(position) {
             return None;
         }
@@ -282,20 +282,7 @@ impl<C: View> ControlCenterLayer<C> {
             if Self::tile_rect(panel, index, start_y).contains(position) {
                 return Some(Hit::Item {
                     id: item.id.clone(),
-                    hidden: false,
                 });
-            }
-        }
-        if self.editing.get() {
-            let visible_rows = visible.len().div_ceil(TILE_COLUMNS).max(1);
-            let hidden_y = start_y + visible_rows as f32 * (TILE_HEIGHT + TILE_GAP) + 24.0;
-            for (index, item) in hidden.iter().enumerate() {
-                if Self::tile_rect(panel, index, hidden_y).contains(position) {
-                    return Some(Hit::Item {
-                        id: item.id.clone(),
-                        hidden: true,
-                    });
-                }
             }
         }
         None
@@ -305,6 +292,19 @@ impl<C: View> ControlCenterLayer<C> {
         if let Err(error) = self.preferences.borrow().save() {
             eprintln!("failed to save Control Center preferences: {error}");
         }
+    }
+
+    fn open_customizer(&self) {
+        let available = customization_items(&self.apps.get())
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        if self.preferences.borrow_mut().reconcile(&available) {
+            self.save_preferences();
+        }
+        self.windows
+            .update(|windows| windows.open_control_center_editor());
+        self.open.set(false);
     }
 
     fn activate(&self, item: &Item) {
@@ -417,10 +417,9 @@ impl<C: View> ControlCenterLayer<C> {
         }
     }
 
-    fn paint_tile(&self, item: &Item, bounds: Rect, hidden: bool, context: &mut PaintContext<'_>) {
+    fn paint_tile(&self, item: &Item, bounds: Rect, context: &mut PaintContext<'_>) {
         let hit = Hit::Item {
             id: item.id.clone(),
-            hidden,
         };
         let hovered = self.interaction.borrow().hovered.as_ref() == Some(&hit);
         let control = Rect::new(
@@ -429,7 +428,7 @@ impl<C: View> ControlCenterLayer<C> {
             CONTROL_SIZE,
             CONTROL_SIZE,
         );
-        let is_on = item.is_on && !hidden;
+        let is_on = item.is_on;
         Rectangle::new()
             .color(RectangleColor::Custom(if is_on {
                 if hovered {
@@ -453,25 +452,6 @@ impl<C: View> ControlCenterLayer<C> {
             })
             .accessibility_label(item.title.clone())
             .paint(control, context);
-        if self.editing.get() {
-            let badge = Rect::new(bounds.origin.x - 5.0, bounds.origin.y - 5.0, 24.0, 24.0);
-            Rectangle::new()
-                .color(RectangleColor::Custom(if hidden {
-                    Theme::current().colors.accent
-                } else {
-                    Theme::current().shell.alert
-                }))
-                .radius(CornerRadius::Custom(12.0))
-                .paint(badge, context);
-            Icon::new(if hidden {
-                SymbolName::Plus
-            } else {
-                SymbolName::Minus
-            })
-            .size(13.0)
-            .color(Color::WHITE)
-            .paint(badge, context);
-        }
     }
 }
 
@@ -497,8 +477,8 @@ impl<C: View> View for ControlCenterLayer<C> {
         if !self.open.get() {
             return;
         }
-        let (visible, hidden) = self.ordered_items();
-        let panel = self.panel(bounds, visible.len(), hidden.len());
+        let visible = self.ordered_items();
+        let panel = self.panel(bounds, visible.len());
         Rectangle::new()
             .color(RectangleColor::Custom(
                 Theme::current().shell.panel_background,
@@ -529,39 +509,17 @@ impl<C: View> View for ControlCenterLayer<C> {
                 .radius(CornerRadius::Custom(14.0))
                 .paint(edit, context);
         }
-        Text::styled(
-            if self.editing.get() { "Done" } else { "Edit" },
-            TextRole::Caption,
-        )
-        .weight(650)
-        .alignment(TextAlignment::Center)
-        .color(Theme::current().colors.accent)
-        .paint(edit, context);
+        Text::styled("Edit", TextRole::Caption)
+            .weight(650)
+            .alignment(TextAlignment::Center)
+            .color(Theme::current().colors.accent)
+            .paint(edit, context);
 
         self.paint_volume(panel, context);
 
         let start_y = Self::tile_start_y(panel);
         for (index, item) in visible.iter().enumerate() {
-            self.paint_tile(item, Self::tile_rect(panel, index, start_y), false, context);
-        }
-        if self.editing.get() && !hidden.is_empty() {
-            let visible_rows = visible.len().div_ceil(TILE_COLUMNS).max(1);
-            let label_y = start_y + visible_rows as f32 * (TILE_HEIGHT + TILE_GAP);
-            Text::styled("MORE CONTROLS", TextRole::Caption)
-                .weight(650)
-                .color(Theme::current().shell.secondary_text)
-                .paint(
-                    Rect::new(panel.origin.x + PANEL_PADDING, label_y, 180.0, 20.0),
-                    context,
-                );
-            for (index, item) in hidden.iter().enumerate() {
-                self.paint_tile(
-                    item,
-                    Self::tile_rect(panel, index, label_y + 24.0),
-                    true,
-                    context,
-                );
-            }
+            self.paint_tile(item, Self::tile_rect(panel, index, start_y), context);
         }
     }
 
@@ -574,8 +532,8 @@ impl<C: View> View for ControlCenterLayer<C> {
         if !self.open.get() {
             return self.content.handle_event(bounds, event, context);
         }
-        let (visible, hidden) = self.ordered_items();
-        let panel = self.panel(bounds, visible.len(), hidden.len());
+        let visible = self.ordered_items();
+        let panel = self.panel(bounds, visible.len());
         let before_volume = self.volume_level.get();
         let slider_result =
             self.volume_slider()
@@ -592,7 +550,6 @@ impl<C: View> View for ControlCenterLayer<C> {
                 key: Key::Escape, ..
             } => {
                 self.open.set(false);
-                self.editing.set(false);
                 self.interaction.borrow_mut().hovered = None;
                 context.request_redraw();
             }
@@ -610,7 +567,6 @@ impl<C: View> View for ControlCenterLayer<C> {
                 let hit = self.hit(bounds, *position);
                 if hit.is_none() {
                     self.open.set(false);
-                    self.editing.set(false);
                 }
                 self.interaction.borrow_mut().pressed = hit;
                 context.request_redraw();
@@ -622,44 +578,11 @@ impl<C: View> View for ControlCenterLayer<C> {
                 let released = self.hit(bounds, *position);
                 let pressed = self.interaction.borrow_mut().pressed.take();
                 match (pressed, released) {
-                    (Some(Hit::Edit), Some(Hit::Edit)) => self.editing.set(!self.editing.get()),
+                    (Some(Hit::Edit), Some(Hit::Edit)) => self.open_customizer(),
                     (Some(Hit::Mute), Some(Hit::Mute)) => self.toggle_mute(),
-                    (
-                        Some(Hit::Item {
-                            id: from,
-                            hidden: false,
-                        }),
-                        Some(Hit::Item {
-                            id: to,
-                            hidden: false,
-                        }),
-                    ) if self.editing.get() && from != to => {
-                        let ids = self
-                            .items()
-                            .into_iter()
-                            .map(|item| item.id)
-                            .collect::<Vec<_>>();
-                        if self.preferences.borrow_mut().move_before(&from, &to, &ids) {
-                            self.save_preferences();
-                        }
-                    }
-                    (
-                        Some(Hit::Item { id, hidden }),
-                        Some(Hit::Item {
-                            id: released,
-                            hidden: released_hidden,
-                        }),
-                    ) if self.editing.get() && id == released && hidden == released_hidden => {
-                        self.preferences.borrow_mut().set_hidden(&id, !hidden);
-                        self.save_preferences();
-                    }
-                    (
-                        Some(Hit::Item { id, hidden: false }),
-                        Some(Hit::Item {
-                            id: released,
-                            hidden: false,
-                        }),
-                    ) if id == released => {
+                    (Some(Hit::Item { id }), Some(Hit::Item { id: released }))
+                        if id == released =>
+                    {
                         if let Some(item) = self.items().into_iter().find(|item| item.id == id) {
                             self.activate(&item);
                         }
@@ -686,6 +609,52 @@ fn read_app_items(app: &AppInfo) -> Vec<Item> {
         );
         Vec::new()
     })
+}
+
+pub(crate) fn customization_items(apps: &[AppInfo]) -> Vec<CustomizationItem> {
+    let mut items = vec![
+        CustomizationItem {
+            id: String::from("builtin.network"),
+            title: String::from("Network"),
+            source: String::from("System"),
+            symbol: SymbolName::Network,
+        },
+        CustomizationItem {
+            id: String::from("builtin.appearance"),
+            title: String::from("Appearance"),
+            source: String::from("System"),
+            symbol: SymbolName::Paintbrush,
+        },
+        CustomizationItem {
+            id: String::from("builtin.input"),
+            title: String::from("Input"),
+            source: String::from("System"),
+            symbol: SymbolName::Keyboard,
+        },
+        CustomizationItem {
+            id: String::from("builtin.settings"),
+            title: String::from("Settings"),
+            source: String::from("System"),
+            symbol: SymbolName::Settings,
+        },
+        CustomizationItem {
+            id: String::from("builtin.lock"),
+            title: String::from("Lock"),
+            source: String::from("System"),
+            symbol: SymbolName::Lock,
+        },
+    ];
+    items.extend(apps.iter().flat_map(|app| {
+        read_app_items(app)
+            .into_iter()
+            .map(|item| CustomizationItem {
+                id: item.id,
+                title: item.title,
+                source: app.name.clone(),
+                symbol: item.symbol,
+            })
+    }));
+    items
 }
 
 fn parse_app_items(text: &str, app: &AppInfo) -> Result<Vec<Item>, &'static str> {

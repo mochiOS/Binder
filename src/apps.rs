@@ -1,4 +1,5 @@
 pub const ABOUT_ENTRY: &str = "internal:about";
+pub const CONTROL_CENTER_EDITOR_ENTRY: &str = "internal:control-center-editor";
 pub const LAUNCH_FAILURE_ENTRY: &str = "internal:launch-failure";
 pub const TEST_ENTRY: &str = "internal:test";
 
