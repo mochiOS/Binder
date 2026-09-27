@@ -49,7 +49,7 @@ pub(crate) fn view(
         .alignment(StackAlignment::Center)
         .gap(StackGap::None)
         .child(Spacer::new())
-        .child(input_mode_control(system_bar).frame(82.0, 28.0));
+        .child(input_mode_control(system_bar).frame(36.0, 28.0));
 
     let row = HStack::new()
         .alignment(StackAlignment::Center)
@@ -72,22 +72,25 @@ pub(crate) fn view(
         .child(Divider::new())
 }
 
-fn input_mode_control(system_bar: State<SystemBarState>) -> SegmentedControl {
-    let selection = State::new(usize::from(system_bar.get().japanese_input));
+fn input_mode_control(system_bar: State<SystemBarState>) -> Button {
+    let label = if system_bar.get().japanese_input {
+        "あ"
+    } else {
+        "A"
+    };
     let state = system_bar.clone();
-    SegmentedControl::new(selection.binding())
-        .item(0, "A")
-        .item(1, "あ")
+    Button::new("")
+        .content(
+            Text::styled(label, TextRole::Label)
+                .alignment(TextAlignment::Center)
+                .color(Theme::current().shell.primary_text),
+        )
+        .style(ButtonStyle::Ghost)
         .accessibility_label("Input mode")
-        .on_change(move |selection| {
-            let requested = selection == 1;
+        .on_click(move || {
             let current = viewkit::platform::input_method::enabled()
                 .unwrap_or_else(|| state.get().japanese_input);
-            let enabled = if current == requested {
-                current
-            } else {
-                viewkit::platform::input_method::toggle().unwrap_or(requested)
-            };
+            let enabled = viewkit::platform::input_method::toggle().unwrap_or(!current);
             state.update_if_changed(|system_bar| {
                 system_bar.japanese_input = enabled;
             });
