@@ -64,8 +64,11 @@ impl DecorationManager {
         let top = area.origin.y.floor();
         let right = (area.origin.x + area.size.width).ceil();
         let bottom = (area.origin.y + area.size.height).ceil();
-        if ![left, top, right, bottom].iter().all(|value| value.is_finite())
-            || right <= left || bottom <= top
+        if ![left, top, right, bottom]
+            .iter()
+            .all(|value| value.is_finite())
+            || right <= left
+            || bottom <= top
         {
             return Err(DecorationError(22));
         }

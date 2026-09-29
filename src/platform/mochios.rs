@@ -31,7 +31,7 @@ struct ManagedApp {
     linux_instance: Option<u64>,
 }
 
-const PROCESS_RECORD_SIZE: usize = 88;
+const PROCESS_RECORD_SIZE: usize = 112;
 #[cfg(target_os = "mochios")]
 const MAX_PROCESS_RECORDS: usize = 256;
 const PROCESS_STATE_TERMINATED: u64 = 4;

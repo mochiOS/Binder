@@ -20,11 +20,7 @@ pub(crate) fn view(state: TestWindowState) -> impl View + 'static {
         .alignment(StackAlignment::Stretch)
         .gap(StackGap::Custom(6.0))
         .children((1..=24).map(|index| {
-            Text::styled(
-                format!("GPU accelerated row {index:02}"),
-                TextRole::Label,
-            )
-                .height(24.0)
+            Text::styled(format!("GPU accelerated row {index:02}"), TextRole::Label).height(24.0)
         }));
 
     Padding::all(18.0).content(

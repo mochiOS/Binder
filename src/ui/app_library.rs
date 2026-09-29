@@ -162,8 +162,8 @@ where
     fn panel_rect(bounds: Rect, visible_count: usize, has_multiple_pages: bool) -> Rect {
         let width = PANEL_WIDTH.min(bounds.size.width - 64.0).max(320.0);
         let rows = visible_count.div_ceil(GRID_COLUMNS).max(1).min(GRID_ROWS);
-        let desired_height = 84.0 + rows as f32 * ITEM_HEIGHT
-            + if has_multiple_pages { 60.0 } else { 34.0 };
+        let desired_height =
+            84.0 + rows as f32 * ITEM_HEIGHT + if has_multiple_pages { 60.0 } else { 34.0 };
         let height = desired_height.min((bounds.size.height - 120.0).max(220.0));
         Rect::new(
             bounds.origin.x + (bounds.size.width - width) / 2.0,
@@ -364,7 +364,8 @@ where
             Some(process_id) => process_id,
             None => match self.platform.borrow_mut().launch_app(app) {
                 Ok(process_id) => {
-                    self.fast_poll_until.set(Some(Instant::now() + Duration::from_secs(5)));
+                    self.fast_poll_until
+                        .set(Some(Instant::now() + Duration::from_secs(5)));
                     process_id
                 }
                 Err(error) => {
@@ -477,11 +478,10 @@ where
                 1.0,
             ))
             .paint(panel, context);
-        Text::styled("Applications", TextRole::TitleLarge)
-            .paint(
-                Rect::new(panel.origin.x + 34.0, panel.origin.y + 24.0, 300.0, 36.0),
-                context,
-            );
+        Text::styled("Applications", TextRole::TitleLarge).paint(
+            Rect::new(panel.origin.x + 34.0, panel.origin.y + 24.0, 300.0, 36.0),
+            context,
+        );
         let search = Self::search_rect(panel);
         Rectangle::new()
             .color(RectangleColor::Custom(
@@ -494,11 +494,14 @@ where
             ))
             .paint(search, context);
         let query = self.query.borrow().clone();
-        Text::styled(if query.is_empty() {
-            String::from("Search applications")
-        } else {
-            query
-        }, TextRole::Label)
+        Text::styled(
+            if query.is_empty() {
+                String::from("Search applications")
+            } else {
+                query
+            },
+            TextRole::Label,
+        )
         .color(if self.query.borrow().is_empty() {
             Theme::current().shell.tertiary_text.with_alpha(150)
         } else {
@@ -766,11 +769,13 @@ where
                     self.open.set(false);
                     context.request_redraw_in(bounds);
                 } else if self.page_count(&self.filtered_indices()) > 1
-                    && Self::previous_page_rect(panel).contains(*position) {
+                    && Self::previous_page_rect(panel).contains(*position)
+                {
                     self.select_page(self.page.get().saturating_sub(1));
                     context.request_redraw_in(bounds);
                 } else if self.page_count(&self.filtered_indices()) > 1
-                    && Self::next_page_rect(panel).contains(*position) {
+                    && Self::next_page_rect(panel).contains(*position)
+                {
                     self.select_page(self.page.get().saturating_add(1));
                     context.request_redraw_in(bounds);
                 } else {
