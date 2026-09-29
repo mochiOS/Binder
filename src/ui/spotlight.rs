@@ -13,23 +13,31 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
-const PANEL_WIDTH: f32 = 620.0;
-const SEARCH_HEIGHT: f32 = 56.0;
-const ROW_HEIGHT: f32 = 58.0;
-const PANEL_PADDING: f32 = 12.0;
 const MAX_RESULTS: usize = 7;
 const MAX_INDEXED_FILES: usize = 2048;
 const MAX_FILE_DEPTH: usize = 4;
 const SETTINGS_BUNDLE_ID: &str = "org.mochios.settings";
 
-#[derive(Default)]
 pub(crate) struct SpotlightState {
     open: bool,
-    query: String,
+    search: TextFieldInteractionState,
     selected: usize,
     ignore_next_space: bool,
     files_indexed: bool,
     files: Vec<PathBuf>,
+}
+
+impl Default for SpotlightState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            search: TextFieldInteractionState::new(),
+            selected: 0,
+            ignore_next_space: false,
+            files_indexed: false,
+            files: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -106,7 +114,8 @@ impl<C: View> SpotlightLayer<C> {
         self.app_library_open.set(false);
         let mut state = self.state.borrow_mut();
         state.open = true;
-        state.query.clear();
+        state.search.set_value("");
+        state.search.set_focused(true);
         state.selected = 0;
         state.ignore_next_space = true;
         if !state.files_indexed {
@@ -120,7 +129,8 @@ impl<C: View> SpotlightLayer<C> {
     fn close(&self) {
         let mut state = self.state.borrow_mut();
         state.open = false;
-        state.query.clear();
+        state.search.set_value("");
+        state.search.set_focused(false);
         state.selected = 0;
         state.ignore_next_space = false;
         self.hovered.set(None);
@@ -129,40 +139,72 @@ impl<C: View> SpotlightLayer<C> {
 
     fn results(&self) -> Vec<SearchResult> {
         let state = self.state.borrow();
-        build_results(&state.query, &self.apps.get(), &state.files)
+        build_results(&state.search.value(), &self.apps.get(), &state.files)
     }
 
-    fn panel(bounds: Rect, result_count: usize) -> Rect {
-        let width = PANEL_WIDTH.min((bounds.size.width - 48.0).max(320.0));
-        let height = SEARCH_HEIGHT + PANEL_PADDING * 2.0 + result_count.max(1) as f32 * ROW_HEIGHT;
+    fn search_field(&self) -> TextField {
+        TextField::with_interaction(self.state.borrow().search.clone())
+            .placeholder("Search apps, files, settings, and actions")
+            .size(TextFieldSize::Large)
+            .leading_symbol(SymbolName::Search)
+    }
+
+    fn panel(bounds: Rect, result_count: usize, theme: &Theme) -> Rect {
+        let outside_margin = theme.spacing.extra_large;
+        let width = theme
+            .layout
+            .content_max_width
+            .min((bounds.size.width - outside_margin * 2.0).max(0.0));
+        let height = theme.card.compact_padding * 2.0
+            + theme.layout.large_control_height
+            + theme.spacing.small
+            + result_count.max(1) as f32 * theme.layout.list_row_height;
         Rect::new(
             bounds.origin.x + (bounds.size.width - width) / 2.0,
-            bounds.origin.y + (bounds.size.height * 0.16).max(72.0),
+            bounds.origin.y + theme.layout.top_bar_height + theme.spacing.double_extra_large,
             width,
-            height,
+            height.min(
+                (bounds.size.height
+                    - theme.layout.top_bar_height
+                    - theme.spacing.double_extra_large
+                    - outside_margin)
+                    .max(0.0),
+            ),
         )
     }
 
-    fn search_rect(panel: Rect) -> Rect {
+    fn search_rect(panel: Rect, theme: &Theme) -> Rect {
+        let inset = theme.card.compact_padding;
         Rect::new(
-            panel.origin.x + PANEL_PADDING,
-            panel.origin.y + PANEL_PADDING,
-            panel.size.width - PANEL_PADDING * 2.0,
-            SEARCH_HEIGHT,
+            panel.origin.x + inset,
+            panel.origin.y + inset,
+            (panel.size.width - inset * 2.0).max(0.0),
+            theme.layout.large_control_height,
         )
     }
 
-    fn row_rect(panel: Rect, index: usize) -> Rect {
+    fn row_rect(panel: Rect, index: usize, theme: &Theme) -> Rect {
+        let inset = theme.card.compact_padding;
         Rect::new(
-            panel.origin.x + PANEL_PADDING,
-            panel.origin.y + PANEL_PADDING + SEARCH_HEIGHT + index as f32 * ROW_HEIGHT,
-            panel.size.width - PANEL_PADDING * 2.0,
-            ROW_HEIGHT,
+            panel.origin.x + inset,
+            panel.origin.y
+                + inset
+                + theme.layout.large_control_height
+                + theme.spacing.small
+                + index as f32 * theme.layout.list_row_height,
+            (panel.size.width - inset * 2.0).max(0.0),
+            theme.layout.list_row_height,
         )
     }
 
-    fn hit(&self, panel: Rect, result_count: usize, position: Point) -> Option<usize> {
-        (0..result_count).find(|index| Self::row_rect(panel, *index).contains(position))
+    fn hit(
+        &self,
+        panel: Rect,
+        result_count: usize,
+        position: Point,
+        theme: &Theme,
+    ) -> Option<usize> {
+        (0..result_count).find(|index| Self::row_rect(panel, *index, theme).contains(position))
     }
 
     fn load_icon(&self, path: &Path) -> CachedIcon {
@@ -204,13 +246,9 @@ impl<C: View> SpotlightLayer<C> {
             super::app_library::paint_fallback_icon(bounds, context);
             return;
         }
-        Rectangle::new()
-            .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
-            .radius(CornerRadius::Medium)
-            .paint(bounds, context);
         Icon::new(result.symbol)
-            .size(17.0)
-            .color(Theme::current().shell.primary_text)
+            .size(context.theme.layout.compact_icon_size)
+            .color(context.theme.list.leading_foreground)
             .paint(bounds, context);
     }
 
@@ -243,7 +281,7 @@ impl<C: View> SpotlightLayer<C> {
             }
             SearchAction::Calculation(value) => {
                 let mut state = self.state.borrow_mut();
-                state.query = value;
+                state.search.set_value(value);
                 state.selected = 0;
             }
         }
@@ -261,67 +299,22 @@ impl<C: View> View for SpotlightLayer<C> {
         if !self.state.borrow().open {
             return;
         }
+        let theme = context.theme;
         let results = self.results();
-        let panel = Self::panel(bounds, results.len());
+        let panel = Self::panel(bounds, results.len(), theme);
         Rectangle::new()
-            .color(RectangleColor::Custom(Theme::current().shell.scrim))
+            .color(RectangleColor::Custom(theme.shell.scrim))
             .paint(bounds, context);
-        Rectangle::new()
-            .color(RectangleColor::Custom(
-                Theme::current().shell.panel_background,
-            ))
-            .radius(CornerRadius::Custom(20.0))
-            .shadow(ShadowStyle::Floating)
-            .paint(panel, context);
+        Card::new().compact().paint(panel, context);
 
-        let search = Self::search_rect(panel);
-        Rectangle::new()
-            .color(RectangleColor::Custom(
-                Theme::current().shell.field_background,
-            ))
-            .radius(CornerRadius::Custom(14.0))
-            .paint(search, context);
-        Icon::new(SymbolName::Search)
-            .size(19.0)
-            .color(Theme::current().shell.secondary_text)
-            .paint(
-                Rect::new(
-                    search.origin.x + 14.0,
-                    search.origin.y,
-                    28.0,
-                    search.size.height,
-                ),
-                context,
-            );
-        let query = self.state.borrow().query.clone();
-        Text::styled(
-            if query.is_empty() {
-                String::from("Search apps, files, settings, and actions")
-            } else {
-                query
-            },
-            TextRole::TitleSmall,
-        )
-        .color(if self.state.borrow().query.is_empty() {
-            Theme::current().shell.tertiary_text
-        } else {
-            Theme::current().shell.primary_text
-        })
-        .paint(
-            Rect::new(
-                search.origin.x + 48.0,
-                search.origin.y,
-                search.size.width - 62.0,
-                search.size.height,
-            ),
-            context,
-        );
+        let search = Self::search_rect(panel, theme);
+        self.search_field().paint(search, context);
 
         if results.is_empty() {
             Text::styled("No results", TextRole::Label)
                 .alignment(TextAlignment::Center)
-                .color(Theme::current().shell.secondary_text)
-                .paint(Self::row_rect(panel, 0), context);
+                .color(theme.list.secondary_foreground)
+                .paint(Self::row_rect(panel, 0, theme), context);
             return;
         }
         let selected = self
@@ -330,39 +323,51 @@ impl<C: View> View for SpotlightLayer<C> {
             .selected
             .min(results.len().saturating_sub(1));
         for (index, result) in results.iter().enumerate() {
-            let row = Self::row_rect(panel, index);
+            let row = Self::row_rect(panel, index, theme);
             if index == selected || self.hovered.get() == Some(index) {
                 Rectangle::new()
                     .color(RectangleColor::Custom(if index == selected {
-                        Theme::current().shell.item_enabled
+                        theme.list.selected_background
                     } else {
-                        Theme::current().shell.item_hover
+                        theme.list.hovered_background
                     }))
-                    .radius(CornerRadius::Medium)
+                    .radius(theme.button.radius)
                     .paint(row, context);
             }
-            let icon = Rect::new(row.origin.x + 8.0, row.origin.y + 9.0, 40.0, 40.0);
+            let icon_side = theme.layout.list_leading_size;
+            let icon = Rect::new(
+                row.origin.x + theme.list.row_padding,
+                row.origin.y + (row.size.height - icon_side) / 2.0,
+                icon_side,
+                icon_side,
+            );
             self.paint_result_icon(result, icon, context);
+            let text_x = icon.origin.x + icon.size.width + theme.spacing.medium;
+            let text_width =
+                (row.origin.x + row.size.width - theme.list.row_padding - text_x).max(0.0);
+            let label_height = theme.typography.style(TextRole::Label).line_height;
+            let caption_height = theme.typography.style(TextRole::Caption).line_height;
+            let label_gap = theme.spacing.extra_small;
+            let labels_height = label_height + label_gap + caption_height;
+            let labels_y = row.origin.y + (row.size.height - labels_height) / 2.0;
             Text::styled(result.title.clone(), TextRole::Label)
-                .weight(650)
-                .color(Theme::current().shell.primary_text)
+                .color(if index == selected {
+                    theme.list.selected_foreground
+                } else {
+                    theme.list.foreground
+                })
                 .paint(
-                    Rect::new(
-                        row.origin.x + 60.0,
-                        row.origin.y + 7.0,
-                        row.size.width - 72.0,
-                        24.0,
-                    ),
+                    Rect::new(text_x, labels_y, text_width, label_height),
                     context,
                 );
             Text::styled(result.subtitle.clone(), TextRole::Caption)
-                .color(Theme::current().shell.secondary_text)
+                .color(theme.list.secondary_foreground)
                 .paint(
                     Rect::new(
-                        row.origin.x + 60.0,
-                        row.origin.y + 30.0,
-                        row.size.width - 72.0,
-                        20.0,
+                        text_x,
+                        labels_y + label_height + label_gap,
+                        text_width,
+                        caption_height,
                     ),
                     context,
                 );
@@ -394,30 +399,26 @@ impl<C: View> View for SpotlightLayer<C> {
         }
 
         let results = self.results();
-        let panel = Self::panel(bounds, results.len());
+        let theme = context.theme();
+        let panel = Self::panel(bounds, results.len(), theme);
+        let search = Self::search_rect(panel, theme);
+        let mut forward_to_search = false;
         match event {
             ViewEvent::KeyPressed {
                 key: Key::Escape, ..
             } => self.close(),
             ViewEvent::KeyPressed {
                 key: Key::ArrowUp, ..
-            }
-            | ViewEvent::ArrowLeft => {
+            } => {
                 let mut state = self.state.borrow_mut();
                 state.selected = state.selected.saturating_sub(1);
             }
             ViewEvent::KeyPressed {
                 key: Key::ArrowDown,
                 ..
-            }
-            | ViewEvent::ArrowRight => {
+            } => {
                 let mut state = self.state.borrow_mut();
                 state.selected = (state.selected + 1).min(results.len().saturating_sub(1));
-            }
-            ViewEvent::Backspace => {
-                let mut state = self.state.borrow_mut();
-                state.query.pop();
-                state.selected = 0;
             }
             ViewEvent::KeyPressed {
                 key: Key::Enter, ..
@@ -450,21 +451,17 @@ impl<C: View> View for SpotlightLayer<C> {
                     return EventResult::Consumed;
                 }
                 state.ignore_next_space = false;
-                for character in text.chars().filter(|character| !character.is_control()) {
-                    if state.query.chars().count() >= 96 {
-                        break;
-                    }
-                    state.query.push(character);
-                }
-                state.selected = 0;
+                forward_to_search = true;
             }
             ViewEvent::PointerMoved { position } => {
-                self.hovered.set(self.hit(panel, results.len(), *position));
+                self.hovered
+                    .set(self.hit(panel, results.len(), *position, theme));
                 context.set_cursor(if self.hovered.get().is_some() {
                     CursorIcon::Pointer
                 } else {
                     CursorIcon::Default
                 });
+                forward_to_search = search.contains(*position);
             }
             ViewEvent::PointerPressed {
                 position,
@@ -472,8 +469,11 @@ impl<C: View> View for SpotlightLayer<C> {
             } => {
                 if !panel.contains(*position) {
                     self.close();
+                } else if search.contains(*position) {
+                    forward_to_search = true;
                 } else {
-                    self.pressed.set(self.hit(panel, results.len(), *position));
+                    self.pressed
+                        .set(self.hit(panel, results.len(), *position, theme));
                     if let Some(index) = self.pressed.get() {
                         self.state.borrow_mut().selected = index;
                     }
@@ -483,7 +483,10 @@ impl<C: View> View for SpotlightLayer<C> {
                 position,
                 button: PointerButton::Primary,
             } => {
-                let released = self.hit(panel, results.len(), *position);
+                if search.contains(*position) {
+                    forward_to_search = true;
+                }
+                let released = self.hit(panel, results.len(), *position, theme);
                 let pressed = self.pressed.replace(None);
                 if pressed.is_some()
                     && pressed == released
@@ -493,7 +496,26 @@ impl<C: View> View for SpotlightLayer<C> {
                     return EventResult::Consumed;
                 }
             }
+            ViewEvent::Backspace
+            | ViewEvent::Delete
+            | ViewEvent::ArrowLeft
+            | ViewEvent::ArrowRight
+            | ViewEvent::Home
+            | ViewEvent::End
+            | ViewEvent::SelectLeft
+            | ViewEvent::SelectRight
+            | ViewEvent::SelectHome
+            | ViewEvent::SelectEnd
+            | ViewEvent::SelectAll => forward_to_search = true,
             _ => {}
+        }
+        if forward_to_search {
+            let interaction = self.state.borrow().search.clone();
+            let previous = interaction.value();
+            let _ = self.search_field().handle_event(search, event, context);
+            if interaction.value() != previous {
+                self.state.borrow_mut().selected = 0;
+            }
         }
         context.request_redraw();
         EventResult::Consumed
