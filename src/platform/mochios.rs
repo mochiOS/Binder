@@ -17,8 +17,8 @@ mod decoration;
 
 use super::{
     AppInfo, ClockState, CloseWindowRequest, ContextMenuModel, ControlCenterCard,
-    ControlCenterCardRow, CreateWindowRequest, DesktopPlatform, PlatformError, ProcessId,
-    RemoteWindowId, SystemAction, SystemBarState, UserNotification,
+    ControlCenterCardRow, CreateWindowRequest, DesktopPlatform, NotificationSettings,
+    PlatformError, ProcessId, RemoteWindowId, SystemAction, SystemBarState, UserNotification,
 };
 use viewkit::prelude::State;
 
@@ -56,6 +56,7 @@ pub struct MochiOsPlatform {
     context_menu_state: State<Option<ContextMenuModel>>,
     control_center_cards: Vec<ControlCenterCard>,
     notifications: Vec<UserNotification>,
+    notification_settings: NotificationSettings,
     #[cfg(target_os = "mochios")]
     context_menu_manager: Option<context_menu::ContextMenuManager>,
     #[cfg(target_os = "mochios")]
@@ -87,6 +88,7 @@ impl MochiOsPlatform {
             context_menu_state,
             control_center_cards: Vec::new(),
             notifications: Vec::new(),
+            notification_settings: NotificationSettings::default(),
             #[cfg(target_os = "mochios")]
             context_menu_manager: None,
             #[cfg(target_os = "mochios")]
@@ -727,13 +729,20 @@ impl DesktopPlatform for MochiOsPlatform {
                 .count() as u32;
             self.notifications = notifications;
         }
+        let notification_settings = read_notification_settings();
+        let notification_settings_changed = self.notification_settings != notification_settings;
+        if notification_settings_changed {
+            self.system_bar.notifications.focus_enabled = notification_settings.focus_enabled;
+            self.notification_settings = notification_settings;
+        }
 
         Ok(children_changed
             || clock_changed
             || input_method_changed
             || network_changed
             || cards_changed
-            || notifications_changed)
+            || notifications_changed
+            || notification_settings_changed)
     }
 
     fn get_apps(&self) -> Vec<AppInfo> {
@@ -746,6 +755,24 @@ impl DesktopPlatform for MochiOsPlatform {
 
     fn notifications(&self) -> Vec<UserNotification> {
         self.notifications.clone()
+    }
+
+    fn notification_settings(&self) -> NotificationSettings {
+        self.notification_settings.clone()
+    }
+
+    fn set_notification_focus_enabled(
+        &mut self,
+        enabled: bool,
+    ) -> Result<NotificationSettings, PlatformError> {
+        #[cfg(target_os = "mochios")]
+        mochi_user_platform::workspace::set_notification_focus_enabled(enabled)
+            .map_err(|_| PlatformError::TransportFailure)?;
+        #[cfg(not(target_os = "mochios"))]
+        let _ = enabled;
+        self.notification_settings.focus_enabled = enabled;
+        self.system_bar.notifications.focus_enabled = enabled;
+        Ok(self.notification_settings.clone())
     }
 
     fn mark_all_notifications_read(&mut self) -> Result<(), PlatformError> {
@@ -962,9 +989,24 @@ fn read_notifications() -> Vec<UserNotification> {
         .collect()
 }
 
+#[cfg(target_os = "mochios")]
+fn read_notification_settings() -> NotificationSettings {
+    mochi_user_platform::workspace::notification_settings()
+        .map(|settings| NotificationSettings {
+            focus_enabled: settings.focus_enabled,
+            disabled_bundle_ids: settings.disabled_bundle_ids,
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(not(target_os = "mochios"))]
 fn read_notifications() -> Vec<UserNotification> {
     Vec::new()
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn read_notification_settings() -> NotificationSettings {
+    NotificationSettings::default()
 }
 
 #[cfg(not(target_os = "mochios"))]

@@ -55,6 +55,13 @@ pub struct ClockState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NotificationState {
     pub unread_count: u32,
+    pub focus_enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NotificationSettings {
+    pub focus_enabled: bool,
+    pub disabled_bundle_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -292,6 +299,17 @@ pub trait DesktopPlatform {
 
     fn notifications(&self) -> Vec<UserNotification> {
         Vec::new()
+    }
+
+    fn notification_settings(&self) -> NotificationSettings {
+        NotificationSettings::default()
+    }
+
+    fn set_notification_focus_enabled(
+        &mut self,
+        _enabled: bool,
+    ) -> Result<NotificationSettings, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
     }
 
     fn mark_all_notifications_read(&mut self) -> Result<(), PlatformError> {

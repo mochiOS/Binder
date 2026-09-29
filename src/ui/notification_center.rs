@@ -143,7 +143,12 @@ impl<C: View> NotificationCenterLayer<C> {
         )
     }
 
-    fn synchronize_banners(&self, notifications: &[UserNotification], now: Instant) {
+    fn synchronize_banners(
+        &self,
+        notifications: &[UserNotification],
+        focus_enabled: bool,
+        now: Instant,
+    ) {
         let mut known = self.interaction.known_notification_ids.borrow_mut();
         if !self.interaction.banner_initialized.replace(true) {
             known.extend(notifications.iter().map(|notification| notification.id));
@@ -152,14 +157,14 @@ impl<C: View> NotificationCenterLayer<C> {
 
         let mut pending = self.interaction.pending_banners.borrow_mut();
         for notification in notifications.iter().rev() {
-            if known.insert(notification.id) {
+            if known.insert(notification.id) && !focus_enabled {
                 pending.push_back(notification.id);
             }
         }
         drop(pending);
         drop(known);
 
-        if self.open.get() {
+        if self.open.get() || focus_enabled {
             self.interaction.banner.replace(None);
             self.interaction.pending_banners.borrow_mut().clear();
             self.interaction.banner_hovered.set(false);
@@ -191,7 +196,12 @@ impl<C: View> NotificationCenterLayer<C> {
         }
     }
 
-    fn advance_banner(&self, notifications: &[UserNotification], now: Instant) {
+    fn advance_banner(
+        &self,
+        notifications: &[UserNotification],
+        focus_enabled: bool,
+        now: Instant,
+    ) {
         let mut banner = self.interaction.banner.borrow_mut();
         let Some(active) = banner.as_mut() else {
             return;
@@ -212,7 +222,7 @@ impl<C: View> NotificationCenterLayer<C> {
         drop(banner);
 
         if self.interaction.banner.borrow().is_none() {
-            self.synchronize_banners(notifications, now);
+            self.synchronize_banners(notifications, focus_enabled, now);
         }
     }
 
@@ -552,10 +562,11 @@ impl<C: View> View for NotificationCenterLayer<C> {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.content.paint(bounds, context);
         let notifications = self.platform.borrow().notifications();
+        let focus_enabled = self.platform.borrow().notification_settings().focus_enabled;
         let now = Instant::now();
         let previous_banner = self.interaction.banner.borrow().map(|banner| banner.id);
-        self.synchronize_banners(&notifications, now);
-        self.advance_banner(&notifications, now);
+        self.synchronize_banners(&notifications, focus_enabled, now);
+        self.advance_banner(&notifications, focus_enabled, now);
         let current_banner = self.interaction.banner.borrow().map(|banner| banner.id);
         if current_banner.is_some() && current_banner != previous_banner {
             // Notification discovery normally happens during the one-pixel platform polling

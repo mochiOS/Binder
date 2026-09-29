@@ -30,6 +30,7 @@ const MAX_APP_ITEMS: usize = 8;
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ItemAction {
     ToggleInput,
+    ToggleFocus,
     ShowNetwork,
     OpenSettings,
     Lock,
@@ -163,6 +164,13 @@ impl<C: View> ControlCenterLayer<C> {
                 SymbolName::Keyboard,
                 ItemAction::ToggleInput,
                 state.japanese_input,
+            ),
+            Item::builtin(
+                "builtin.focus",
+                "Focus",
+                SymbolName::Bell,
+                ItemAction::ToggleFocus,
+                state.notifications.focus_enabled,
             ),
             Item::builtin(
                 "builtin.settings",
@@ -361,6 +369,21 @@ impl<C: View> ControlCenterLayer<C> {
                     .unwrap_or(!self.system_bar.get().japanese_input);
                 self.system_bar
                     .update_if_changed(|state| state.japanese_input = enabled);
+            }
+            ItemAction::ToggleFocus => {
+                let enabled = !self.system_bar.get().notifications.focus_enabled;
+                match self
+                    .platform
+                    .borrow_mut()
+                    .set_notification_focus_enabled(enabled)
+                {
+                    Ok(settings) => {
+                        self.system_bar.update_if_changed(|state| {
+                            state.notifications.focus_enabled = settings.focus_enabled;
+                        });
+                    }
+                    Err(error) => eprintln!("failed to change Focus mode: {error:?}"),
+                }
             }
             ItemAction::ShowNetwork => {
                 self.network_enabled
@@ -1068,6 +1091,12 @@ pub(crate) fn customization_items(apps: &[AppInfo]) -> Vec<CustomizationItem> {
             title: String::from("Input"),
             source: String::from("System"),
             symbol: SymbolName::Keyboard,
+        },
+        CustomizationItem {
+            id: String::from("builtin.focus"),
+            title: String::from("Focus"),
+            source: String::from("System"),
+            symbol: SymbolName::Bell,
         },
         CustomizationItem {
             id: String::from("builtin.settings"),

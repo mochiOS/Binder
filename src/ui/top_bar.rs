@@ -150,6 +150,21 @@ impl View for NotificationIcon {
                     context,
                 );
         }
+        if self.system_bar.get().notifications.focus_enabled {
+            let indicator = Rect::new(
+                bounds.origin.x + bounds.size.width - 10.0,
+                bounds.origin.y + bounds.size.height - 10.0,
+                9.0,
+                9.0,
+            );
+            Ellipse::new()
+                .color(EllipseColor::Custom(Theme::current().shell.secondary_text))
+                .paint(indicator, context);
+            Icon::new(SymbolName::Minus)
+                .size(5.0)
+                .color(Theme::current().colors.surface)
+                .paint(indicator, context);
+        }
     }
 }
 
