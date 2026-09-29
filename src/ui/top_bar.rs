@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::platform::{AppInfo, DesktopPlatform, SystemBarState};
 use crate::window::DesktopWindows;
 use viewkit::prelude::*;
-use viewkit::view::PaintContext;
+use viewkit::view::{Constraints, MeasureContext, PaintContext};
 
 const BAR_CONTENT_HEIGHT: f32 = 39.0;
 const HORIZONTAL_PADDING: f32 = 14.0;
@@ -16,12 +16,14 @@ pub(crate) fn view(
     system_bar: State<SystemBarState>,
     menu_open: State<bool>,
     control_center_open: State<bool>,
+    notification_center_open: State<bool>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     windows: State<DesktopWindows>,
     apps: State<Vec<AppInfo>>,
 ) -> impl View + 'static {
     let menu_open_on_click = menu_open.clone();
     let control_center_for_menu = control_center_open.clone();
+    let notification_center_for_menu = notification_center_open.clone();
 
     let menu_button = Button::new("")
         .content(
@@ -36,6 +38,7 @@ pub(crate) fn view(
             let next = !menu_open_on_click.get();
 
             control_center_for_menu.set(false);
+            notification_center_for_menu.set(false);
             menu_open_on_click.set(next);
         });
 
@@ -43,13 +46,14 @@ pub(crate) fn view(
         .alignment(StackAlignment::Center)
         .gap(StackGap::None)
         .child(menu_button)
-        .child(ActiveApplicationName::new(platform, windows, apps).width(180.0))
+        .child(ActiveApplicationName::new(Rc::clone(&platform), windows, apps).width(180.0))
         .child(Spacer::new());
 
     let clock = SystemBarClock::new(system_bar.clone());
 
     let center_open = control_center_open.clone();
     let menu_for_center = menu_open.clone();
+    let notification_for_center = notification_center_open.clone();
     let control_center_button = Button::new("")
         .content(
             Icon::new(SymbolName::ChevronDown)
@@ -60,7 +64,28 @@ pub(crate) fn view(
         .accessibility_label("Control Center")
         .on_click(move || {
             menu_for_center.set(false);
+            notification_for_center.set(false);
             center_open.set(!center_open.get());
+        });
+
+    let notification_open = notification_center_open.clone();
+    let menu_for_notification = menu_open.clone();
+    let center_for_notification = control_center_open.clone();
+    let notification_platform = Rc::clone(&platform);
+    let notification_button = Button::new("")
+        .content(NotificationIcon::new(system_bar.clone()))
+        .style(ButtonStyle::Ghost)
+        .accessibility_label("Notifications")
+        .on_click(move || {
+            let next = !notification_open.get();
+            menu_for_notification.set(false);
+            center_for_notification.set(false);
+            notification_open.set(next);
+            if next {
+                let _ = notification_platform
+                    .borrow_mut()
+                    .mark_all_notifications_read();
+            }
         });
 
     let trailing = HStack::new()
@@ -68,6 +93,7 @@ pub(crate) fn view(
         .gap(StackGap::None)
         .child(Spacer::new())
         .child(input_mode_control(system_bar).frame(36.0, 28.0))
+        .child(notification_button.frame(36.0, 28.0))
         .child(control_center_button.frame(36.0, 28.0));
 
     let row = HStack::new()
@@ -89,6 +115,42 @@ pub(crate) fn view(
                 .height(BAR_CONTENT_HEIGHT),
         )
         .child(Divider::new())
+}
+
+struct NotificationIcon {
+    system_bar: State<SystemBarState>,
+}
+
+impl NotificationIcon {
+    fn new(system_bar: State<SystemBarState>) -> Self {
+        Self { system_bar }
+    }
+}
+
+impl View for NotificationIcon {
+    fn measure(&self, constraints: Constraints, _context: &mut MeasureContext<'_>) -> Size {
+        constraints.constrain(Size::new(24.0, 24.0))
+    }
+
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        Icon::new(SymbolName::Bell)
+            .size(15.0)
+            .color(Theme::current().shell.primary_text)
+            .paint(bounds, context);
+        if self.system_bar.get().notifications.unread_count > 0 {
+            Ellipse::new()
+                .color(EllipseColor::Custom(Theme::current().colors.accent))
+                .paint(
+                    Rect::new(
+                        bounds.origin.x + bounds.size.width - 7.0,
+                        bounds.origin.y + 2.0,
+                        6.0,
+                        6.0,
+                    ),
+                    context,
+                );
+        }
+    }
 }
 
 fn input_mode_control(system_bar: State<SystemBarState>) -> Button {

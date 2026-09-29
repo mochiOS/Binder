@@ -18,7 +18,7 @@ mod decoration;
 use super::{
     AppInfo, ClockState, CloseWindowRequest, ContextMenuModel, ControlCenterCard,
     ControlCenterCardRow, CreateWindowRequest, DesktopPlatform, PlatformError, ProcessId,
-    RemoteWindowId, SystemAction, SystemBarState,
+    RemoteWindowId, SystemAction, SystemBarState, UserNotification,
 };
 use viewkit::prelude::State;
 
@@ -55,6 +55,7 @@ pub struct MochiOsPlatform {
     decoration_connect_attempted: bool,
     context_menu_state: State<Option<ContextMenuModel>>,
     control_center_cards: Vec<ControlCenterCard>,
+    notifications: Vec<UserNotification>,
     #[cfg(target_os = "mochios")]
     context_menu_manager: Option<context_menu::ContextMenuManager>,
     #[cfg(target_os = "mochios")]
@@ -85,6 +86,7 @@ impl MochiOsPlatform {
             decoration_connect_attempted: false,
             context_menu_state,
             control_center_cards: Vec::new(),
+            notifications: Vec::new(),
             #[cfg(target_os = "mochios")]
             context_menu_manager: None,
             #[cfg(target_os = "mochios")]
@@ -716,11 +718,22 @@ impl DesktopPlatform for MochiOsPlatform {
             self.control_center_cards = cards;
         }
 
+        let notifications = read_notifications();
+        let notifications_changed = self.notifications != notifications;
+        if notifications_changed {
+            self.system_bar.notifications.unread_count = notifications
+                .iter()
+                .filter(|notification| !notification.read)
+                .count() as u32;
+            self.notifications = notifications;
+        }
+
         Ok(children_changed
             || clock_changed
             || input_method_changed
             || network_changed
-            || cards_changed)
+            || cards_changed
+            || notifications_changed)
     }
 
     fn get_apps(&self) -> Vec<AppInfo> {
@@ -729,6 +742,44 @@ impl DesktopPlatform for MochiOsPlatform {
 
     fn control_center_cards(&self) -> Vec<ControlCenterCard> {
         self.control_center_cards.clone()
+    }
+
+    fn notifications(&self) -> Vec<UserNotification> {
+        self.notifications.clone()
+    }
+
+    fn mark_all_notifications_read(&mut self) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        mochi_user_platform::workspace::mark_all_notifications_read()
+            .map_err(|_| PlatformError::TransportFailure)?;
+        for notification in &mut self.notifications {
+            notification.read = true;
+        }
+        self.system_bar.notifications.unread_count = 0;
+        Ok(())
+    }
+
+    fn remove_notification(&mut self, id: u64) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        mochi_user_platform::workspace::remove_notification(id)
+            .map_err(|_| PlatformError::TransportFailure)?;
+        self.notifications
+            .retain(|notification| notification.id != id);
+        self.system_bar.notifications.unread_count = self
+            .notifications
+            .iter()
+            .filter(|notification| !notification.read)
+            .count() as u32;
+        Ok(())
+    }
+
+    fn clear_notifications(&mut self) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        mochi_user_platform::workspace::clear_notifications()
+            .map_err(|_| PlatformError::TransportFailure)?;
+        self.notifications.clear();
+        self.system_bar.notifications.unread_count = 0;
+        Ok(())
     }
 
     fn launch_app(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
@@ -893,6 +944,27 @@ fn read_control_center_cards() -> Vec<ControlCenterCard> {
                 .collect(),
         })
         .collect()
+}
+
+#[cfg(target_os = "mochios")]
+fn read_notifications() -> Vec<UserNotification> {
+    mochi_user_platform::workspace::notifications()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|notification| UserNotification {
+            id: notification.id,
+            created_at: notification.created_at,
+            read: notification.read,
+            bundle_id: notification.bundle_id,
+            title: notification.title,
+            body: notification.body,
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn read_notifications() -> Vec<UserNotification> {
+    Vec::new()
 }
 
 #[cfg(not(target_os = "mochios"))]

@@ -9,6 +9,7 @@ pub(crate) mod desktop;
 pub(crate) mod dock;
 pub(crate) mod launch_failure;
 pub(crate) mod menu;
+pub(crate) mod notification_center;
 pub(crate) mod popup_menu;
 pub(crate) mod test;
 pub(crate) mod top_bar;

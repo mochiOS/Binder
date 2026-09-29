@@ -34,6 +34,7 @@ pub(crate) fn view(
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     menu_open: State<bool>,
     control_center_open: State<bool>,
+    notification_center_open: State<bool>,
     control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
     control_center_interaction: Rc<RefCell<super::control_center::ControlCenterInteraction>>,
     control_center_editor_interaction: Rc<
@@ -79,6 +80,7 @@ pub(crate) fn view(
                 system_bar.clone(),
                 menu_open.clone(),
                 control_center_open.clone(),
+                notification_center_open.clone(),
                 Rc::clone(&platform),
                 windows.clone(),
                 apps.clone(),
@@ -162,8 +164,14 @@ pub(crate) fn view(
         control_center_interaction,
         Rc::clone(&platform),
         windows,
-        apps,
+        apps.clone(),
         fast_poll_until,
+    );
+    let root = super::notification_center::NotificationCenterLayer::new(
+        root,
+        notification_center_open,
+        Rc::clone(&platform),
+        apps,
     );
     let root = PointerTracker::new(root, Rc::clone(&cursor_pointer));
 

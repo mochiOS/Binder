@@ -57,6 +57,16 @@ pub struct NotificationState {
     pub unread_count: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserNotification {
+    pub id: u64,
+    pub created_at: u64,
+    pub read: bool,
+    pub bundle_id: String,
+    pub title: String,
+    pub body: String,
+}
+
 #[allow(unused)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemAction {
@@ -278,6 +288,22 @@ pub trait DesktopPlatform {
 
     fn control_center_cards(&self) -> Vec<ControlCenterCard> {
         Vec::new()
+    }
+
+    fn notifications(&self) -> Vec<UserNotification> {
+        Vec::new()
+    }
+
+    fn mark_all_notifications_read(&mut self) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn remove_notification(&mut self, _id: u64) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn clear_notifications(&mut self) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
     }
 
     fn handle_platform_message(&mut self, _message: &[u8]) -> bool {
