@@ -547,8 +547,17 @@ impl<C: View> View for NotificationCenterLayer<C> {
         self.content.paint(bounds, context);
         let notifications = self.platform.borrow().notifications();
         let now = Instant::now();
+        let previous_banner = self.banner.borrow().map(|banner| banner.id);
         self.synchronize_banners(&notifications, now);
         self.advance_banner(&notifications, now);
+        let current_banner = self.banner.borrow().map(|banner| banner.id);
+        if current_banner.is_some() && current_banner != previous_banner {
+            // Notification discovery normally happens during the one-pixel platform polling
+            // frame. That frame cannot paint the newly-created banner because its dirty region
+            // was fixed before this layer ran, so explicitly enqueue an immediate banner frame.
+            // Without it, the first visible frame can arrive after the entry transition ended.
+            context.request_redraw_in_at(Self::banner_damage(bounds), now);
+        }
         if !self.open.get() {
             let apps = self.apps.get();
             self.paint_banner(bounds, &notifications, &apps, now, context);
