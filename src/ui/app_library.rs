@@ -522,15 +522,16 @@ where
             };
             let item = Self::item_rect(panel, local_index);
             if self.selected.get() == Some(app_index) {
+                let selected_hovered =
+                    self.hovered.get() == Some(app_index) || self.pressed.get() == Some(app_index);
                 Rectangle::new()
-                    .color(RectangleColor::Custom(
-                        Theme::current().shell.selection_soft,
-                    ))
+                    .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
                     .radius(CornerRadius::Custom(14.0))
-                    .border(BorderStyle::custom(
-                        Theme::current().shell.selection_border,
-                        1.0,
-                    ))
+                    .border(if selected_hovered {
+                        BorderStyle::custom(Theme::current().shell.field_border, 1.0)
+                    } else {
+                        BorderStyle::None
+                    })
                     .paint(item, context);
             } else if self.hovered.get() == Some(app_index) || self.pressed.get() == Some(app_index)
             {
