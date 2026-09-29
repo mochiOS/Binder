@@ -1,10 +1,12 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use crate::platform::{AppInfo, DesktopPlatform, UserNotification};
 use viewkit::{
+    animation::{Animation, Easing, interpolate},
     draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
@@ -19,6 +21,34 @@ const PANEL_PADDING: f32 = 16.0;
 const HEADER_HEIGHT: f32 = 42.0;
 const ROW_HEIGHT: f32 = 102.0;
 const FALLBACK_ICON: &str = "/applications/Binder.app/appicon.svg";
+const BANNER_WIDTH: f32 = 370.0;
+const BANNER_HEIGHT: f32 = 92.0;
+const BANNER_MARGIN: f32 = 14.0;
+const BANNER_TOP: f32 = 50.0;
+const BANNER_ENTER_DURATION: Duration = Duration::from_millis(360);
+const BANNER_VISIBLE_DURATION: Duration = Duration::from_secs(5);
+const BANNER_EXIT_DURATION: Duration = Duration::from_millis(240);
+
+#[derive(Clone, Copy, Debug)]
+struct NotificationBanner {
+    id: u64,
+    presented_at: Instant,
+    expires_at: Instant,
+    dismiss_started_at: Option<Instant>,
+    paused_remaining: Option<Duration>,
+}
+
+impl NotificationBanner {
+    fn new(id: u64, now: Instant) -> Self {
+        Self {
+            id,
+            presented_at: now,
+            expires_at: now + BANNER_ENTER_DURATION + BANNER_VISIBLE_DURATION,
+            dismiss_started_at: None,
+            paused_remaining: None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Hit {
@@ -36,6 +66,12 @@ pub(crate) struct NotificationCenterLayer<C> {
     pressed: Cell<Option<Hit>>,
     scroll: Cell<usize>,
     icon_cache: RefCell<HashMap<PathBuf, ImageData>>,
+    banner_initialized: Cell<bool>,
+    known_notification_ids: RefCell<HashSet<u64>>,
+    pending_banners: RefCell<VecDeque<u64>>,
+    banner: RefCell<Option<NotificationBanner>>,
+    banner_hovered: Cell<bool>,
+    banner_pressed: Cell<Option<u64>>,
 }
 
 impl<C: View> NotificationCenterLayer<C> {
@@ -54,6 +90,143 @@ impl<C: View> NotificationCenterLayer<C> {
             pressed: Cell::new(None),
             scroll: Cell::new(0),
             icon_cache: RefCell::new(HashMap::new()),
+            banner_initialized: Cell::new(false),
+            known_notification_ids: RefCell::new(HashSet::new()),
+            pending_banners: RefCell::new(VecDeque::new()),
+            banner: RefCell::new(None),
+            banner_hovered: Cell::new(false),
+            banner_pressed: Cell::new(None),
+        }
+    }
+
+    fn banner_damage(bounds: Rect) -> Rect {
+        Rect::new(
+            (bounds.origin.x + bounds.size.width - BANNER_WIDTH - BANNER_MARGIN - 20.0)
+                .max(bounds.origin.x),
+            bounds.origin.y,
+            (BANNER_WIDTH + BANNER_MARGIN + 20.0).min(bounds.size.width),
+            BANNER_TOP + BANNER_HEIGHT + 24.0,
+        )
+    }
+
+    fn banner_target_rect(bounds: Rect) -> Rect {
+        Rect::new(
+            bounds.origin.x + (bounds.size.width - BANNER_WIDTH - BANNER_MARGIN).max(BANNER_MARGIN),
+            bounds.origin.y + BANNER_TOP,
+            BANNER_WIDTH.min(bounds.size.width - BANNER_MARGIN * 2.0),
+            BANNER_HEIGHT,
+        )
+    }
+
+    fn banner_rect(
+        bounds: Rect,
+        banner: NotificationBanner,
+        now: Instant,
+    ) -> (Rect, Option<Instant>) {
+        let target = Self::banner_target_rect(bounds);
+        let hidden_y = bounds.origin.y - target.size.height - BANNER_MARGIN;
+        let animation = if let Some(started_at) = banner.dismiss_started_at {
+            Animation::new(started_at, BANNER_EXIT_DURATION).easing(Easing::EaseInOutCubic)
+        } else {
+            Animation::new(banner.presented_at, BANNER_ENTER_DURATION).easing(Easing::EaseOutCubic)
+        };
+        let sample = animation.sample(now);
+        let y = if banner.dismiss_started_at.is_some() {
+            interpolate(target.origin.y, hidden_y, sample.progress)
+        } else {
+            interpolate(hidden_y, target.origin.y, sample.progress)
+        };
+        (
+            Rect::new(target.origin.x, y, target.size.width, target.size.height),
+            sample.next_redraw_at,
+        )
+    }
+
+    fn synchronize_banners(&self, notifications: &[UserNotification], now: Instant) {
+        let mut known = self.known_notification_ids.borrow_mut();
+        if !self.banner_initialized.replace(true) {
+            known.extend(notifications.iter().map(|notification| notification.id));
+            return;
+        }
+
+        let mut pending = self.pending_banners.borrow_mut();
+        for notification in notifications.iter().rev() {
+            if known.insert(notification.id) {
+                pending.push_back(notification.id);
+            }
+        }
+        drop(pending);
+        drop(known);
+
+        if self.open.get() {
+            self.banner.replace(None);
+            self.pending_banners.borrow_mut().clear();
+            self.banner_hovered.set(false);
+            self.banner_pressed.set(None);
+            return;
+        }
+
+        if self
+            .banner
+            .borrow()
+            .is_some_and(|banner| !notifications.iter().any(|item| item.id == banner.id))
+        {
+            self.banner.replace(None);
+        }
+
+        if self.banner.borrow().is_none() {
+            while let Some(id) = self.pending_banners.borrow_mut().pop_front() {
+                if notifications
+                    .iter()
+                    .any(|notification| notification.id == id)
+                {
+                    self.banner.replace(Some(NotificationBanner::new(id, now)));
+                    break;
+                }
+            }
+        }
+    }
+
+    fn advance_banner(&self, notifications: &[UserNotification], now: Instant) {
+        let mut banner = self.banner.borrow_mut();
+        let Some(active) = banner.as_mut() else {
+            return;
+        };
+        if active.dismiss_started_at.is_none()
+            && active.paused_remaining.is_none()
+            && now >= active.expires_at
+        {
+            active.dismiss_started_at = Some(now);
+        }
+        if active.dismiss_started_at.is_some_and(|started_at| {
+            now.saturating_duration_since(started_at) >= BANNER_EXIT_DURATION
+        }) {
+            *banner = None;
+            self.banner_hovered.set(false);
+            self.banner_pressed.set(None);
+        }
+        drop(banner);
+
+        if self.banner.borrow().is_none() {
+            self.synchronize_banners(notifications, now);
+        }
+    }
+
+    fn set_banner_hovered(&self, hovered: bool, now: Instant) {
+        if self.banner_hovered.replace(hovered) == hovered {
+            return;
+        }
+        let mut banner = self.banner.borrow_mut();
+        let Some(active) = banner.as_mut() else {
+            return;
+        };
+        if active.dismiss_started_at.is_some() {
+            return;
+        }
+        if hovered {
+            active.paused_remaining = Some(active.expires_at.saturating_duration_since(now));
+        } else if let Some(remaining) = active.paused_remaining.take() {
+            active.expires_at = now + remaining;
         }
     }
 
@@ -240,6 +413,103 @@ impl<C: View> NotificationCenterLayer<C> {
             .paint(remove, context);
     }
 
+    fn paint_banner(
+        &self,
+        bounds: Rect,
+        notifications: &[UserNotification],
+        apps: &[AppInfo],
+        now: Instant,
+        context: &mut PaintContext<'_>,
+    ) {
+        let Some(banner) = *self.banner.borrow() else {
+            return;
+        };
+        let Some(notification) = notifications
+            .iter()
+            .find(|notification| notification.id == banner.id)
+        else {
+            return;
+        };
+        let (card, next_animation_frame) = Self::banner_rect(bounds, banner, now);
+        if let Some(next) = next_animation_frame {
+            context.request_redraw_in_at(Self::banner_damage(bounds), next);
+        } else if banner.dismiss_started_at.is_none()
+            && let Some(next) = banner
+                .paused_remaining
+                .is_none()
+                .then_some(banner.expires_at)
+        {
+            context.request_redraw_in_at(Self::banner_damage(bounds), next);
+        }
+
+        let theme = Theme::current();
+        Rectangle::new()
+            .color(RectangleColor::Custom(if self.banner_hovered.get() {
+                theme.colors.elevated_surface
+            } else {
+                theme.shell.panel_background
+            }))
+            .radius(CornerRadius::Custom(22.0))
+            .shadow(ShadowStyle::Floating)
+            .paint(card, context);
+
+        let icon_bounds = Rect::new(card.origin.x + 14.0, card.origin.y + 14.0, 44.0, 44.0);
+        let app = self.app(notification, apps);
+        let painted_icon = app
+            .and_then(|application| application.icon.as_deref())
+            .and_then(|path| self.load_icon(path))
+            .map(|icon| {
+                Image::new(icon)
+                    .content_mode(ImageContentMode::Fit)
+                    .sampling(ImageSampling::Bicubic)
+                    .radius(CornerRadius::Medium)
+                    .paint(icon_bounds, context);
+            })
+            .is_some();
+        if !painted_icon {
+            super::app_library::paint_fallback_icon(icon_bounds, context);
+        }
+
+        let app_name = app
+            .map(|application| application.name.as_str())
+            .unwrap_or(notification.bundle_id.as_str());
+        Text::styled(app_name, TextRole::Caption)
+            .weight(650)
+            .color(theme.shell.secondary_text)
+            .paint(
+                Rect::new(
+                    card.origin.x + 70.0,
+                    card.origin.y + 10.0,
+                    card.size.width - 86.0,
+                    19.0,
+                ),
+                context,
+            );
+        Text::styled(&notification.title, TextRole::Label)
+            .weight(700)
+            .color(theme.shell.primary_text)
+            .paint(
+                Rect::new(
+                    card.origin.x + 70.0,
+                    card.origin.y + 30.0,
+                    card.size.width - 86.0,
+                    22.0,
+                ),
+                context,
+            );
+        Text::styled(&notification.body, TextRole::Caption)
+            .color(theme.shell.secondary_text)
+            .paint(
+                Rect::new(
+                    card.origin.x + 70.0,
+                    card.origin.y + 54.0,
+                    card.size.width - 86.0,
+                    30.0,
+                ),
+                context,
+            );
+    }
+
     fn activate(&self, id: u64) {
         let notification = self
             .platform
@@ -275,11 +545,16 @@ impl<C: View> View for NotificationCenterLayer<C> {
 
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.content.paint(bounds, context);
+        let notifications = self.platform.borrow().notifications();
+        let now = Instant::now();
+        self.synchronize_banners(&notifications, now);
+        self.advance_banner(&notifications, now);
         if !self.open.get() {
+            let apps = self.apps.get();
+            self.paint_banner(bounds, &notifications, &apps, now, context);
             return;
         }
         let panel = Self::panel(bounds);
-        let notifications = self.platform.borrow().notifications();
         let apps = self.apps.get();
         let maximum = notifications
             .len()
@@ -368,6 +643,70 @@ impl<C: View> View for NotificationCenterLayer<C> {
         context: &mut EventContext<'_>,
     ) -> EventResult {
         if !self.open.get() {
+            let now = Instant::now();
+            let banner = *self.banner.borrow();
+            let banner_hit = banner.map(|banner| {
+                let (rect, _) = Self::banner_rect(bounds, banner, now);
+                (banner.id, rect)
+            });
+            match event {
+                ViewEvent::PointerMoved { position } => {
+                    let hovered = banner_hit.is_some_and(|(_, rect)| rect.contains(*position));
+                    let changed = self.banner_hovered.get() != hovered;
+                    self.set_banner_hovered(hovered, now);
+                    if changed {
+                        context.request_redraw_in(Self::banner_damage(bounds));
+                    }
+                    if hovered {
+                        return EventResult::Consumed;
+                    }
+                }
+                ViewEvent::PointerPressed {
+                    position,
+                    button: PointerButton::Primary,
+                } => {
+                    let pressed = banner_hit
+                        .filter(|(_, rect)| rect.contains(*position))
+                        .map(|(id, _)| id);
+                    self.banner_pressed.set(pressed);
+                    if pressed.is_some() {
+                        context.request_redraw_in(Self::banner_damage(bounds));
+                        return EventResult::Consumed;
+                    }
+                }
+                ViewEvent::PointerReleased {
+                    position,
+                    button: PointerButton::Primary,
+                } => {
+                    let released = banner_hit
+                        .filter(|(_, rect)| rect.contains(*position))
+                        .map(|(id, _)| id);
+                    let pressed = self.banner_pressed.replace(None);
+                    if pressed.is_some() && pressed == released {
+                        self.banner.replace(None);
+                        self.banner_hovered.set(false);
+                        if let Some(id) = released {
+                            self.activate(id);
+                        }
+                        context.request_redraw_in(Self::banner_damage(bounds));
+                        return EventResult::Consumed;
+                    }
+                }
+                ViewEvent::KeyPressed {
+                    key: Key::Escape, ..
+                } if banner.is_some() => {
+                    if let Some(active) = self.banner.borrow_mut().as_mut()
+                        && active.dismiss_started_at.is_none()
+                    {
+                        active.dismiss_started_at = Some(now);
+                        active.paused_remaining = None;
+                    }
+                    self.banner_hovered.set(false);
+                    context.request_redraw_in(Self::banner_damage(bounds));
+                    return EventResult::Consumed;
+                }
+                _ => {}
+            }
             return self.content.handle_event(bounds, event, context);
         }
         let notifications = self.platform.borrow().notifications();
@@ -436,5 +775,46 @@ impl<C: View> View for NotificationCenterLayer<C> {
             _ => {}
         }
         EventResult::Consumed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn banner_enters_from_above_and_returns_above_on_dismiss() {
+        let bounds = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        let started_at = Instant::now();
+        let mut banner = NotificationBanner::new(7, started_at);
+
+        let (hidden, _) =
+            NotificationCenterLayer::<Rectangle>::banner_rect(bounds, banner, started_at);
+        let (visible, _) = NotificationCenterLayer::<Rectangle>::banner_rect(
+            bounds,
+            banner,
+            started_at + BANNER_ENTER_DURATION,
+        );
+        assert!(hidden.origin.y < bounds.origin.y);
+        assert_eq!(visible.origin.y, bounds.origin.y + BANNER_TOP);
+
+        let dismiss_started_at = started_at + BANNER_ENTER_DURATION;
+        banner.dismiss_started_at = Some(dismiss_started_at);
+        let (dismissed, _) = NotificationCenterLayer::<Rectangle>::banner_rect(
+            bounds,
+            banner,
+            dismiss_started_at + BANNER_EXIT_DURATION,
+        );
+        assert!(dismissed.origin.y < bounds.origin.y);
+    }
+
+    #[test]
+    fn banner_stays_visible_for_five_seconds_after_entry() {
+        let started_at = Instant::now();
+        let banner = NotificationBanner::new(9, started_at);
+        assert_eq!(
+            banner.expires_at.saturating_duration_since(started_at),
+            BANNER_ENTER_DURATION + BANNER_VISIBLE_DURATION
+        );
     }
 }

@@ -25,7 +25,7 @@ use viewkit::{
 
 const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const LAUNCH_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
-const SYSTEM_BAR_HEIGHT: f32 = 40.0;
+const SYSTEM_OVERLAY_DAMAGE_HEIGHT: f32 = 170.0;
 const DOCK_DAMAGE_HEIGHT: f32 = 150.0;
 const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 
@@ -336,7 +336,7 @@ impl PlatformRefreshView {
             bounds.origin.x,
             bounds.origin.y,
             bounds.size.width,
-            SYSTEM_BAR_HEIGHT.min(bounds.size.height),
+            SYSTEM_OVERLAY_DAMAGE_HEIGHT.min(bounds.size.height),
         )
     }
 
