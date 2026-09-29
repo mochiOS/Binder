@@ -27,7 +27,6 @@ const SEARCH_HEIGHT: f32 = 38.0;
 const PAGE_BUTTON_SIZE: f32 = 30.0;
 const MENU_WIDTH: f32 = 190.0;
 const MENU_HEIGHT: f32 = 80.0;
-const DEVELOPMENT_TEST_BUNDLE_ID: &str = "org.mochios.viewkit-test";
 
 #[derive(Clone)]
 enum CachedIcon {
@@ -836,9 +835,6 @@ fn matching_app_indices(apps: &[AppInfo], query: &str) -> Vec<usize> {
     apps.iter()
         .enumerate()
         .filter_map(|(index, app)| {
-            if app.bundle_id == DEVELOPMENT_TEST_BUNDLE_ID {
-                return None;
-            }
             let matches = query.is_empty()
                 || app.name.to_lowercase().contains(&query)
                 || app.bundle_id.to_lowercase().contains(&query)
@@ -895,13 +891,13 @@ mod tests {
     }
 
     #[test]
-    fn development_test_app_is_not_listed() {
+    fn development_test_app_is_listed_and_searchable() {
         let apps = vec![
-            app("ViewKit Test", DEVELOPMENT_TEST_BUNDLE_ID, "mochiOS"),
+            app("ViewKit Test", "org.mochios.viewkit-test", "mochiOS"),
             app("Files", "org.mochios.files", "mochiOS"),
         ];
-        assert_eq!(matching_app_indices(&apps, ""), vec![1]);
-        assert!(matching_app_indices(&apps, "viewkit").is_empty());
+        assert_eq!(matching_app_indices(&apps, ""), vec![0, 1]);
+        assert_eq!(matching_app_indices(&apps, "viewkit"), vec![0]);
     }
 
     #[test]
