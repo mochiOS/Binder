@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::dock_preferences::DockPreferences;
@@ -27,6 +28,7 @@ const SEARCH_HEIGHT: f32 = 38.0;
 const PAGE_BUTTON_SIZE: f32 = 30.0;
 const MENU_WIDTH: f32 = 190.0;
 const MENU_HEIGHT: f32 = 80.0;
+const FALLBACK_APP_ICON_SVG: &[u8] = include_bytes!("../../resources/appicon.svg");
 
 #[derive(Clone)]
 enum CachedIcon {
@@ -437,7 +439,7 @@ where
                 .paint(bounds, context);
             return;
         }
-        paint_monogram(app, bounds, context);
+        paint_fallback_icon(bounds, context);
     }
 }
 
@@ -827,8 +829,25 @@ where
     }
 }
 
-pub(super) fn paint_monogram(app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
-    ApplicationPlaceholder::new(app.name.clone()).paint(bounds, context);
+fn fallback_app_icon() -> Option<&'static SvgData> {
+    static ICON: OnceLock<Option<SvgData>> = OnceLock::new();
+    ICON.get_or_init(|| SvgData::decode(FALLBACK_APP_ICON_SVG).ok())
+        .as_ref()
+}
+
+pub(super) fn paint_fallback_icon(bounds: Rect, context: &mut PaintContext<'_>) {
+    if let Some(icon) = fallback_app_icon() {
+        Svg::new(icon.clone()).paint(bounds, context);
+        return;
+    }
+
+    Rectangle::new()
+        .color(RectangleColor::Custom(
+            Theme::current().colors.surface_muted,
+        ))
+        .radius(CornerRadius::Custom(bounds.size.width * 0.22))
+        .border(BorderStyle::Standard { width: 1.0 })
+        .paint(bounds, context);
 }
 
 fn matching_app_indices(apps: &[AppInfo], query: &str) -> Vec<usize> {
@@ -889,6 +908,11 @@ mod tests {
         assert_eq!(matching_app_indices(&apps, "terminal"), vec![1]);
         assert_eq!(matching_app_indices(&apps, "system team"), vec![1]);
         assert_eq!(matching_app_indices(&apps, "missing"), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn embedded_fallback_application_icon_is_valid_svg() {
+        assert!(fallback_app_icon().is_some());
     }
 
     #[test]

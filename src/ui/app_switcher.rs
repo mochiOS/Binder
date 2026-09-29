@@ -231,7 +231,7 @@ impl<C: View> AppSwitcherLayer<C> {
                 .radius(CornerRadius::Custom(12.0))
                 .paint(bounds, context);
         } else {
-            super::app_library::paint_monogram(app, bounds, context);
+            super::app_library::paint_fallback_icon(bounds, context);
         }
     }
 }
