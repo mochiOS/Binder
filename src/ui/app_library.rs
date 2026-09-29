@@ -50,7 +50,7 @@ pub(crate) struct PendingAppActivation {
 }
 
 impl PendingAppActivation {
-    fn queue(&mut self, app: AppInfo) {
+    pub(crate) fn queue(&mut self, app: AppInfo) {
         self.app = Some(app);
         self.closed_frame_drawn = false;
     }

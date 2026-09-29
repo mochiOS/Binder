@@ -53,6 +53,7 @@ pub(crate) fn view(
     dock_preferences: State<DockPreferences>,
     app_library_open: State<bool>,
     app_switcher: Rc<RefCell<super::app_switcher::AppSwitcherState>>,
+    spotlight: Rc<RefCell<super::spotlight::SpotlightState>>,
     pending_app_activation: Rc<RefCell<super::app_library::PendingAppActivation>>,
     fast_poll_until: Rc<Cell<Option<Instant>>>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
@@ -142,8 +143,8 @@ pub(crate) fn view(
         windows.clone(),
         apps.clone(),
         dock_preferences,
-        app_library_open,
-        pending_app_activation,
+        app_library_open.clone(),
+        Rc::clone(&pending_app_activation),
         Rc::clone(&fast_poll_until),
         launch_failure_states,
     );
@@ -155,11 +156,11 @@ pub(crate) fn view(
         dock_running_apps,
         app_switcher,
     );
-    let root = super::popup_menu::PopupMenu::new(root, menu, menu_open);
+    let root = super::popup_menu::PopupMenu::new(root, menu, menu_open.clone());
     let root = super::context_menu::ContextMenuLayer::new(root, Rc::clone(&platform), context_menu);
     let root = super::control_center::ControlCenterLayer::new(
         root,
-        control_center_open,
+        control_center_open.clone(),
         system_bar,
         control_center_preferences,
         control_center_interaction,
@@ -170,10 +171,21 @@ pub(crate) fn view(
     );
     let root = super::notification_center::NotificationCenterLayer::new(
         root,
-        notification_center_open,
+        notification_center_open.clone(),
+        Rc::clone(&platform),
+        apps.clone(),
+        notification_center_interaction,
+    );
+    let root = super::spotlight::SpotlightLayer::new(
+        root,
+        spotlight,
         Rc::clone(&platform),
         apps,
-        notification_center_interaction,
+        pending_app_activation,
+        menu_open,
+        control_center_open,
+        notification_center_open,
+        app_library_open,
     );
     let root = PointerTracker::new(root, Rc::clone(&cursor_pointer));
 

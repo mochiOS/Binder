@@ -34,6 +34,7 @@ pub struct BinderApp {
     dock_preferences: State<DockPreferences>,
     app_library_open: State<bool>,
     app_switcher: Rc<RefCell<crate::ui::app_switcher::AppSwitcherState>>,
+    spotlight: Rc<RefCell<crate::ui::spotlight::SpotlightState>>,
     pending_app_activation: Rc<RefCell<crate::ui::app_library::PendingAppActivation>>,
     fast_poll_until: Rc<Cell<Option<Instant>>>,
     cursor_pointer: Rc<Cell<Option<Point>>>,
@@ -103,6 +104,7 @@ impl App for BinderApp {
             app_switcher: Rc::new(RefCell::new(
                 crate::ui::app_switcher::AppSwitcherState::default(),
             )),
+            spotlight: Rc::new(RefCell::new(crate::ui::spotlight::SpotlightState::default())),
             pending_app_activation: Rc::new(RefCell::new(
                 crate::ui::app_library::PendingAppActivation::default(),
             )),
@@ -155,6 +157,7 @@ impl App for BinderApp {
             self.dock_preferences.clone(),
             self.app_library_open.clone(),
             Rc::clone(&self.app_switcher),
+            Rc::clone(&self.spotlight),
             Rc::clone(&self.pending_app_activation),
             Rc::clone(&self.fast_poll_until),
             Rc::clone(&self.cursor_pointer),
