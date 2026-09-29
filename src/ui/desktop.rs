@@ -35,6 +35,7 @@ pub(crate) fn view(
     menu_open: State<bool>,
     control_center_open: State<bool>,
     notification_center_open: State<bool>,
+    notification_center_interaction: Rc<super::notification_center::NotificationCenterInteraction>,
     control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
     control_center_interaction: Rc<RefCell<super::control_center::ControlCenterInteraction>>,
     control_center_editor_interaction: Rc<
@@ -172,6 +173,7 @@ pub(crate) fn view(
         notification_center_open,
         Rc::clone(&platform),
         apps,
+        notification_center_interaction,
     );
     let root = PointerTracker::new(root, Rc::clone(&cursor_pointer));
 

@@ -38,6 +38,16 @@ struct NotificationBanner {
     paused_remaining: Option<Duration>,
 }
 
+#[derive(Default)]
+pub(crate) struct NotificationCenterInteraction {
+    banner_initialized: Cell<bool>,
+    known_notification_ids: RefCell<HashSet<u64>>,
+    pending_banners: RefCell<VecDeque<u64>>,
+    banner: RefCell<Option<NotificationBanner>>,
+    banner_hovered: Cell<bool>,
+    banner_pressed: Cell<Option<u64>>,
+}
+
 impl NotificationBanner {
     fn new(id: u64, now: Instant) -> Self {
         Self {
@@ -66,12 +76,7 @@ pub(crate) struct NotificationCenterLayer<C> {
     pressed: Cell<Option<Hit>>,
     scroll: Cell<usize>,
     icon_cache: RefCell<HashMap<PathBuf, ImageData>>,
-    banner_initialized: Cell<bool>,
-    known_notification_ids: RefCell<HashSet<u64>>,
-    pending_banners: RefCell<VecDeque<u64>>,
-    banner: RefCell<Option<NotificationBanner>>,
-    banner_hovered: Cell<bool>,
-    banner_pressed: Cell<Option<u64>>,
+    interaction: Rc<NotificationCenterInteraction>,
 }
 
 impl<C: View> NotificationCenterLayer<C> {
@@ -80,6 +85,7 @@ impl<C: View> NotificationCenterLayer<C> {
         open: State<bool>,
         platform: Rc<RefCell<dyn DesktopPlatform>>,
         apps: State<Vec<AppInfo>>,
+        interaction: Rc<NotificationCenterInteraction>,
     ) -> Self {
         Self {
             content,
@@ -90,12 +96,7 @@ impl<C: View> NotificationCenterLayer<C> {
             pressed: Cell::new(None),
             scroll: Cell::new(0),
             icon_cache: RefCell::new(HashMap::new()),
-            banner_initialized: Cell::new(false),
-            known_notification_ids: RefCell::new(HashSet::new()),
-            pending_banners: RefCell::new(VecDeque::new()),
-            banner: RefCell::new(None),
-            banner_hovered: Cell::new(false),
-            banner_pressed: Cell::new(None),
+            interaction,
         }
     }
 
@@ -143,13 +144,13 @@ impl<C: View> NotificationCenterLayer<C> {
     }
 
     fn synchronize_banners(&self, notifications: &[UserNotification], now: Instant) {
-        let mut known = self.known_notification_ids.borrow_mut();
-        if !self.banner_initialized.replace(true) {
+        let mut known = self.interaction.known_notification_ids.borrow_mut();
+        if !self.interaction.banner_initialized.replace(true) {
             known.extend(notifications.iter().map(|notification| notification.id));
             return;
         }
 
-        let mut pending = self.pending_banners.borrow_mut();
+        let mut pending = self.interaction.pending_banners.borrow_mut();
         for notification in notifications.iter().rev() {
             if known.insert(notification.id) {
                 pending.push_back(notification.id);
@@ -159,28 +160,31 @@ impl<C: View> NotificationCenterLayer<C> {
         drop(known);
 
         if self.open.get() {
-            self.banner.replace(None);
-            self.pending_banners.borrow_mut().clear();
-            self.banner_hovered.set(false);
-            self.banner_pressed.set(None);
+            self.interaction.banner.replace(None);
+            self.interaction.pending_banners.borrow_mut().clear();
+            self.interaction.banner_hovered.set(false);
+            self.interaction.banner_pressed.set(None);
             return;
         }
 
         if self
+            .interaction
             .banner
             .borrow()
             .is_some_and(|banner| !notifications.iter().any(|item| item.id == banner.id))
         {
-            self.banner.replace(None);
+            self.interaction.banner.replace(None);
         }
 
-        if self.banner.borrow().is_none() {
-            while let Some(id) = self.pending_banners.borrow_mut().pop_front() {
+        if self.interaction.banner.borrow().is_none() {
+            while let Some(id) = self.interaction.pending_banners.borrow_mut().pop_front() {
                 if notifications
                     .iter()
                     .any(|notification| notification.id == id)
                 {
-                    self.banner.replace(Some(NotificationBanner::new(id, now)));
+                    self.interaction
+                        .banner
+                        .replace(Some(NotificationBanner::new(id, now)));
                     break;
                 }
             }
@@ -188,7 +192,7 @@ impl<C: View> NotificationCenterLayer<C> {
     }
 
     fn advance_banner(&self, notifications: &[UserNotification], now: Instant) {
-        let mut banner = self.banner.borrow_mut();
+        let mut banner = self.interaction.banner.borrow_mut();
         let Some(active) = banner.as_mut() else {
             return;
         };
@@ -202,21 +206,21 @@ impl<C: View> NotificationCenterLayer<C> {
             now.saturating_duration_since(started_at) >= BANNER_EXIT_DURATION
         }) {
             *banner = None;
-            self.banner_hovered.set(false);
-            self.banner_pressed.set(None);
+            self.interaction.banner_hovered.set(false);
+            self.interaction.banner_pressed.set(None);
         }
         drop(banner);
 
-        if self.banner.borrow().is_none() {
+        if self.interaction.banner.borrow().is_none() {
             self.synchronize_banners(notifications, now);
         }
     }
 
     fn set_banner_hovered(&self, hovered: bool, now: Instant) {
-        if self.banner_hovered.replace(hovered) == hovered {
+        if self.interaction.banner_hovered.replace(hovered) == hovered {
             return;
         }
-        let mut banner = self.banner.borrow_mut();
+        let mut banner = self.interaction.banner.borrow_mut();
         let Some(active) = banner.as_mut() else {
             return;
         };
@@ -421,7 +425,7 @@ impl<C: View> NotificationCenterLayer<C> {
         now: Instant,
         context: &mut PaintContext<'_>,
     ) {
-        let Some(banner) = *self.banner.borrow() else {
+        let Some(banner) = *self.interaction.banner.borrow() else {
             return;
         };
         let Some(notification) = notifications
@@ -444,11 +448,13 @@ impl<C: View> NotificationCenterLayer<C> {
 
         let theme = Theme::current();
         Rectangle::new()
-            .color(RectangleColor::Custom(if self.banner_hovered.get() {
-                theme.colors.elevated_surface
-            } else {
-                theme.shell.panel_background
-            }))
+            .color(RectangleColor::Custom(
+                if self.interaction.banner_hovered.get() {
+                    theme.colors.elevated_surface
+                } else {
+                    theme.shell.panel_background
+                },
+            ))
             .radius(CornerRadius::Custom(22.0))
             .shadow(ShadowStyle::Floating)
             .paint(card, context);
@@ -547,10 +553,10 @@ impl<C: View> View for NotificationCenterLayer<C> {
         self.content.paint(bounds, context);
         let notifications = self.platform.borrow().notifications();
         let now = Instant::now();
-        let previous_banner = self.banner.borrow().map(|banner| banner.id);
+        let previous_banner = self.interaction.banner.borrow().map(|banner| banner.id);
         self.synchronize_banners(&notifications, now);
         self.advance_banner(&notifications, now);
-        let current_banner = self.banner.borrow().map(|banner| banner.id);
+        let current_banner = self.interaction.banner.borrow().map(|banner| banner.id);
         if current_banner.is_some() && current_banner != previous_banner {
             // Notification discovery normally happens during the one-pixel platform polling
             // frame. That frame cannot paint the newly-created banner because its dirty region
@@ -653,7 +659,7 @@ impl<C: View> View for NotificationCenterLayer<C> {
     ) -> EventResult {
         if !self.open.get() {
             let now = Instant::now();
-            let banner = *self.banner.borrow();
+            let banner = *self.interaction.banner.borrow();
             let banner_hit = banner.map(|banner| {
                 let (rect, _) = Self::banner_rect(bounds, banner, now);
                 (banner.id, rect)
@@ -661,7 +667,7 @@ impl<C: View> View for NotificationCenterLayer<C> {
             match event {
                 ViewEvent::PointerMoved { position } => {
                     let hovered = banner_hit.is_some_and(|(_, rect)| rect.contains(*position));
-                    let changed = self.banner_hovered.get() != hovered;
+                    let changed = self.interaction.banner_hovered.get() != hovered;
                     self.set_banner_hovered(hovered, now);
                     if changed {
                         context.request_redraw_in(Self::banner_damage(bounds));
@@ -677,7 +683,7 @@ impl<C: View> View for NotificationCenterLayer<C> {
                     let pressed = banner_hit
                         .filter(|(_, rect)| rect.contains(*position))
                         .map(|(id, _)| id);
-                    self.banner_pressed.set(pressed);
+                    self.interaction.banner_pressed.set(pressed);
                     if pressed.is_some() {
                         context.request_redraw_in(Self::banner_damage(bounds));
                         return EventResult::Consumed;
@@ -690,10 +696,10 @@ impl<C: View> View for NotificationCenterLayer<C> {
                     let released = banner_hit
                         .filter(|(_, rect)| rect.contains(*position))
                         .map(|(id, _)| id);
-                    let pressed = self.banner_pressed.replace(None);
+                    let pressed = self.interaction.banner_pressed.replace(None);
                     if pressed.is_some() && pressed == released {
-                        self.banner.replace(None);
-                        self.banner_hovered.set(false);
+                        self.interaction.banner.replace(None);
+                        self.interaction.banner_hovered.set(false);
                         if let Some(id) = released {
                             self.activate(id);
                         }
@@ -704,13 +710,13 @@ impl<C: View> View for NotificationCenterLayer<C> {
                 ViewEvent::KeyPressed {
                     key: Key::Escape, ..
                 } if banner.is_some() => {
-                    if let Some(active) = self.banner.borrow_mut().as_mut()
+                    if let Some(active) = self.interaction.banner.borrow_mut().as_mut()
                         && active.dismiss_started_at.is_none()
                     {
                         active.dismiss_started_at = Some(now);
                         active.paused_remaining = None;
                     }
-                    self.banner_hovered.set(false);
+                    self.interaction.banner_hovered.set(false);
                     context.request_redraw_in(Self::banner_damage(bounds));
                     return EventResult::Consumed;
                 }

@@ -16,6 +16,8 @@ pub struct BinderApp {
     mochios_menu_open: State<bool>,
     control_center_open: State<bool>,
     notification_center_open: State<bool>,
+    notification_center_interaction:
+        Rc<crate::ui::notification_center::NotificationCenterInteraction>,
     control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
     control_center_interaction: Rc<RefCell<crate::ui::control_center::ControlCenterInteraction>>,
     control_center_editor_interaction:
@@ -77,6 +79,9 @@ impl App for BinderApp {
             mochios_menu_open: State::new(false),
             control_center_open: State::new(false),
             notification_center_open: State::new(false),
+            notification_center_interaction: Rc::new(
+                crate::ui::notification_center::NotificationCenterInteraction::default(),
+            ),
             control_center_preferences: Rc::new(RefCell::new(ControlCenterPreferences::load())),
             control_center_interaction: Rc::new(RefCell::new(
                 crate::ui::control_center::ControlCenterInteraction::default(),
@@ -134,6 +139,7 @@ impl App for BinderApp {
             self.mochios_menu_open.clone(),
             self.control_center_open.clone(),
             self.notification_center_open.clone(),
+            Rc::clone(&self.notification_center_interaction),
             Rc::clone(&self.control_center_preferences),
             Rc::clone(&self.control_center_interaction),
             Rc::clone(&self.control_center_editor_interaction),
