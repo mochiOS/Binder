@@ -24,7 +24,7 @@ resources = [
 ]
 
 [[binary]]
-path = "/applications/Binder.app/entry.elf"
+path = "/system/applications/Binder.app/entry.elf"
 kind = "application"
 requires = [
     "fs.read.all",
