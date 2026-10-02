@@ -1137,14 +1137,33 @@ fn applications_root() -> PathBuf {
     PathBuf::from("/applications")
 }
 
+fn system_applications_root() -> PathBuf {
+    PathBuf::from("/system/applications")
+}
+
 fn read_apps() -> Vec<AppInfo> {
-    let mut apps = read_apps_from(&applications_root());
+    let system_apps = read_apps_from(&system_applications_root());
+    let data_apps = read_apps_from(&applications_root());
+    let mut apps = merge_app_catalogs(system_apps, data_apps);
     apps.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
             .then_with(|| left.bundle_id.cmp(&right.bundle_id))
     });
     apps
+}
+
+fn merge_app_catalogs(mut system_apps: Vec<AppInfo>, data_apps: Vec<AppInfo>) -> Vec<AppInfo> {
+    let mut bundle_ids = system_apps
+        .iter()
+        .map(|app| app.bundle_id.clone())
+        .collect::<HashSet<_>>();
+    system_apps.extend(
+        data_apps
+            .into_iter()
+            .filter(|app| bundle_ids.insert(app.bundle_id.clone())),
+    );
+    system_apps
 }
 
 #[cfg(target_os = "mochios")]
@@ -1555,6 +1574,48 @@ mod tests {
     fn missing_applications_root_is_an_empty_catalog() {
         let root = temporary_app_root();
         assert!(read_apps_from(&root).is_empty());
+    }
+
+    #[test]
+    fn system_and_data_application_catalogs_are_merged_without_overrides() {
+        let system_root = temporary_app_root();
+        let data_root = temporary_app_root();
+        let system_app = system_root.join("Files.app");
+        let duplicate = data_root.join("FakeFiles.app");
+        let installed = data_root.join("Installed.app");
+        assert!(fs::create_dir_all(&system_app).is_ok());
+        assert!(fs::create_dir_all(&duplicate).is_ok());
+        assert!(fs::create_dir_all(&installed).is_ok());
+        assert!(
+            fs::write(
+                system_app.join("manifest.toml"),
+                "[package]\nname = \"Files\"\nid = \"org.mochios.files\"\n[application]\nentry = \"entry.elf\"\n",
+            )
+            .is_ok()
+        );
+        assert!(
+            fs::write(
+                duplicate.join("manifest.toml"),
+                "[package]\nname = \"Fake Files\"\nid = \"org.mochios.files\"\n[application]\nentry = \"entry.elf\"\n",
+            )
+            .is_ok()
+        );
+        assert!(
+            fs::write(
+                installed.join("manifest.toml"),
+                "[package]\nname = \"Installed\"\nid = \"org.test.installed\"\n[application]\nentry = \"entry.elf\"\n",
+            )
+            .is_ok()
+        );
+
+        let apps = merge_app_catalogs(read_apps_from(&system_root), read_apps_from(&data_root));
+        assert_eq!(apps.len(), 2);
+        assert!(apps.iter().any(|app| app.name == "Files"));
+        assert!(apps.iter().any(|app| app.name == "Installed"));
+        assert!(!apps.iter().any(|app| app.name == "Fake Files"));
+
+        assert!(fs::remove_dir_all(system_root).is_ok());
+        assert!(fs::remove_dir_all(data_root).is_ok());
     }
 
     #[test]
