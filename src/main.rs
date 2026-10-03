@@ -12,6 +12,8 @@ use desktop::BinderApp;
 use std::ffi::OsStr;
 use viewkit::prelude::{ViewKitError, run};
 
+const SERVICE_READY_ARGUMENT_PREFIX: &str = "--service-ready=";
+
 #[cfg(target_os = "mochios")]
 fn init_logging() -> bool {
     mochi_user_platform::logger::init_from_env().is_some()
@@ -61,36 +63,38 @@ fn run_process_role(role: &OsStr) {
 
 fn main() -> Result<(), ViewKitError> {
     let has_logger_endpoint = init_logging();
-    let mut arguments = std::env::args_os();
+    let mut logger_argument_pending = has_logger_endpoint;
+    let mut role = None;
 
-    let _executable = arguments.next();
-
-    if has_logger_endpoint {
-        let _logger_endpoint = arguments.next();
-    }
-
-    let Some(role) = arguments.next() else {
-        return run_desktop().inspect_err(log_desktop_failure);
-    };
-
-    if role
-        .to_str()
-        .is_some_and(|role| role.starts_with(session::USER_ARGUMENT_PREFIX))
-    {
-        if let Some(argument) = arguments.next() {
-            eprintln!("unexpected Binder argument: {:?}", argument,);
-            return Ok(());
+    for argument in std::env::args_os().skip(1) {
+        let text = argument.to_str();
+        if logger_argument_pending
+            && text.is_some_and(|value| value.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            logger_argument_pending = false;
+            continue;
         }
-        return run_desktop().inspect_err(log_desktop_failure);
-    }
-
-    if let Some(argument) = arguments.next() {
-        eprintln!("unexpected Binder argument: {:?}", argument,);
-
+        if text.is_some_and(|value| {
+            value.starts_with(SERVICE_READY_ARGUMENT_PREFIX)
+                || value.starts_with(session::USER_ARGUMENT_PREFIX)
+        }) {
+            continue;
+        }
+        if role.is_none()
+            && (argument == OsStr::new(apps::ABOUT_ROLE) || argument == OsStr::new(apps::TEST_ROLE))
+        {
+            role = Some(argument);
+            continue;
+        }
+        eprintln!("unexpected Binder argument: {:?}", argument);
         return Ok(());
     }
 
-    run_process_role(&role);
-
-    Ok(())
+    match role {
+        Some(role) => {
+            run_process_role(&role);
+            Ok(())
+        }
+        None => run_desktop().inspect_err(log_desktop_failure),
+    }
 }
