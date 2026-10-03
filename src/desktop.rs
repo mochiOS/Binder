@@ -11,6 +11,8 @@ use crate::window::{DesktopWindows, WindowDrag, WindowId};
 use viewkit::prelude::*;
 
 pub struct BinderApp {
+    #[cfg(target_os = "mochios")]
+    ready_target: Option<mochi_user_platform::service_ready::Target>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     system_bar: State<SystemBarState>,
     mochios_menu_open: State<bool>,
@@ -75,6 +77,8 @@ impl App for BinderApp {
         let system_bar = platform.borrow().system_bar_state().unwrap_or_default();
         let apps = platform.borrow().get_apps();
         Self {
+            #[cfg(target_os = "mochios")]
+            ready_target: mochi_user_platform::service_ready::take_bootstrap_target(),
             platform,
             system_bar: State::new(system_bar),
             mochios_menu_open: State::new(false),
@@ -132,6 +136,15 @@ impl App for BinderApp {
             .size(1280.0, 800.0)
             .resizable(false)
             .fullscreen(true)
+    }
+
+    fn first_frame_presented(&mut self) {
+        #[cfg(target_os = "mochios")]
+        if let Some(target) = self.ready_target.take()
+            && mochi_user_platform::service_ready::notify(target, 0).is_err()
+        {
+            mochi_user_platform::logln!("Binder.app: desktop ready notification failed");
+        }
     }
 
     fn body(&self, _context: &ViewContext) -> Self::Body {
