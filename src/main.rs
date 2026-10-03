@@ -12,6 +12,26 @@ use desktop::BinderApp;
 use std::ffi::OsStr;
 use viewkit::prelude::{ViewKitError, run};
 
+#[cfg(target_os = "mochios")]
+fn init_logging() -> bool {
+    mochi_user_platform::logger::init_from_env().is_some()
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn init_logging() -> bool {
+    false
+}
+
+#[cfg(target_os = "mochios")]
+fn log_desktop_failure(error: &ViewKitError) {
+    let _ = mochi_user_platform::logger::write_status_fmt(format_args!(
+        "Binder.app: desktop failed: {error:?}\n"
+    ));
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn log_desktop_failure(_error: &ViewKitError) {}
+
 fn run_desktop() -> Result<(), ViewKitError> {
     if let Some(home) = std::env::var_os("HOME") {
         let _ = std::env::set_current_dir(home);
@@ -40,12 +60,17 @@ fn run_process_role(role: &OsStr) {
 }
 
 fn main() -> Result<(), ViewKitError> {
+    let has_logger_endpoint = init_logging();
     let mut arguments = std::env::args_os();
 
     let _executable = arguments.next();
 
+    if has_logger_endpoint {
+        let _logger_endpoint = arguments.next();
+    }
+
     let Some(role) = arguments.next() else {
-        return run_desktop();
+        return run_desktop().inspect_err(log_desktop_failure);
     };
 
     if role
@@ -56,7 +81,7 @@ fn main() -> Result<(), ViewKitError> {
             eprintln!("unexpected Binder argument: {:?}", argument,);
             return Ok(());
         }
-        return run_desktop();
+        return run_desktop().inspect_err(log_desktop_failure);
     }
 
     if let Some(argument) = arguments.next() {
