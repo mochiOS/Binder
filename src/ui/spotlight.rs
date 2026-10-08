@@ -703,10 +703,10 @@ fn open_file(path: &Path) {
         _ => "text/plain",
     };
     if let Some(path) = path.to_str()
-        && let Err(error) = mochi_user_platform::workspace::open_document(
+        && let Err(error) = appcore::document::open(
             path,
             content_type,
-            mochi_user_platform::workspace::ASSOCIATION_ROLE_VIEW,
+            appcore::document::AssociationRoles::VIEW,
         )
     {
         eprintln!("Spotlight could not open {path}: {error:?}");
