@@ -357,20 +357,28 @@ fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), Platfo
     }
 
     let mut reply = [0u8; 16];
-    let message = syscall::call5(
-        syscall::SyscallNumber::IpcCall,
-        endpoint,
-        request.as_ptr() as u64,
-        request.len() as u64,
-        reply.as_mut_ptr() as u64,
-        reply.len() as u64,
+    let posix_endpoint =
+        mochi_user_platform::handle::inherited(mochios_posix_protocol::CONTROL_HANDLE_KEY)
+            .map_err(|_| PlatformError::ProcessLaunchFailed)?;
+    let destination = u32::try_from(endpoint).map_err(|_| PlatformError::ProcessLaunchFailed)?;
+    let mut handles = mochi_user_platform::ipc::IpcObjectHandles::default();
+    handles.count = 1;
+    handles.handles[0].handle = posix_endpoint;
+    handles.handles[0].rights = syscall::HANDLE_RIGHT_SEND
+        | syscall::HANDLE_RIGHT_DUPLICATE
+        | syscall::HANDLE_RIGHT_TRANSFER;
+    let message = mochi_user_platform::ipc::call_object_handles(
+        destination, &request, &mut reply, &mut handles,
     )
     .map_err(|error| {
         eprintln!("capability.service app launch request failed: {error:?}");
         PlatformError::ProcessLaunchFailed
     })?;
     let reply_len = (message & 0xffff_ffff) as usize;
-    if reply_len < reply.len() {
+    if handles.count != 0 || reply_len != reply.len() {
+        for attachment in handles.handles.iter().take(handles.count as usize) {
+            let _ = mochi_user_platform::handle::close(attachment.handle);
+        }
         eprintln!("capability.service returned a short app launch reply");
         return Err(PlatformError::ProcessLaunchFailed);
     }
