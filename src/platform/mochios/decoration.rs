@@ -1,6 +1,10 @@
 use std::fmt;
 
 use mochi_user_syscall as syscall;
+use mochi_user_platform as platform;
+#[path = "decoration_buffer.rs"]
+mod buffer;
+use buffer::TitleBarBuffer;
 use viewkit::draw_command::DisplayList;
 use viewkit::prelude::*;
 use viewkit::typography::{TextMeasurer, Typography};
@@ -28,7 +32,6 @@ const DECOR_EVENT_POINTER_LEAVE: u32 = 0x5641_454c;
 const PIXEL_FORMAT_XRGB8888: u32 = 1;
 const TITLE_BAR_HEIGHT: u32 = VIEW_TITLE_BAR_HEIGHT as u32;
 const CONTROL_WIDTH: u32 = 44;
-const PAGE_SIZE: usize = 4096;
 const MAX_WINDOW_DIMENSION: u32 = 4096;
 const POINTER_FLAG_PRESS: u32 = 1;
 const POINTER_FLAG_RELEASE: u32 = 2;
@@ -47,7 +50,7 @@ struct Decoration {
     endpoint: u64,
     width: u32,
     surface: u64,
-    buffer_virt: u64,
+    buffer: TitleBarBuffer,
     title: String,
     interaction: WindowInteraction,
 }
@@ -106,7 +109,7 @@ impl DecorationManager {
                         .find(|decoration| decoration.window == window)
                     {
                         if decoration.width != width {
-                            decoration.buffer_virt = attach_title_bar_buffer(
+                            decoration.buffer = attach_title_bar_buffer(
                                 self.compositor,
                                 decoration.surface,
                                 width,
@@ -226,7 +229,7 @@ fn create_decoration(
     let reply = ipc_call(compositor, &create)?;
     let surface = read_u64(&reply, 4).ok_or(DecorationError(5))?;
     let interaction = WindowInteraction::default();
-    let buffer_virt =
+    let buffer =
         attach_title_bar_buffer(compositor, surface, width, title.clone(), interaction)?;
     token_request(compositor, OP_DAMAGE, surface)?;
 
@@ -241,7 +244,7 @@ fn create_decoration(
         endpoint,
         width,
         surface,
-        buffer_virt,
+        buffer,
         title,
         interaction,
     })
@@ -253,31 +256,16 @@ fn attach_title_bar_buffer(
     width: u32,
     title: String,
     interaction: WindowInteraction,
-) -> Result<u64, DecorationError> {
+) -> Result<TitleBarBuffer, DecorationError> {
     let pixel_count = (width as usize)
         .checked_mul(TITLE_BAR_HEIGHT as usize)
         .ok_or(DecorationError(22))?;
-    let byte_len = pixel_count.checked_mul(4).ok_or(DecorationError(22))?;
-    let page_count = byte_len
-        .checked_add(PAGE_SIZE - 1)
-        .map(|length| length / PAGE_SIZE)
-        .ok_or(DecorationError(22))?;
-    let virt = syscall_result(syscall::call4(
-        syscall::SyscallNumber::AllocSharedPages,
-        page_count as u64,
-        0,
-        0,
-        0,
-    ))?;
-    if virt == 0 || virt & (PAGE_SIZE as u64 - 1) != 0 {
-        return Err(DecorationError(5));
-    }
     let rendered = render_title_bar(title, width, interaction)?;
     if rendered.len() != pixel_count {
         return Err(DecorationError(5));
     }
-    let pixels = unsafe { std::slice::from_raw_parts_mut(virt as *mut u32, pixel_count) };
-    pixels.copy_from_slice(&rendered);
+    let mut buffer = TitleBarBuffer::new(pixel_count)?;
+    buffer.write(&rendered)?;
 
     let mut attach = [0u8; 28];
     put_u32(&mut attach, 0, OP_ATTACH_BUFFER)?;
@@ -287,14 +275,8 @@ fn attach_title_bar_buffer(
     put_u32(&mut attach, 20, width)?;
     put_u32(&mut attach, 24, PIXEL_FORMAT_XRGB8888)?;
     ipc_call_status(compositor, &attach)?;
-    syscall_result(syscall::call4(
-        syscall::SyscallNumber::IpcSendPages,
-        compositor,
-        0,
-        page_count as u64,
-        virt,
-    ))?;
-    Ok(virt)
+    buffer.offer(compositor)?;
+    Ok(buffer)
 }
 
 fn render_title_bar(
@@ -319,7 +301,7 @@ fn render_title_bar(
         .map_err(|_| DecorationError(5))
 }
 
-fn redraw_title_bar(compositor: u64, decoration: &Decoration) -> Result<(), DecorationError> {
+fn redraw_title_bar(compositor: u64, decoration: &mut Decoration) -> Result<(), DecorationError> {
     let rendered = render_title_bar(
         decoration.title.clone(),
         decoration.width,
@@ -328,12 +310,10 @@ fn redraw_title_bar(compositor: u64, decoration: &Decoration) -> Result<(), Deco
     let pixel_count = (decoration.width as usize)
         .checked_mul(TITLE_BAR_HEIGHT as usize)
         .ok_or(DecorationError(22))?;
-    if decoration.buffer_virt == 0 || rendered.len() != pixel_count {
+    if rendered.len() != pixel_count {
         return Err(DecorationError(5));
     }
-    let pixels =
-        unsafe { std::slice::from_raw_parts_mut(decoration.buffer_virt as *mut u32, pixel_count) };
-    pixels.copy_from_slice(&rendered);
+    decoration.buffer.write(&rendered)?;
     token_request(compositor, OP_DAMAGE, decoration.surface)?;
     token_request(compositor, OP_COMMIT, decoration.surface)
 }
