@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use super::desktop_metrics as metrics;
 use crate::dock_preferences::DockPreferences;
 use crate::platform::{AppInfo, DesktopPlatform};
 
@@ -17,17 +18,17 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
-const DOCK_HEIGHT: f32 = 70.0;
-const DOCK_BOTTOM_MARGIN: f32 = 25.0;
-const DOCK_HORIZONTAL_PADDING: f32 = 12.0;
-const DOCK_ITEM_SIZE: f32 = 52.0;
-const DOCK_ITEM_GAP: f32 = 8.0;
-const DOCK_ICON_SIZE: f32 = 44.0;
-const DOCK_ICON_MAX_SIZE: f32 = 60.0;
+const DOCK_HEIGHT: f32 = metrics::DOCK_HEIGHT;
+const DOCK_BOTTOM_MARGIN: f32 = metrics::DOCK_BOTTOM;
+const DOCK_HORIZONTAL_PADDING: f32 = metrics::DOCK_PADDING;
+const DOCK_ITEM_SIZE: f32 = metrics::DOCK_ICON;
+const DOCK_ITEM_GAP: f32 = metrics::DOCK_GAP;
+const DOCK_ICON_SIZE: f32 = metrics::DOCK_ICON;
+const DOCK_ICON_MAX_SIZE: f32 = DOCK_ICON_SIZE + 16.0;
 const DOCK_MAGNIFICATION_RADIUS: f32 = 96.0;
 const DOCK_ICON_LIFT: f32 = 15.0;
 const DOCK_PRESS_DROP: f32 = 5.0;
-const DOCK_RADIUS: f32 = 48.0;
+const DOCK_RADIUS: f32 = metrics::DOCK_RADIUS;
 const DOCK_ITEM_RADIUS: f32 = 16.0;
 const DOCK_INTERACTION_TOP_OVERFLOW: f32 = 26.0;
 const DOCK_REDRAW_MARGIN: f32 = 20.0;
@@ -276,8 +277,14 @@ where
 
         let gap_count = count.saturating_sub(1) as f32;
 
-        let width =
-            DOCK_HORIZONTAL_PADDING * 2.0 + item_count * DOCK_ITEM_SIZE + gap_count * DOCK_ITEM_GAP;
+        let width = DOCK_HORIZONTAL_PADDING * 2.0
+            + item_count * DOCK_ITEM_SIZE
+            + gap_count * DOCK_ITEM_GAP
+            + if self.pinned_visible_count() > 0 {
+                metrics::DOCK_SEPARATOR_SPACE
+            } else {
+                0.0
+            };
 
         let x = bounds.origin.x + (bounds.size.width - width) / 2.0;
 
@@ -404,7 +411,7 @@ where
             DOCK_MAGNIFICATION_RADIUS + DOCK_ICON_MAX_SIZE / 2.0 + DOCK_REDRAW_MARGIN;
         let mut dirty = None;
         for index in [first, second].into_iter().flatten() {
-            let item = Self::item_rect(dock, index);
+            let item = self.item_rect(dock, index);
             let center_x = item.origin.x + item.size.width / 2.0;
             let affected = Rect::new(
                 center_x - horizontal_radius,
@@ -421,10 +428,15 @@ where
         }
     }
 
-    fn item_rect(dock: Rect, index: usize) -> Rect {
+    fn item_rect(&self, dock: Rect, index: usize) -> Rect {
         let x = dock.origin.x
             + DOCK_HORIZONTAL_PADDING
-            + index as f32 * (DOCK_ITEM_SIZE + DOCK_ITEM_GAP);
+            + index as f32 * (DOCK_ITEM_SIZE + DOCK_ITEM_GAP)
+            + if self.pinned_visible_count() > 0 && index >= self.pinned_visible_count() {
+                metrics::DOCK_SEPARATOR_SPACE
+            } else {
+                0.0
+            };
 
         let y = dock.origin.y + (dock.size.height - DOCK_ITEM_SIZE) / 2.0;
 
@@ -441,7 +453,7 @@ where
         let apps = self.dock_apps();
 
         for index in 0..apps.len() {
-            let item = Self::item_rect(dock, index);
+            let item = self.item_rect(dock, index);
 
             if position.x >= item.origin.x && position.x <= item.origin.x + item.size.width {
                 return Some(index);
@@ -453,7 +465,7 @@ where
 
     fn pointer_for_hit(&self, bounds: Rect, hit: Option<usize>) -> Option<Point> {
         let dock = self.dock_rect(bounds)?;
-        let item = Self::item_rect(dock, hit?);
+        let item = self.item_rect(dock, hit?);
         Some(Point::new(
             item.origin.x + item.size.width / 2.0,
             item.origin.y + item.size.height / 2.0,
@@ -468,7 +480,7 @@ where
     fn menu_bounds(&self, bounds: Rect) -> Option<Rect> {
         let index = self.menu_index.get()?;
         let dock = self.dock_rect(bounds)?;
-        let item = Self::item_rect(dock, index);
+        let item = self.item_rect(dock, index);
         let center_x = item.origin.x + item.size.width / 2.0;
         let minimum_x = bounds.origin.x;
         let maximum_x = (bounds.origin.x + bounds.size.width - DOCK_MENU_WIDTH).max(minimum_x);
@@ -545,12 +557,13 @@ where
     }
 
     fn item_visual(
+        &self,
         dock: Rect,
         index: usize,
         pointer: Option<Point>,
         pressed: Option<usize>,
     ) -> DockItemVisual {
-        let item = Self::item_rect(dock, index);
+        let item = self.item_rect(dock, index);
 
         let influence = Self::magnification_influence(item, pointer);
 
@@ -860,13 +873,7 @@ where
                 Theme::current().shell.dock_background,
             ))
             .radius(CornerRadius::Custom(DOCK_RADIUS))
-            .shadow(ShadowStyle::Custom(Theme::current().shell.dock_shadow))
-            .paint(dock, context);
-
-        Rectangle::new()
-            .color(RectangleColor::Custom(Color::TRANSPARENT))
-            .radius(CornerRadius::Custom(DOCK_RADIUS))
-            .border(BorderStyle::custom(Theme::current().shell.dock_border, 1.0))
+            .shadow(ShadowStyle::None)
             .paint(dock, context);
 
         let apps = self.dock_apps();
@@ -880,7 +887,7 @@ where
         let mut tooltip: Option<(&AppInfo, Rect)> = None;
 
         for (index, app) in apps.iter().enumerate() {
-            let visual = Self::item_visual(dock, index, pointer, pressed);
+            let visual = self.item_visual(dock, index, pointer, pressed);
 
             if hovered == Some(index) || pressed == Some(index) {
                 let opacity = 120.0 + 50.0 * visual.influence;
@@ -912,16 +919,19 @@ where
 
         let pinned_count = self.pinned_visible_count();
         if pinned_count > 0 && pinned_count < apps.len() {
-            let left = Self::item_rect(dock, pinned_count - 1);
-            let right = Self::item_rect(dock, pinned_count);
+            let left = self.item_rect(dock, pinned_count - 1);
+            let right = self.item_rect(dock, pinned_count);
             let x = (left.origin.x + left.size.width + right.origin.x) / 2.0;
             Rectangle::new()
-                .color(RectangleColor::Custom(
-                    Theme::current().shell.dock_border.with_alpha(36),
-                ))
+                .color(RectangleColor::Custom(metrics::DOCK_SEPARATOR_COLOR))
                 .radius(CornerRadius::Custom(1.0))
                 .paint(
-                    Rect::new(x, dock.origin.y + 14.0, 1.0, dock.size.height - 28.0),
+                    Rect::new(
+                        x - 0.5,
+                        dock.origin.y + (dock.size.height - metrics::DOCK_SEPARATOR_HEIGHT) * 0.5,
+                        1.0,
+                        metrics::DOCK_SEPARATOR_HEIGHT,
+                    ),
                     context,
                 );
         }

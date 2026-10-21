@@ -6,6 +6,7 @@ pub(crate) mod control_center;
 pub(crate) mod control_center_editor;
 pub(crate) mod cursor;
 pub(crate) mod desktop;
+pub(crate) mod desktop_metrics;
 pub(crate) mod dock;
 pub(crate) mod launch_failure;
 pub(crate) mod menu;

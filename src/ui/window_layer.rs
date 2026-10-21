@@ -15,7 +15,7 @@ use viewkit::{
 
 use super::{test::TestWindowState, window, window_decoration};
 
-const DESKTOP_TOP_INSET: f32 = 40.0;
+const DESKTOP_TOP_INSET: f32 = super::desktop_metrics::SYSTEM_HEIGHT;
 const RESIZE_HANDLE_OUTER_SIZE: f32 = 10.0;
 const RESIZE_HANDLE_INNER_SIZE: f32 = 5.0;
 const RESIZE_CORNER_LENGTH: f32 = 28.0;

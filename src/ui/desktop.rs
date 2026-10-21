@@ -84,10 +84,8 @@ pub(crate) fn view(
                 control_center_open.clone(),
                 notification_center_open.clone(),
                 Rc::clone(&platform),
-                windows.clone(),
-                apps.clone(),
             )
-            .height(40.0),
+            .height(super::desktop_metrics::SYSTEM_HEIGHT),
         )
         .child(Spacer::new());
 
