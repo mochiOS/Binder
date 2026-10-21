@@ -481,7 +481,7 @@ fn create_listener() -> Result<(UnixListener, PathBuf, PathBuf), PlatformError> 
     Ok((listener, socket_directory, socket_path))
 }
 
-fn peer_process_id(stream: &UnixStream) -> Result<ProcessId, PlatformError> {
+pub(super) fn peer_process_id(stream: &UnixStream) -> Result<ProcessId, PlatformError> {
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
 
     let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;

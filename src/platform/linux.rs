@@ -1,4 +1,7 @@
+pub(crate) mod preview;
 mod transport;
+
+use std::cell::RefCell;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -60,6 +63,9 @@ struct ManagedChild {
 }
 pub struct LinuxPlatform {
     system_bar: SystemBarState,
+    preview: RefCell<preview::PreviewDesktop>,
+    notifications: RefCell<Vec<super::UserNotification>>,
+    focus_enabled: bool,
 
     transport: LinuxIpcServer,
 
@@ -84,6 +90,13 @@ impl LinuxPlatform {
             system_bar: read_system_bar_state().unwrap_or_default(),
 
             transport: LinuxIpcServer::new()?,
+            preview: RefCell::new(preview::PreviewDesktop::new().map_err(|_| PlatformError::TransportFailure)?),
+            notifications: RefCell::new(vec![super::UserNotification {
+                id: 1, created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(), read: false, bundle_id: "org.mochios.binder".into(),
+                title: "mochiOS desktop preview".into(),
+                body: "Applications run inside this desktop. System controls use temporary preview state.".into(),
+            }]),
+            focus_enabled: false,
 
             children: HashMap::new(),
 
@@ -331,11 +344,23 @@ impl Default for LinuxPlatform {
 
 impl DesktopPlatform for LinuxPlatform {
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError> {
-        Ok(self.system_bar.clone())
+        let mut state = self.system_bar.clone();
+        state.notifications.unread_count = self
+            .notifications
+            .borrow()
+            .iter()
+            .filter(|item| !item.read)
+            .count() as u32;
+        state.notifications.focus_enabled = self.focus_enabled;
+        Ok(state)
     }
 
     fn open_system_settings(&self) -> Result<(), PlatformError> {
-        Err(PlatformError::UnsupportedOperation)
+        let app = read_apps()
+            .into_iter()
+            .find(|app| app.bundle_id == "org.mochios.settings")
+            .ok_or(PlatformError::ServiceUnavailable)?;
+        self.preview.borrow_mut().launch(&app).map(|_| ())
     }
 
     fn set_output_volume(&mut self, level: u8) -> Result<super::VolumeState, PlatformError> {
@@ -360,8 +385,52 @@ impl DesktopPlatform for LinuxPlatform {
         Ok(self.system_bar.network.clone())
     }
 
-    fn perform_system_action(&self, _action: SystemAction) -> Result<(), PlatformError> {
-        Err(PlatformError::UnsupportedOperation)
+    fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError> {
+        let mut notifications = self.notifications.borrow_mut();
+        let id = notifications.iter().map(|item| item.id).max().unwrap_or(0) + 1;
+        notifications.push(super::UserNotification {
+            id,
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            read: false,
+            bundle_id: "org.mochios.binder".into(),
+            title: format!("{action:?}"),
+            body: "This system action was requested in the Linux preview.".into(),
+        });
+        Ok(())
+    }
+
+    fn notifications(&self) -> Vec<super::UserNotification> {
+        self.notifications.borrow().clone()
+    }
+    fn notification_settings(&self) -> super::NotificationSettings {
+        super::NotificationSettings {
+            focus_enabled: self.focus_enabled,
+            disabled_bundle_ids: Vec::new(),
+        }
+    }
+    fn set_notification_focus_enabled(
+        &mut self,
+        enabled: bool,
+    ) -> Result<super::NotificationSettings, PlatformError> {
+        self.focus_enabled = enabled;
+        Ok(self.notification_settings())
+    }
+    fn mark_all_notifications_read(&mut self) -> Result<(), PlatformError> {
+        for item in self.notifications.borrow_mut().iter_mut() {
+            item.read = true;
+        }
+        Ok(())
+    }
+    fn remove_notification(&mut self, id: u64) -> Result<(), PlatformError> {
+        self.notifications.borrow_mut().retain(|item| item.id != id);
+        Ok(())
+    }
+    fn clear_notifications(&mut self) -> Result<(), PlatformError> {
+        self.notifications.borrow_mut().clear();
+        Ok(())
     }
 
     fn launch_internal_window(&mut self, entry: &str) -> Result<ProcessId, PlatformError> {
@@ -377,6 +446,9 @@ impl DesktopPlatform for LinuxPlatform {
         process_id: ProcessId,
         window: RemoteWindowId,
     ) -> Result<(), PlatformError> {
+        if self.preview.borrow().contains(process_id) {
+            return self.preview.borrow_mut().register(process_id, window);
+        }
         {
             let child = self
                 .children
@@ -403,6 +475,13 @@ impl DesktopPlatform for LinuxPlatform {
         process_id: ProcessId,
         window: RemoteWindowId,
     ) -> Result<(), PlatformError> {
+        if self.preview.borrow().contains(process_id) {
+            return self.preview.borrow_mut().event(
+                process_id,
+                window,
+                viewkit::platform::PlatformEvent::CloseRequested,
+            );
+        }
         {
             let child = self
                 .children
@@ -434,6 +513,22 @@ impl DesktopPlatform for LinuxPlatform {
         &mut self,
         notification: WindowResizedNotification,
     ) -> Result<(), PlatformError> {
+        if self.preview.borrow().contains(notification.process_id) {
+            let height = notification
+                .height
+                .saturating_sub(crate::ui::window_decoration::TITLE_BAR_HEIGHT as u32)
+                .max(1);
+            return self.preview.borrow_mut().event(
+                notification.process_id,
+                notification.window,
+                viewkit::platform::PlatformEvent::Resized {
+                    viewport: viewkit::platform::linux::preview::viewport(
+                        notification.width,
+                        height,
+                    ),
+                },
+            );
+        }
         {
             let child = self
                 .children
@@ -461,6 +556,13 @@ impl DesktopPlatform for LinuxPlatform {
         &mut self,
         notification: WindowFocusChangedNotification,
     ) -> Result<(), PlatformError> {
+        if self.preview.borrow().contains(notification.process_id) {
+            return self.preview.borrow_mut().event(
+                notification.process_id,
+                notification.window,
+                viewkit::platform::PlatformEvent::Focused(notification.focused),
+            );
+        }
         {
             let child = self
                 .children
@@ -492,18 +594,28 @@ impl DesktopPlatform for LinuxPlatform {
     }
 
     fn take_create_window_requests(&mut self) -> Vec<CreateWindowRequest> {
-        std::mem::take(&mut self.create_window_requests)
+        let mut requests = std::mem::take(&mut self.create_window_requests);
+        requests.append(&mut self.preview.borrow_mut().creates);
+        requests
     }
 
     fn take_close_window_requests(&mut self) -> Vec<CloseWindowRequest> {
-        std::mem::take(&mut self.close_window_requests)
+        let mut requests = std::mem::take(&mut self.close_window_requests);
+        requests.append(&mut self.preview.borrow_mut().closes);
+        requests
     }
 
     fn take_exited_processes(&mut self) -> Vec<ProcessId> {
-        std::mem::take(&mut self.exited_processes)
+        let mut processes = std::mem::take(&mut self.exited_processes);
+        processes.append(&mut self.preview.borrow_mut().exited);
+        processes
     }
 
     fn refresh(&mut self) -> Result<bool, PlatformError> {
+        self.preview
+            .borrow_mut()
+            .poll()
+            .map_err(|_| PlatformError::TransportFailure)?;
         self.reap_exited_children()?;
 
         let allowed_processes: HashSet<ProcessId> = self.children.keys().copied().collect();
@@ -516,6 +628,7 @@ impl DesktopPlatform for LinuxPlatform {
 
         let mut next = read_system_bar_state()?;
         next.volume = self.system_bar.volume.clone();
+        next.network = self.system_bar.network.clone();
 
         let changed = next != self.system_bar;
 
@@ -535,6 +648,9 @@ impl DesktopPlatform for LinuxPlatform {
             return self.spawn_internal_app(internal_app, app.bundle_id.clone());
         }
 
+        if std::env::var_os("MOCHIOS_PREVIEW_APPS").is_some() {
+            return self.preview.borrow_mut().launch(app);
+        }
         let executable = app.entry_path();
 
         if !executable.is_file() {
@@ -544,17 +660,34 @@ impl DesktopPlatform for LinuxPlatform {
         Err(PlatformError::UnsupportedOperation)
     }
 
+    fn take_activation_requests(&mut self) -> Vec<ProcessId> {
+        std::mem::take(&mut self.preview.borrow_mut().activations)
+    }
+    fn take_cancelled_closes(&mut self) -> Vec<CloseWindowRequest> {
+        std::mem::take(&mut self.preview.borrow_mut().cancelled)
+    }
+    fn take_content_changed(&mut self) -> bool {
+        std::mem::take(&mut self.preview.borrow_mut().dirty)
+    }
+    fn take_window_titles(&mut self) -> Vec<(ProcessId, RemoteWindowId, String)> {
+        std::mem::take(&mut self.preview.borrow_mut().titles)
+    }
+
     fn process_id_for_bundle(&self, bundle_id: &str) -> Option<ProcessId> {
+        if let Some(pid) = self.preview.borrow().process_id(bundle_id) {
+            return Some(pid);
+        }
         self.children
             .iter()
             .find_map(|(process_id, child)| (child.bundle_id == bundle_id).then_some(*process_id))
     }
 
     fn running_app_bundle_ids(&self) -> Vec<String> {
-        self.children
-            .values()
-            .map(|child| child.bundle_id.clone())
-            .collect()
+        let mut ids = self.preview.borrow().bundle_ids();
+        ids.extend(self.children.values().map(|child| child.bundle_id.clone()));
+        ids.sort();
+        ids.dedup();
+        ids
     }
 }
 
@@ -575,7 +708,17 @@ pub(super) fn run_internal_process(entry: &str) -> Result<(), PlatformError> {
 fn read_system_bar_state() -> Result<SystemBarState, PlatformError> {
     Ok(SystemBarState {
         clock: read_clock()?,
-
+        network: super::NetworkState::Connected {
+            network_name: Some("Preview Network".into()),
+            signal_strength: Some(85),
+            interface: Some("preview0".into()),
+            address: Some("192.0.2.2".into()),
+        },
+        battery: super::BatteryState {
+            available: true,
+            charging: true,
+            percentage: 82,
+        },
         ..SystemBarState::default()
     })
 }
@@ -624,7 +767,9 @@ fn resources_root() -> PathBuf {
 }
 
 fn applications_root() -> PathBuf {
-    resources_root().join("apps")
+    std::env::var_os("MOCHIOS_PREVIEW_APPS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| resources_root().join("apps"))
 }
 
 fn read_apps() -> Vec<AppInfo> {

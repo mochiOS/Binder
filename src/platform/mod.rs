@@ -1,5 +1,5 @@
 #[cfg(target_os = "linux")]
-mod linux;
+pub(crate) mod linux;
 
 mod mochios;
 
@@ -333,6 +333,20 @@ pub trait DesktopPlatform {
     }
 
     fn refresh(&mut self) -> Result<bool, PlatformError>;
+
+    fn take_activation_requests(&mut self) -> Vec<ProcessId> {
+        Vec::new()
+    }
+
+    fn take_cancelled_closes(&mut self) -> Vec<CloseWindowRequest> {
+        Vec::new()
+    }
+    fn take_content_changed(&mut self) -> bool {
+        false
+    }
+    fn take_window_titles(&mut self) -> Vec<(ProcessId, RemoteWindowId, String)> {
+        Vec::new()
+    }
 
     fn get_apps(&self) -> Vec<AppInfo> {
         Vec::new()

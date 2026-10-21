@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io;
-use std::path::Path;
 
 const DEFAULT_PINNED: [&str; 3] = [
     "org.mochios.files",
@@ -14,6 +13,14 @@ const CONFIG_PATH: &str = "/var/config/applications/org.mochios.binder/dock.conf
 
 #[cfg(not(target_os = "mochios"))]
 const CONFIG_PATH: &str = "/tmp/mochios-binder/dock.conf";
+
+fn config_path() -> std::path::PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(root) = std::env::var_os("MOCHIOS_PREVIEW_CONFIG_ROOT") {
+        return std::path::PathBuf::from(root).join("binder/dock.conf");
+    }
+    CONFIG_PATH.into()
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DockPreferences {
@@ -30,7 +37,7 @@ impl Default for DockPreferences {
 
 impl DockPreferences {
     pub(crate) fn load() -> Self {
-        fs::read_to_string(CONFIG_PATH)
+        fs::read_to_string(config_path())
             .ok()
             .map(|text| Self::parse(&text))
             .unwrap_or_default()
@@ -84,14 +91,14 @@ impl DockPreferences {
     }
 
     pub(crate) fn save(&self) -> io::Result<()> {
-        let path = Path::new(CONFIG_PATH);
+        let path = &config_path();
         let Some(parent) = path.parent() else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid Dock config path",
             ));
         };
-        match fs::create_dir(parent) {
+        match fs::create_dir_all(parent) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),

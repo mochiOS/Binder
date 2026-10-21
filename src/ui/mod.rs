@@ -18,3 +18,6 @@ pub(crate) mod wallpaper;
 pub(crate) mod window;
 pub(crate) mod window_decoration;
 pub(crate) mod window_layer;
+
+#[cfg(target_os = "linux")]
+mod host_surface;

@@ -132,10 +132,15 @@ impl App for BinderApp {
     }
 
     fn window(&self) -> WindowOptions {
-        WindowOptions::new("Binder")
-            .size(1280.0, 800.0)
-            .resizable(false)
-            .fullscreen(true)
+        let options = WindowOptions::new("Binder").size(1280.0, 800.0);
+        #[cfg(target_os = "linux")]
+        {
+            options.resizable(true).fullscreen(false)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            options.resizable(false).fullscreen(true)
+        }
     }
 
     fn first_frame_presented(&mut self) {
@@ -187,6 +192,10 @@ impl App for BinderApp {
     }
 
     fn appearance_changed(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            self.wallpaper = crate::ui::wallpaper::Wallpaper::load_default();
+        }
         let _ = self.platform.borrow_mut().reload_appearance();
     }
 }

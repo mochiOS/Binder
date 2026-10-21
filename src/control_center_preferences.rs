@@ -1,13 +1,20 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io;
-use std::path::Path;
 
 #[cfg(target_os = "mochios")]
 const CONFIG_PATH: &str = ".config/mochios/control-center.conf";
 
 #[cfg(not(target_os = "mochios"))]
 const CONFIG_PATH: &str = "/tmp/mochios-binder/control-center.conf";
+
+fn config_path() -> std::path::PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(root) = std::env::var_os("MOCHIOS_PREVIEW_CONFIG_ROOT") {
+        return std::path::PathBuf::from(root).join("binder/control-center.conf");
+    }
+    CONFIG_PATH.into()
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ControlCenterPreferences {
@@ -17,7 +24,7 @@ pub(crate) struct ControlCenterPreferences {
 
 impl ControlCenterPreferences {
     pub(crate) fn load() -> Self {
-        fs::read_to_string(CONFIG_PATH)
+        fs::read_to_string(config_path())
             .ok()
             .map(|text| Self::parse(&text))
             .unwrap_or_default()
@@ -105,7 +112,7 @@ impl ControlCenterPreferences {
     }
 
     pub(crate) fn save(&self) -> io::Result<()> {
-        let path = Path::new(CONFIG_PATH);
+        let path = &config_path();
         let Some(parent) = path.parent() else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,

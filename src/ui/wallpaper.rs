@@ -20,6 +20,12 @@ impl Wallpaper {
         {
             return Some(image);
         }
+        #[cfg(target_os = "linux")]
+        if let Some(path) = std::env::var_os("MOCHIOS_PREVIEW_WALLPAPER") {
+            if let Ok(image) = ImageData::from_path(path) {
+                return Some(image);
+            }
+        }
         for path in WALLPAPER_PATHS {
             if let Ok(image) = ImageData::from_path(path) {
                 return Some(image);
@@ -36,7 +42,12 @@ impl Wallpaper {
 }
 
 fn configured_wallpaper_path() -> Option<String> {
-    let text = std::fs::read_to_string(SETTINGS_PATH).ok()?;
+    let path = std::path::PathBuf::from(SETTINGS_PATH);
+    #[cfg(target_os = "linux")]
+    let path = std::env::var_os("MOCHIOS_PREVIEW_CONFIG_ROOT")
+        .map(|root| std::path::PathBuf::from(root).join("appearance/settings.conf"))
+        .unwrap_or(path);
+    let text = std::fs::read_to_string(path).ok()?;
     text.lines().find_map(|line| {
         let (key, value) = line.split_once('=')?;
         let value = value.trim();

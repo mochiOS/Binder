@@ -334,6 +334,10 @@ impl PlatformRefreshView {
     }
 
     fn refresh_interval(&self) -> Duration {
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("MOCHIOS_PREVIEW_APPS").is_some() {
+            return Duration::from_millis(16);
+        }
         if self
             .fast_poll_until
             .get()
@@ -469,6 +473,40 @@ impl View for PlatformRefreshView {
                 false
             });
 
+            if platform.take_content_changed() {
+                if let Some(dirty) = self.visible_windows_damage() {
+                    context.request_redraw_in_at(dirty, Instant::now());
+                }
+            }
+            let titles = platform.take_window_titles();
+            if !titles.is_empty() {
+                self.windows.update(|desktop| {
+                    for (process, remote, title) in titles {
+                        if let Some(window) = desktop.windows.iter_mut().find(|window| {
+                            window.process_id == Some(process)
+                                && window.remote_window == Some(remote)
+                        }) {
+                            window.title = title;
+                        }
+                    }
+                });
+            }
+
+            failed_close_requests.extend(platform.take_cancelled_closes());
+            let activations = platform.take_activation_requests();
+            if !activations.is_empty() {
+                let before = self.visible_windows_damage();
+                self.windows.update(|desktop| {
+                    for process in activations {
+                        desktop.activate_process(process);
+                    }
+                });
+                if let Some(dirty) =
+                    Self::window_change_damage(before, self.visible_windows_damage())
+                {
+                    context.request_redraw_in_at(dirty, Instant::now());
+                }
+            }
             let running_apps = platform.running_app_bundle_ids();
 
             let discovered_apps = platform.get_apps();

@@ -35,7 +35,9 @@ fn log_desktop_failure(error: &ViewKitError) {
 fn log_desktop_failure(_error: &ViewKitError) {}
 
 fn run_desktop() -> Result<(), ViewKitError> {
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) =
+        std::env::var_os("MOCHIOS_PREVIEW_ROOT").or_else(|| std::env::var_os("HOME"))
+    {
         let _ = std::env::set_current_dir(home);
     }
     run::<BinderApp>()

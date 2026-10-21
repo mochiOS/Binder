@@ -141,7 +141,7 @@ pub(crate) fn view(
             apps,
         )),
         apps::TEST_ENTRY => Box::new(test::view(test_state.unwrap_or_default())),
-        _ => Box::new(remote_placeholder_view()),
+        _ => remote_content_view(&window.renderer),
     };
 
     WindowView {
@@ -207,6 +207,15 @@ pub(crate) fn contains(bounds: Rect, point: Point) -> bool {
     let delta_y = point.y - center_y;
 
     delta_x * delta_x + delta_y * delta_y <= radius * radius
+}
+
+fn remote_content_view(renderer: &str) -> Box<dyn View> {
+    #[cfg(target_os = "linux")]
+    if let Some(surface) = super::host_surface::HostSurface::for_renderer(renderer) {
+        return Box::new(surface);
+    }
+    let _ = renderer;
+    Box::new(remote_placeholder_view())
 }
 
 fn remote_placeholder_view() -> impl View + 'static {
