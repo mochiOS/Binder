@@ -16,3 +16,17 @@ pub(crate) const DOCK_SEPARATOR_SPACE: f32 = 11.0;
 pub(crate) const DOCK_SEPARATOR_HEIGHT: f32 = 48.0;
 pub(crate) const DOCK_SEPARATOR_COLOR: viewkit::theme::Color =
     viewkit::theme::Color::rgb(123, 123, 123);
+
+// Menu - Mock.png (1440 × 1024), independent of app control defaults.
+pub(crate) const OS_MENU_TOP: f32 = 47.0;
+pub(crate) const OS_MENU_WIDTH: f32 = 150.0;
+pub(crate) const OS_MENU_HEIGHT: f32 = 144.0;
+pub(crate) const STATUS_GROUP_WIDTH: f32 = 235.0;
+pub(crate) const STATUS_GROUP_TOP: f32 = 10.0;
+pub(crate) const CHROME_RIGHT: f32 = 15.0;
+pub(crate) const CONTROL_TOP: f32 = 54.0;
+pub(crate) const CONTROL_SIZE: f32 = 60.0;
+pub(crate) const CONTROL_GAP: f32 = 10.0;
+pub(crate) const CONTROL_PITCH: f32 = CONTROL_SIZE + CONTROL_GAP;
+pub(crate) const CONTROL_WIDTH: f32 = CONTROL_SIZE * 3.0 + CONTROL_GAP * 2.0;
+pub(crate) const CONTROL_SLIDER_HEIGHT: f32 = CONTROL_SIZE * 2.0 + CONTROL_GAP;

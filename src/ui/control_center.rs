@@ -1,3 +1,4 @@
+use super::desktop_metrics as metrics;
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::rc::Rc;
@@ -7,6 +8,8 @@ use crate::control_center_preferences::ControlCenterPreferences;
 use crate::platform::{AppInfo, DesktopPlatform, NetworkState, SystemAction, SystemBarState};
 use crate::window::DesktopWindows;
 use viewkit::{
+    animation::VisibilityTransition,
+    draw_command::PaintTransform,
     event::{EventContext, EventResult, ViewEvent},
     platform::{Key, PointerButton},
     prelude::*,
@@ -14,18 +17,12 @@ use viewkit::{
 };
 
 const PANEL_WIDTH: f32 = 300.0;
-const PANEL_MARGIN: f32 = 10.0;
-const PANEL_TOP: f32 = 46.0;
+const PANEL_MARGIN: f32 = metrics::CHROME_RIGHT;
+const PANEL_TOP: f32 = metrics::CONTROL_TOP;
 const PANEL_PADDING: f32 = 16.0;
-const HEADER_HEIGHT: f32 = 34.0;
-const VOLUME_ROW_HEIGHT: f32 = 52.0;
-const VOLUME_ROW_GAP: f32 = 12.0;
-const TILE_COLUMNS: usize = 4;
-const TILE_GAP: f32 = 12.0;
-const TILE_HEIGHT: f32 = 56.0;
-const CONTROL_SIZE: f32 = 52.0;
-const ICON_SIZE: f32 = 20.0;
 const MAX_APP_ITEMS: usize = 8;
+const TILE_LABEL_WIDTH: f32 = 135.0;
+const TILE_LABEL_GAP: f32 = 10.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ItemAction {
@@ -44,7 +41,6 @@ struct Item {
     title: String,
     symbol: SymbolName,
     action: ItemAction,
-    is_on: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -69,10 +65,80 @@ struct AppItemCache {
     items: Vec<Item>,
 }
 
+/// Grid/detail share a reversible transition; retain the outgoing detail until its last frame.
 #[derive(Default)]
+struct DetailNavigation {
+    transition: VisibilityTransition,
+    detail: Option<ControlCenterDetail>,
+}
+
+impl DetailNavigation {
+    fn sample(
+        &mut self,
+        target: &Option<ControlCenterDetail>,
+        motion: viewkit::theme::Motion,
+        now: Instant,
+    ) -> (f32, Option<Instant>) {
+        if target.is_some() {
+            self.detail = target.clone();
+        }
+        let result = self.transition.sample(target.is_some(), motion, now);
+        if result == (0.0, None) {
+            self.detail = None;
+        }
+        result
+    }
+}
+
+fn navigation_transform(amount: f32, detail: bool, distance: f32) -> PaintTransform {
+    PaintTransform {
+        anchor: Point::new(0.0, 0.0),
+        scale: 1.0,
+        offset: Point::new(
+            if detail {
+                distance * (1.0 - amount)
+            } else {
+                -distance * amount
+            },
+            0.0,
+        ),
+        opacity: if detail { amount } else { 1.0 - amount },
+    }
+}
+
 pub(crate) struct ControlCenterInteraction {
+    transition: VisibilityTransition,
+    navigation: DetailNavigation,
+    navigation_presented: Option<(bool, PaintTransform)>,
+    presented: Option<PaintTransform>,
+    closing_detail: Option<ControlCenterDetail>,
+    damage: Option<Rect>,
     hovered: Option<Hit>,
     pressed: Option<Hit>,
+    focused: Option<Hit>,
+    volume_level: State<f32>,
+    volume_interaction: SliderInteractionState,
+    detail: State<Option<ControlCenterDetail>>,
+    network_enabled: State<bool>,
+}
+impl Default for ControlCenterInteraction {
+    fn default() -> Self {
+        Self {
+            transition: VisibilityTransition::default(),
+            navigation: DetailNavigation::default(),
+            navigation_presented: None,
+            presented: None,
+            closing_detail: None,
+            damage: None,
+            hovered: None,
+            pressed: None,
+            focused: None,
+            volume_level: State::new(0.0),
+            volume_interaction: SliderInteractionState::new(),
+            detail: State::new(None),
+            network_enabled: State::new(false),
+        }
+    }
 }
 
 pub(crate) struct ControlCenterLayer<C> {
@@ -116,8 +182,12 @@ impl<C: View> ControlCenterLayer<C> {
         apps: State<Vec<AppInfo>>,
         fast_poll_until: Rc<Cell<Option<Instant>>>,
     ) -> Self {
-        let volume_level = State::new(f32::from(system_bar.get().volume.level));
-        let network_enabled = State::new(system_bar.get().network.enabled());
+        let saved = interaction.borrow();
+        let volume_level = saved.volume_level.clone();
+        let volume_interaction = saved.volume_interaction.clone();
+        let detail = saved.detail.clone();
+        let network_enabled = saved.network_enabled.clone();
+        drop(saved);
         Self {
             content,
             open,
@@ -130,65 +200,15 @@ impl<C: View> ControlCenterLayer<C> {
             fast_poll_until,
             app_item_cache: RefCell::new(AppItemCache::default()),
             volume_level,
-            volume_interaction: SliderInteractionState::new(),
-            detail: State::new(None),
+            volume_interaction,
+            detail,
             network_enabled: network_enabled.clone(),
             network_switch: Switch::new(network_enabled.binding()),
         }
     }
 
     fn items(&self) -> Vec<Item> {
-        let state = self.system_bar.get();
-        let network_on = matches!(
-            &state.network,
-            NetworkState::Connected { .. } | NetworkState::Connecting
-        );
-        let mut items = vec![
-            Item::builtin(
-                "builtin.network",
-                "Network",
-                SymbolName::Network,
-                ItemAction::ShowNetwork,
-                network_on,
-            ),
-            Item::builtin(
-                "builtin.appearance",
-                "Appearance",
-                SymbolName::Paintbrush,
-                ItemAction::OpenSettings,
-                true,
-            ),
-            Item::builtin(
-                "builtin.input",
-                "Input",
-                SymbolName::Keyboard,
-                ItemAction::ToggleInput,
-                state.japanese_input,
-            ),
-            Item::builtin(
-                "builtin.focus",
-                "Focus",
-                SymbolName::Bell,
-                ItemAction::ToggleFocus,
-                state.notifications.focus_enabled,
-            ),
-            Item::builtin(
-                "builtin.settings",
-                "Settings",
-                SymbolName::Settings,
-                ItemAction::OpenSettings,
-                true,
-            ),
-            Item::builtin(
-                "builtin.lock",
-                "Lock",
-                SymbolName::Lock,
-                ItemAction::Lock,
-                true,
-            ),
-        ];
-        items.extend(self.cached_app_items());
-        items
+        self.cached_app_items()
     }
 
     fn cached_app_items(&self) -> Vec<Item> {
@@ -222,7 +242,11 @@ impl<C: View> ControlCenterLayer<C> {
     }
 
     fn panel(&self, bounds: Rect, visible: usize) -> Rect {
-        if self.detail.get().is_some() {
+        Self::panel_for_detail(bounds, visible, self.detail.get().is_some())
+    }
+
+    fn panel_for_detail(bounds: Rect, visible: usize, detail: bool) -> Rect {
+        if detail {
             return Rect::new(
                 bounds.origin.x
                     + (bounds.size.width - PANEL_WIDTH - PANEL_MARGIN).max(PANEL_MARGIN),
@@ -231,27 +255,14 @@ impl<C: View> ControlCenterLayer<C> {
                 330.0_f32.min(bounds.size.height - PANEL_TOP - PANEL_MARGIN),
             );
         }
-        let visible_rows = visible.div_ceil(TILE_COLUMNS).max(1);
-        let height = PANEL_PADDING * 2.0
-            + HEADER_HEIGHT
-            + VOLUME_ROW_HEIGHT
-            + VOLUME_ROW_GAP
-            + visible_rows as f32 * TILE_HEIGHT
-            + visible_rows.saturating_sub(1) as f32 * TILE_GAP;
+        let height = metrics::CONTROL_WIDTH
+            + visible.saturating_sub(5).div_ceil(3) as f32 * metrics::CONTROL_PITCH;
         Rect::new(
-            bounds.origin.x + (bounds.size.width - PANEL_WIDTH - PANEL_MARGIN).max(PANEL_MARGIN),
-            bounds.origin.y + PANEL_TOP,
-            PANEL_WIDTH.min(bounds.size.width - PANEL_MARGIN * 2.0),
-            height.min(bounds.size.height - PANEL_TOP - PANEL_MARGIN),
-        )
-    }
-
-    fn edit_rect(panel: Rect) -> Rect {
-        Rect::new(
-            panel.origin.x + panel.size.width - 70.0,
-            panel.origin.y + 12.0,
-            54.0,
-            28.0,
+            bounds.origin.x
+                + (bounds.size.width - metrics::CONTROL_WIDTH - metrics::CHROME_RIGHT).max(0.0),
+            bounds.origin.y + metrics::CONTROL_TOP,
+            metrics::CONTROL_WIDTH.min(bounds.size.width),
+            height,
         )
     }
 
@@ -268,53 +279,41 @@ impl<C: View> ControlCenterLayer<C> {
         )
     }
 
-    fn tile_rect(panel: Rect, index: usize, start_y: f32) -> Rect {
-        let width = (panel.size.width - PANEL_PADDING * 2.0 - TILE_GAP * (TILE_COLUMNS - 1) as f32)
-            / TILE_COLUMNS as f32;
+    fn tile_rect(panel: Rect, index: usize, _start_y: f32) -> Rect {
+        let (column, row) = if index < 2 {
+            (2, index)
+        } else {
+            ((index - 2) % 3, 2 + (index - 2) / 3)
+        };
         Rect::new(
-            panel.origin.x + PANEL_PADDING + (index % TILE_COLUMNS) as f32 * (width + TILE_GAP),
-            start_y + (index / TILE_COLUMNS) as f32 * (TILE_HEIGHT + TILE_GAP),
-            width,
-            TILE_HEIGHT,
+            panel.origin.x + column as f32 * metrics::CONTROL_PITCH,
+            panel.origin.y + row as f32 * metrics::CONTROL_PITCH,
+            metrics::CONTROL_SIZE,
+            metrics::CONTROL_SIZE,
         )
     }
-
-    fn volume_row_rect(panel: Rect) -> Rect {
-        Rect::new(
-            panel.origin.x + PANEL_PADDING,
-            panel.origin.y + PANEL_PADDING + HEADER_HEIGHT,
-            panel.size.width - PANEL_PADDING * 2.0,
-            VOLUME_ROW_HEIGHT,
-        )
-    }
-
-    fn mute_rect(panel: Rect) -> Rect {
-        let row = Self::volume_row_rect(panel);
-        Rect::new(row.origin.x + 6.0, row.origin.y + 6.0, 40.0, 40.0)
-    }
-
     fn volume_slider_rect(panel: Rect) -> Rect {
-        let row = Self::volume_row_rect(panel);
+        Rect::new(panel.origin.x + 70.0, panel.origin.y, 60.0, 130.0)
+    }
+    fn brightness_rect(panel: Rect) -> Rect {
         Rect::new(
-            row.origin.x + 56.0,
-            row.origin.y + 8.0,
-            row.size.width - 68.0,
-            row.size.height - 16.0,
+            panel.origin.x,
+            panel.origin.y,
+            metrics::CONTROL_SIZE,
+            metrics::CONTROL_SLIDER_HEIGHT,
         )
     }
-
     fn tile_start_y(panel: Rect) -> f32 {
-        let row = Self::volume_row_rect(panel);
-        row.origin.y + row.size.height + VOLUME_ROW_GAP
+        panel.origin.y
     }
-
     fn volume_slider(&self) -> Slider {
         Slider::with_interaction(self.volume_level.binding(), self.volume_interaction.clone())
+            .style(SliderStyle::VerticalLevel)
+            .label("Volume")
             .range(0.0..=100.0)
             .step(1.0)
             .enabled(self.system_bar.get().volume.available)
     }
-
     fn hit(&self, bounds: Rect, position: Point) -> Option<Hit> {
         let visible = self.ordered_items();
         let panel = self.panel(bounds, visible.len());
@@ -325,12 +324,6 @@ impl<C: View> ControlCenterLayer<C> {
             return Self::back_rect(panel)
                 .contains(position)
                 .then_some(Hit::Back);
-        }
-        if Self::edit_rect(panel).contains(position) {
-            return Some(Hit::Edit);
-        }
-        if Self::mute_rect(panel).contains(position) {
-            return Some(Hit::Mute);
         }
         let start_y = Self::tile_start_y(panel);
         for (index, item) in visible.iter().enumerate() {
@@ -460,41 +453,31 @@ impl<C: View> ControlCenterLayer<C> {
     }
 
     fn paint_volume(&self, panel: Rect, context: &mut PaintContext<'_>) {
-        let row = Self::volume_row_rect(panel);
-        Rectangle::new()
-            .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
-            .radius(CornerRadius::Custom(16.0))
-            .paint(row, context);
-
         let volume = self.system_bar.get().volume;
         if !self.volume_interaction.is_dragging() {
             self.volume_level.set_if_changed(f32::from(volume.level));
         }
-        let mute = Self::mute_rect(panel);
-        let muted = !volume.available || volume.muted || volume.level == 0;
-        Rectangle::new()
-            .color(RectangleColor::Custom(if muted {
-                Theme::current().shell.control_hover
-            } else {
-                Theme::current().colors.accent
-            }))
-            .radius(CornerRadius::Custom(20.0))
-            .paint(mute, context);
-        Icon::new(if muted {
+        let brightness = State::new(0.62);
+        Slider::new(brightness.binding())
+            .style(SliderStyle::VerticalLevel)
+            .label("Brightness — unavailable")
+            .enabled(false)
+            .paint(Self::brightness_rect(panel), context);
+        self.volume_slider()
+            .paint(Self::volume_slider_rect(panel), context);
+        let frame = Self::volume_slider_rect(panel);
+        Icon::new(if volume.muted || volume.level == 0 {
             SymbolName::VolumeMute
         } else {
             SymbolName::VolumeHigh
         })
-        .size(18.0)
-        .color(if muted {
-            Theme::current().shell.primary_text
-        } else {
-            Color::WHITE
-        })
-        .accessibility_label(if muted { "Unmute" } else { "Mute" })
-        .paint(mute, context);
-        self.volume_slider()
-            .paint(Self::volume_slider_rect(panel), context);
+        .size(22.0)
+        .color(Color::rgb(90, 90, 90))
+        .accessibility_label("Volume")
+        .paint(
+            Rect::new(frame.origin.x + 17.0, frame.origin.y + 94.0, 26.0, 26.0),
+            context,
+        );
     }
 
     fn paint_network_detail(&self, panel: Rect, context: &mut PaintContext<'_>) {
@@ -504,6 +487,14 @@ impl<C: View> ControlCenterLayer<C> {
         }
 
         let back = Self::back_rect(panel);
+        let mut back_node = viewkit::accessibility::AccessibilityNode::new(
+            viewkit::accessibility::AccessibilityRole::Button,
+            back,
+        );
+        back_node.label = Some("Back".into());
+        back_node.focusable = true;
+        back_node.focused = self.interaction.borrow().focused == Some(Hit::Back);
+        context.record_accessibility(back_node);
         if self.interaction.borrow().hovered == Some(Hit::Back) {
             Rectangle::new()
                 .color(RectangleColor::Custom(Theme::current().shell.item_hover))
@@ -652,6 +643,7 @@ impl<C: View> ControlCenterLayer<C> {
         fallback_title: &str,
         context: &mut PaintContext<'_>,
     ) {
+        context.request_redraw_in_at(panel, Instant::now() + Duration::from_millis(100));
         let card = self
             .platform
             .borrow()
@@ -663,6 +655,14 @@ impl<C: View> ControlCenterLayer<C> {
             .map(|card| card.title.as_str())
             .unwrap_or(fallback_title);
         let back = Self::back_rect(panel);
+        let mut back_node = viewkit::accessibility::AccessibilityNode::new(
+            viewkit::accessibility::AccessibilityRole::Button,
+            back,
+        );
+        back_node.label = Some("Back".into());
+        back_node.focusable = true;
+        back_node.focused = self.interaction.borrow().focused == Some(Hit::Back);
+        context.record_accessibility(back_node);
         if self.interaction.borrow().hovered == Some(Hit::Back) {
             Rectangle::new()
                 .color(RectangleColor::Custom(Theme::current().shell.item_hover))
@@ -798,75 +798,59 @@ impl<C: View> ControlCenterLayer<C> {
             id: item.id.clone(),
         };
         let hovered = self.interaction.borrow().hovered.as_ref() == Some(&hit);
-        let control = Rect::new(
-            bounds.origin.x + (bounds.size.width - CONTROL_SIZE) / 2.0,
-            bounds.origin.y + (bounds.size.height - CONTROL_SIZE) / 2.0,
-            CONTROL_SIZE,
-            CONTROL_SIZE,
+        let mut node = viewkit::accessibility::AccessibilityNode::new(
+            viewkit::accessibility::AccessibilityRole::Button,
+            bounds,
         );
-        let is_on = item.is_on;
+        node.label = Some(item.title.clone());
+        node.focusable = true;
+        node.focused = self.interaction.borrow().focused.as_ref() == Some(&hit);
+        context.record_accessibility(node);
+        let focused = self.interaction.borrow().focused.as_ref() == Some(&hit);
+        let pressed = self.interaction.borrow().pressed.as_ref() == Some(&hit);
+        let color = if pressed {
+            Theme::current().shell.control_hover
+        } else if hovered || focused {
+            Theme::current().colors.surface
+        } else {
+            Theme::current().slider.level_track
+        };
         Rectangle::new()
-            .color(RectangleColor::Custom(if is_on {
-                if hovered {
-                    Theme::current().shell.action_hover
-                } else {
-                    Theme::current().colors.accent
-                }
-            } else if hovered {
-                Theme::current().shell.control_hover
-            } else {
-                Theme::current().shell.item_enabled
-            }))
-            .radius(CornerRadius::Custom(CONTROL_SIZE / 2.0))
-            .paint(control, context);
+            .color(RectangleColor::Custom(color))
+            .radius(CornerRadius::Full)
+            .paint(bounds, context);
         Icon::new(item.symbol)
-            .size(ICON_SIZE)
-            .color(if is_on {
-                Color::WHITE
-            } else {
-                Theme::current().shell.primary_text
-            })
+            .size(24.0)
+            .color(Theme::current().colors.text_primary)
             .accessibility_label(item.title.clone())
-            .paint(control, context);
-    }
-}
-
-impl Item {
-    fn builtin(id: &str, title: &str, symbol: SymbolName, action: ItemAction, is_on: bool) -> Self {
-        Self {
-            id: id.to_string(),
-            title: title.to_string(),
-            symbol,
-            action,
-            is_on,
+            .paint(bounds, context);
+        if hovered {
+            Text::caption(item.title.clone())
+                .color(Theme::current().shell.primary_text)
+                .alignment(TextAlignment::End)
+                .paint(
+                    Rect::new(
+                        bounds.origin.x - TILE_LABEL_WIDTH - TILE_LABEL_GAP,
+                        bounds.origin.y + 18.0,
+                        TILE_LABEL_WIDTH,
+                        24.0,
+                    ),
+                    context,
+                );
         }
     }
-}
-
-impl<C: View> View for ControlCenterLayer<C> {
-    fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
-        self.content.measure(constraints, context)
-    }
-
-    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
-        self.content.paint(bounds, context);
-        if !self.open.get() {
-            return;
-        }
-        let visible = self.ordered_items();
-        let panel = self.panel(bounds, visible.len());
-        Rectangle::new()
-            .color(RectangleColor::Custom(
-                Theme::current().shell.panel_background,
-            ))
-            .radius(CornerRadius::Custom(22.0))
-            .shadow(ShadowStyle::Card)
-            .border(BorderStyle::custom(
-                Theme::current().shell.panel_border,
-                1.0,
-            ))
-            .paint(panel, context);
-        if let Some(detail) = self.detail.get() {
+    fn paint_panel(
+        &self,
+        panel: Rect,
+        visible: &[Item],
+        detail: Option<ControlCenterDetail>,
+        context: &mut PaintContext<'_>,
+    ) {
+        if let Some(detail) = detail {
+            Rectangle::new()
+                .color(RectangleColor::Custom(Theme::current().card.background))
+                .radius(CornerRadius::Custom(22.0))
+                .paint(panel, context);
             match detail {
                 ControlCenterDetail::Network => self.paint_network_detail(panel, context),
                 ControlCenterDetail::Application {
@@ -883,37 +867,141 @@ impl<C: View> View for ControlCenterLayer<C> {
             }
             return;
         }
-        Text::styled("Control Center", TextRole::TitleSmall)
-            .weight(700)
-            .color(Theme::current().shell.primary_text)
-            .paint(
-                Rect::new(
-                    panel.origin.x + PANEL_PADDING,
-                    panel.origin.y + 13.0,
-                    220.0,
-                    26.0,
-                ),
-                context,
-            );
-        let edit = Self::edit_rect(panel);
-        if self.interaction.borrow().hovered == Some(Hit::Edit) {
-            Rectangle::new()
-                .color(RectangleColor::Custom(Theme::current().shell.item_hover))
-                .radius(CornerRadius::Custom(14.0))
-                .paint(edit, context);
-        }
-        Text::styled("Edit", TextRole::Caption)
-            .weight(650)
-            .alignment(TextAlignment::Center)
-            .color(Theme::current().colors.accent)
-            .paint(edit, context);
-
         self.paint_volume(panel, context);
 
         let start_y = Self::tile_start_y(panel);
         for (index, item) in visible.iter().enumerate() {
             self.paint_tile(item, Self::tile_rect(panel, index, start_y), context);
         }
+    }
+}
+
+impl<C: View> View for ControlCenterLayer<C> {
+    fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
+        self.content.measure(constraints, context)
+    }
+
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        self.content.paint(bounds, context);
+        let open = self.open.get();
+        if !open && self.interaction.borrow().damage.is_none() {
+            return;
+        }
+        let visible = self.ordered_items();
+        let detail = if open {
+            self.detail.get()
+        } else {
+            self.interaction.borrow().closing_detail.clone()
+        };
+        let panel = Self::panel_for_detail(bounds, visible.len(), detail.is_some());
+        let margin = context
+            .theme
+            .shadows
+            .floating
+            .layers
+            .iter()
+            .flatten()
+            .map(|shadow| {
+                shadow.blur_radius
+                    + shadow.spread.max(0.0)
+                    + shadow.offset_x.abs().max(shadow.offset_y.abs())
+            })
+            .fold(TILE_LABEL_WIDTH + TILE_LABEL_GAP, f32::max)
+            + 2.0;
+        let grid_panel = Self::panel_for_detail(bounds, visible.len(), false);
+        let detail_panel = Self::panel_for_detail(bounds, visible.len(), true);
+        let scope_bounds = grid_panel.union(detail_panel);
+        let current_damage = scope_bounds.expanded(margin);
+        let now = Instant::now();
+        let (navigation_amount, navigation_next, outgoing_detail) = {
+            let mut interaction = self.interaction.borrow_mut();
+            let (amount, next) =
+                interaction
+                    .navigation
+                    .sample(&detail, context.theme.motion.standard, now);
+            interaction.navigation_presented = Some((
+                detail.is_some(),
+                navigation_transform(amount, detail.is_some(), context.theme.spacing.extra_large),
+            ));
+            (amount, next, interaction.navigation.detail.clone())
+        };
+        let (amount, next, transform, damage) = {
+            let mut interaction = self.interaction.borrow_mut();
+            if open {
+                interaction.closing_detail = detail.clone();
+            }
+            let (amount, next) = interaction.transition.sample(
+                open,
+                if open {
+                    context.theme.motion.menu
+                } else {
+                    context.theme.motion.menu_dismiss
+                },
+                now,
+            );
+            let transform = PaintTransform {
+                anchor: Point::new(panel.origin.x + panel.size.width, panel.origin.y),
+                scale: context.theme.motion.menu_closed_scale
+                    + (1.0 - context.theme.motion.menu_closed_scale) * amount,
+                offset: Point::new(0.0, 0.0),
+                opacity: amount,
+            };
+            interaction.presented = Some(transform);
+            let damage = interaction
+                .damage
+                .map_or(current_damage, |previous| previous.union(current_damage));
+            interaction.damage = (amount > 0.0 || next.is_some()).then_some(current_damage);
+            if !open && next.is_none() {
+                interaction.closing_detail = None;
+                interaction.navigation = DetailNavigation::default();
+                interaction.navigation_presented = None;
+            }
+            (amount, next, transform, damage)
+        };
+        if let Some(deadline) = next {
+            context.request_redraw_in_at(damage, deadline);
+        }
+        if amount <= 0.0 {
+            return;
+        }
+        if let Some(deadline) = navigation_next {
+            context.request_redraw_in_at(damage, deadline);
+        }
+        context.with_presentation(transform, open, |context| {
+            let mut scope = viewkit::accessibility::AccessibilityNode::new(
+                viewkit::accessibility::AccessibilityRole::Group,
+                scope_bounds,
+            );
+            scope.label = Some("Control Center".into());
+            scope.focus_scope = true;
+            context.record_accessibility(scope);
+            let page = |is_detail: bool, context: &mut PaintContext<'_>| {
+                let page_transform = navigation_transform(
+                    navigation_amount,
+                    is_detail,
+                    context.theme.spacing.extra_large,
+                );
+                if page_transform.opacity <= 0.0 {
+                    return;
+                }
+                context.with_presentation(
+                    page_transform,
+                    open && is_detail == detail.is_some(),
+                    |context| {
+                        if is_detail {
+                            if let Some(detail) = outgoing_detail.clone() {
+                                self.paint_panel(detail_panel, &visible, Some(detail), context);
+                            }
+                        } else {
+                            self.paint_panel(grid_panel, &visible, None, context);
+                        }
+                    },
+                );
+            };
+            // Paint the incoming page last; the outgoing page never participates in focus or input.
+            page(detail.is_none(), context);
+            page(detail.is_some(), context);
+        });
     }
 
     fn handle_event(
@@ -923,9 +1011,32 @@ impl<C: View> View for ControlCenterLayer<C> {
         context: &mut EventContext<'_>,
     ) -> EventResult {
         if !self.open.get() {
+            self.volume_interaction.reset();
             self.detail.set_if_changed(None);
             return self.content.handle_event(bounds, event, context);
         }
+        if event
+            .position()
+            .is_some_and(|p| p.y < bounds.origin.y + 54.0)
+        {
+            return self.content.handle_event(bounds, event, context);
+        }
+        if matches!(event, ViewEvent::FocusChanged { focused: false }) {
+            self.open.set(false);
+            self.volume_interaction.reset();
+            self.detail.set(None);
+            context.request_redraw();
+            return EventResult::Consumed;
+        }
+        let presented = self.interaction.borrow().presented;
+        let logical_event =
+            presented.map(|transform| super::popup_menu::logical_event(event, transform));
+        let event = logical_event.as_ref().unwrap_or(event);
+        let navigation_presented = self.interaction.borrow().navigation_presented;
+        let page_event = navigation_presented
+            .filter(|(detail, _)| *detail == self.detail.get().is_some())
+            .map(|(_, transform)| super::popup_menu::logical_event(event, transform));
+        let event = page_event.as_ref().unwrap_or(event);
         let visible = self.ordered_items();
         let panel = self.panel(bounds, visible.len());
         if let Some(detail) = self.detail.get() {
@@ -945,6 +1056,17 @@ impl<C: View> View for ControlCenterLayer<C> {
                 }
             }
             match event {
+                ViewEvent::KeyboardFocusRequested { bounds: target } => {
+                    self.interaction.borrow_mut().focused =
+                        (*target == Some(Self::back_rect(panel))).then_some(Hit::Back);
+                }
+                ViewEvent::KeyPressed {
+                    key: Key::Enter | Key::Space,
+                    ..
+                } if self.interaction.borrow().focused == Some(Hit::Back) => {
+                    self.detail.set(None);
+                    context.request_redraw();
+                }
                 ViewEvent::KeyPressed {
                     key: Key::Escape, ..
                 } => {
@@ -986,6 +1108,12 @@ impl<C: View> View for ControlCenterLayer<C> {
             }
             return EventResult::Consumed;
         }
+        if matches!(event, ViewEvent::PointerPressed { position, button: PointerButton::Secondary } if panel.contains(*position))
+        {
+            self.open_customizer();
+            context.request_redraw();
+            return EventResult::Consumed;
+        }
         let before_volume = self.volume_level.get();
         let slider_result =
             self.volume_slider()
@@ -998,6 +1126,30 @@ impl<C: View> View for ControlCenterLayer<C> {
             return EventResult::Consumed;
         }
         match event {
+            ViewEvent::KeyboardFocusRequested { bounds: target } => {
+                let focused = target.and_then(|rect| {
+                    self.hit(
+                        bounds,
+                        Point::new(
+                            rect.origin.x + rect.size.width * 0.5,
+                            rect.origin.y + rect.size.height * 0.5,
+                        ),
+                    )
+                });
+                self.interaction.borrow_mut().focused = focused;
+            }
+            ViewEvent::KeyPressed {
+                key: Key::Enter | Key::Space,
+                ..
+            } => {
+                let focused = self.interaction.borrow().focused.clone();
+                if let Some(Hit::Item { id }) = focused {
+                    if let Some(item) = visible.iter().find(|item| item.id == id) {
+                        self.activate(item);
+                    }
+                }
+                context.request_redraw();
+            }
             ViewEvent::KeyPressed {
                 key: Key::Escape, ..
             } => {
@@ -1018,7 +1170,7 @@ impl<C: View> View for ControlCenterLayer<C> {
                 button: PointerButton::Primary,
             } => {
                 let hit = self.hit(bounds, *position);
-                if hit.is_none() {
+                if !panel.contains(*position) {
                     self.open.set(false);
                     self.detail.set(None);
                 }
@@ -1059,6 +1211,12 @@ impl<C: View> View for ControlCenterLayer<C> {
     }
 }
 
+pub(crate) fn declares_item(app: &AppInfo, item_id: &str) -> bool {
+    read_app_items(app)
+        .iter()
+        .any(|item| item.id == format!("app.{}:{item_id}", app.bundle_id))
+}
+
 fn read_app_items(app: &AppInfo) -> Vec<Item> {
     let Ok(text) = fs::read_to_string(app.root.join("manifest.toml")) else {
         return Vec::new();
@@ -1073,44 +1231,7 @@ fn read_app_items(app: &AppInfo) -> Vec<Item> {
 }
 
 pub(crate) fn customization_items(apps: &[AppInfo]) -> Vec<CustomizationItem> {
-    let mut items = vec![
-        CustomizationItem {
-            id: String::from("builtin.network"),
-            title: String::from("Network"),
-            source: String::from("System"),
-            symbol: SymbolName::Network,
-        },
-        CustomizationItem {
-            id: String::from("builtin.appearance"),
-            title: String::from("Appearance"),
-            source: String::from("System"),
-            symbol: SymbolName::Paintbrush,
-        },
-        CustomizationItem {
-            id: String::from("builtin.input"),
-            title: String::from("Input"),
-            source: String::from("System"),
-            symbol: SymbolName::Keyboard,
-        },
-        CustomizationItem {
-            id: String::from("builtin.focus"),
-            title: String::from("Focus"),
-            source: String::from("System"),
-            symbol: SymbolName::Bell,
-        },
-        CustomizationItem {
-            id: String::from("builtin.settings"),
-            title: String::from("Settings"),
-            source: String::from("System"),
-            symbol: SymbolName::Settings,
-        },
-        CustomizationItem {
-            id: String::from("builtin.lock"),
-            title: String::from("Lock"),
-            source: String::from("System"),
-            symbol: SymbolName::Lock,
-        },
-    ];
+    let mut items = Vec::new();
     items.extend(apps.iter().flat_map(|app| {
         read_app_items(app)
             .into_iter()
@@ -1171,7 +1292,6 @@ fn parse_app_items(text: &str, app: &AppInfo) -> Result<Vec<Item>, &'static str>
             title: title.to_string(),
             symbol,
             action,
-            is_on: true,
         });
     }
     Ok(result)
@@ -1250,5 +1370,265 @@ mod tests {
                 item_id: String::from("status"),
             }
         );
+    }
+    struct TestPlatform;
+    impl DesktopPlatform for TestPlatform {
+        fn system_bar_state(&self) -> Result<SystemBarState, crate::platform::PlatformError> {
+            Ok(SystemBarState::default())
+        }
+        fn open_system_settings(&self) -> Result<(), crate::platform::PlatformError> {
+            Ok(())
+        }
+        fn perform_system_action(
+            &self,
+            _: SystemAction,
+        ) -> Result<(), crate::platform::PlatformError> {
+            Ok(())
+        }
+        fn refresh(&mut self) -> Result<bool, crate::platform::PlatformError> {
+            Ok(false)
+        }
+        fn set_output_volume(
+            &mut self,
+            level: u8,
+        ) -> Result<crate::platform::VolumeState, crate::platform::PlatformError> {
+            Ok(crate::platform::VolumeState {
+                level,
+                ..Default::default()
+            })
+        }
+    }
+
+    fn layer() -> ControlCenterLayer<Rectangle> {
+        ControlCenterLayer::new(
+            Rectangle::new(),
+            State::new(true),
+            State::new(SystemBarState::default()),
+            Rc::new(RefCell::new(ControlCenterPreferences::default())),
+            Rc::new(RefCell::new(ControlCenterInteraction::default())),
+            Rc::new(RefCell::new(TestPlatform)),
+            State::new(DesktopWindows::default()),
+            State::new(Vec::new()),
+            Rc::new(Cell::new(None)),
+        )
+    }
+
+    #[test]
+    fn detail_remains_visible_during_close_without_retaining_focus() {
+        use viewkit::{draw_command::DisplayList, typography::TextMeasurer, view::RedrawSchedule};
+        let layer = layer();
+        let mut theme = Theme::current();
+        layer.detail.set(Some(ControlCenterDetail::Network));
+        let now = Instant::now();
+        layer.interaction.borrow_mut().navigation.sample(
+            &Some(ControlCenterDetail::Network),
+            theme.motion.standard,
+            now - theme.motion.standard.duration * 2,
+        );
+        layer.interaction.borrow_mut().transition.sample(
+            true,
+            theme.motion.menu,
+            now - theme.motion.menu.duration * 2,
+        );
+        let bounds = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let mut list = DisplayList::new();
+        let mut nodes = Vec::new();
+        let mut schedule = RedrawSchedule::new();
+        let mut measurer = TextMeasurer::new();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer)
+                .with_accessibility_nodes(&mut nodes)
+                .with_redraw_schedule(&mut schedule),
+        );
+        let before = list.commands().to_vec();
+        assert!(nodes.iter().any(|node| node.focus_scope));
+        layer.open.set(false);
+        layer.detail.set(None); // Outside-click/Escape paths clear the live detail state immediately.
+        list.clear();
+        nodes.clear();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer)
+                .with_accessibility_nodes(&mut nodes)
+                .with_redraw_schedule(&mut schedule),
+        );
+        assert_eq!(list.commands(), before);
+        assert!(nodes.is_empty());
+        assert!(schedule.deadline().is_some());
+        // Reduced motion must finish even when a close is already in progress.
+        theme.motion = theme.motion.reduced();
+        list.clear();
+        nodes.clear();
+        schedule = RedrawSchedule::new();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer)
+                .with_accessibility_nodes(&mut nodes)
+                .with_redraw_schedule(&mut schedule),
+        );
+        assert_eq!(list.commands().len(), 1);
+        assert!(schedule.deadline().is_none());
+        assert!(layer.interaction.borrow().closing_detail.is_none());
+        assert!(layer.interaction.borrow().damage.is_none());
+    }
+
+    #[test]
+    fn scaled_volume_slider_accepts_pointer_at_its_visible_edge() {
+        use viewkit::typography::TextMeasurer;
+        let layer = layer();
+        let bounds = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let panel = layer.panel(bounds, 0);
+        let slider = ControlCenterLayer::<Rectangle>::volume_slider_rect(panel);
+        let transform = PaintTransform {
+            anchor: Point::new(panel.origin.x + panel.size.width, panel.origin.y),
+            scale: 0.96,
+            offset: Point::new(0.0, 0.0),
+            opacity: 0.5,
+        };
+        layer.interaction.borrow_mut().presented = Some(transform);
+        let position = transform.point(Point::new(
+            slider.origin.x + slider.size.width - 0.1,
+            slider.origin.y + 30.0,
+        ));
+        assert!(!slider.contains(position));
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        layer.handle_event(
+            bounds,
+            &ViewEvent::PointerPressed {
+                position,
+                button: PointerButton::Primary,
+            },
+            &mut context,
+        );
+        assert!(layer.volume_interaction.is_dragging());
+        layer.handle_event(
+            bounds,
+            &ViewEvent::PointerReleased {
+                position,
+                button: PointerButton::Primary,
+            },
+            &mut context,
+        );
+        assert!(!layer.volume_interaction.is_dragging());
+    }
+    #[test]
+    fn back_transition_paints_old_detail_but_only_grid_remains_interactive() {
+        use viewkit::{
+            draw_command::{DisplayList, DrawCommand},
+            typography::TextMeasurer,
+            view::RedrawSchedule,
+        };
+        let layer = layer();
+        let mut theme = Theme::current();
+        // Keep both pages visible independent of font-layout speed on the test host.
+        theme.motion.standard.duration = Duration::from_secs(60);
+        let mut measurer = TextMeasurer::new();
+        let now = Instant::now();
+        {
+            let mut interaction = layer.interaction.borrow_mut();
+            interaction
+                .transition
+                .sample(true, theme.motion.menu, now - Duration::from_secs(2));
+            interaction.navigation.sample(
+                &Some(ControlCenterDetail::Network),
+                theme.motion.standard,
+                now - Duration::from_secs(120),
+            );
+            interaction.navigation.sample(
+                &None,
+                theme.motion.standard,
+                now - Duration::from_secs(30),
+            );
+        }
+        let bounds = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let mut list = DisplayList::new();
+        let mut nodes = Vec::new();
+        let mut schedule = RedrawSchedule::new();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer)
+                .with_accessibility_nodes(&mut nodes)
+                .with_redraw_schedule(&mut schedule),
+        );
+        assert!(list.commands().iter().any(|command| matches!(command, DrawCommand::DrawText { command } if command.text == "Network")));
+        assert!(
+            !nodes
+                .iter()
+                .any(|node| node.focusable && node.label.as_deref() == Some("Back"))
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.focusable && node.label.as_deref() == Some("Volume"))
+        );
+        let scope = nodes.iter().find(|node| node.focus_scope).unwrap().bounds;
+        assert!(schedule.deadline().is_some());
+        theme.motion = theme.motion.reduced();
+        list.clear();
+        nodes.clear();
+        schedule = RedrawSchedule::new();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer)
+                .with_accessibility_nodes(&mut nodes)
+                .with_redraw_schedule(&mut schedule),
+        );
+        assert!(!list.commands().iter().any(|command| matches!(command, DrawCommand::DrawText { command } if command.text == "Network")));
+        assert_eq!(
+            nodes.iter().find(|node| node.focus_scope).unwrap().bounds,
+            scope
+        );
+        assert!(layer.interaction.borrow().navigation.detail.is_none());
+        assert!(schedule.deadline().is_none());
+    }
+
+    #[test]
+    fn back_button_hit_test_composes_page_translation_and_panel_scale() {
+        use viewkit::typography::TextMeasurer;
+        let layer = layer();
+        layer.detail.set(Some(ControlCenterDetail::Network));
+        let bounds = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let panel = layer.panel(bounds, 0);
+        let back = ControlCenterLayer::<Rectangle>::back_rect(panel);
+        let theme = Theme::current();
+        let outer = PaintTransform {
+            anchor: Point::new(panel.origin.x + panel.size.width, panel.origin.y),
+            scale: 0.96,
+            offset: Point::new(0.0, 0.0),
+            opacity: 0.8,
+        };
+        let inner = navigation_transform(0.5, true, theme.spacing.extra_large);
+        {
+            let mut interaction = layer.interaction.borrow_mut();
+            interaction.presented = Some(outer);
+            interaction.navigation_presented = Some((true, inner));
+        }
+        let position = outer.point(inner.point(Point::new(
+            back.origin.x + back.size.width - 0.1,
+            back.origin.y + back.size.height * 0.5,
+        )));
+        assert!(!back.contains(position));
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        layer.handle_event(
+            bounds,
+            &ViewEvent::PointerPressed {
+                position,
+                button: PointerButton::Primary,
+            },
+            &mut context,
+        );
+        layer.handle_event(
+            bounds,
+            &ViewEvent::PointerReleased {
+                position,
+                button: PointerButton::Primary,
+            },
+            &mut context,
+        );
+        assert!(layer.detail.get().is_none());
     }
 }

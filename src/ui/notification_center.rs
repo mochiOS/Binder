@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+#[cfg(not(target_os = "mochios"))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::platform::{AppInfo, DesktopPlatform, UserNotification};
 use viewkit::{
@@ -46,6 +48,11 @@ pub(crate) struct NotificationCenterInteraction {
     banner: RefCell<Option<NotificationBanner>>,
     banner_hovered: Cell<bool>,
     banner_pressed: Cell<Option<u64>>,
+    panel_motion: RefCell<VisibilityTransition>,
+    expanded_groups: RefCell<HashSet<String>>,
+    scroll: Cell<f32>,
+    controls: RefCell<HashMap<Hit, ButtonInteractionState>>,
+    was_open: Cell<bool>,
 }
 
 impl NotificationBanner {
@@ -60,11 +67,67 @@ impl NotificationBanner {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Hit {
     Clear,
     Remove(u64),
     Notification(u64),
+    Group(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CenterEntry {
+    Group {
+        latest: u64,
+        bundle: String,
+        count: usize,
+    },
+    Notification(u64),
+}
+
+impl CenterEntry {
+    fn height(&self, theme: &Theme) -> f32 {
+        match self {
+            Self::Group { .. } => theme.layout.control_height + theme.spacing.small,
+            Self::Notification(_) => ROW_HEIGHT,
+        }
+    }
+}
+
+fn grouped_entries(
+    notifications: &[UserNotification],
+    expanded: &HashSet<String>,
+) -> Vec<CenterEntry> {
+    // The service snapshot is newest-first. Its delivery order also remains
+    // valid across boots, unlike the native service's boot-relative ticks.
+    let mut groups: Vec<(&str, Vec<u64>)> = Vec::new();
+    for item in notifications {
+        if let Some((_, ids)) = groups
+            .iter_mut()
+            .find(|(bundle, _)| *bundle == item.bundle_id)
+        {
+            ids.push(item.id);
+        } else {
+            groups.push((&item.bundle_id, vec![item.id]));
+        }
+    }
+    let mut rows = Vec::new();
+    for (bundle, ids) in groups {
+        if ids.len() > 1 {
+            rows.push(CenterEntry::Group {
+                latest: ids[0],
+                bundle: bundle.to_owned(),
+                count: ids.len(),
+            });
+        }
+        let count = if expanded.contains(bundle) {
+            ids.len()
+        } else {
+            1
+        };
+        rows.extend(ids.into_iter().take(count).map(CenterEntry::Notification));
+    }
+    rows
 }
 
 pub(crate) struct NotificationCenterLayer<C> {
@@ -74,7 +137,6 @@ pub(crate) struct NotificationCenterLayer<C> {
     apps: State<Vec<AppInfo>>,
     hovered: Cell<Option<Hit>>,
     pressed: Cell<Option<Hit>>,
-    scroll: Cell<usize>,
     icon_cache: RefCell<HashMap<PathBuf, ImageData>>,
     interaction: Rc<NotificationCenterInteraction>,
 }
@@ -94,20 +156,35 @@ impl<C: View> NotificationCenterLayer<C> {
             apps,
             hovered: Cell::new(None),
             pressed: Cell::new(None),
-            scroll: Cell::new(0),
             icon_cache: RefCell::new(HashMap::new()),
             interaction,
         }
     }
 
     fn banner_damage(bounds: Rect) -> Rect {
+        let extent = Self::floating_extent();
         Rect::new(
-            (bounds.origin.x + bounds.size.width - BANNER_WIDTH - BANNER_MARGIN - 20.0)
+            (bounds.origin.x + bounds.size.width - BANNER_WIDTH - BANNER_MARGIN - extent)
                 .max(bounds.origin.x),
             bounds.origin.y,
-            (BANNER_WIDTH + BANNER_MARGIN + 20.0).min(bounds.size.width),
-            BANNER_TOP + BANNER_HEIGHT + 24.0,
+            (BANNER_WIDTH + BANNER_MARGIN + extent).min(bounds.size.width),
+            BANNER_TOP + BANNER_HEIGHT + extent,
         )
+    }
+
+    fn floating_extent() -> f32 {
+        Theme::current()
+            .shadows
+            .floating
+            .layers
+            .iter()
+            .flatten()
+            .map(|shadow| {
+                shadow.blur_radius
+                    + shadow.spread.max(0.0)
+                    + shadow.offset_x.abs().max(shadow.offset_y.abs())
+            })
+            .fold(0.0, f32::max)
     }
 
     fn banner_target_rect(bounds: Rect) -> Rect {
@@ -154,6 +231,7 @@ impl<C: View> NotificationCenterLayer<C> {
             known.extend(notifications.iter().map(|notification| notification.id));
             return;
         }
+        known.retain(|id| notifications.iter().any(|item| item.id == *id));
 
         let mut pending = self.interaction.pending_banners.borrow_mut();
         for notification in notifications.iter().rev() {
@@ -245,13 +323,42 @@ impl<C: View> NotificationCenterLayer<C> {
     }
 
     fn panel(bounds: Rect) -> Rect {
-        let height = (bounds.size.height - PANEL_TOP - PANEL_MARGIN).clamp(240.0, 620.0);
+        let height = (bounds.size.height - PANEL_TOP - PANEL_MARGIN).clamp(0.0, 620.0);
+        let width = PANEL_WIDTH.min((bounds.size.width - PANEL_MARGIN * 2.0).max(0.0));
         Rect::new(
-            bounds.origin.x + (bounds.size.width - PANEL_WIDTH - PANEL_MARGIN).max(PANEL_MARGIN),
+            bounds.origin.x + (bounds.size.width - width - PANEL_MARGIN).max(0.0),
             bounds.origin.y + PANEL_TOP,
-            PANEL_WIDTH.min(bounds.size.width - PANEL_MARGIN * 2.0),
+            width,
             height,
         )
+    }
+
+    fn panel_damage(bounds: Rect) -> Rect {
+        let target = Self::panel(bounds);
+        let extent = Self::floating_extent();
+        Rect::new(
+            target.origin.x - extent,
+            bounds.origin.y,
+            target.size.width + PANEL_MARGIN + extent,
+            bounds.size.height,
+        )
+        .intersection(bounds)
+        .unwrap_or(bounds)
+    }
+
+    fn panel_presentation(&self, bounds: Rect, now: Instant) -> (Rect, f32, Option<Instant>) {
+        let (amount, next) = self.interaction.panel_motion.borrow_mut().sample(
+            self.open.get(),
+            Theme::current().motion.standard,
+            now,
+        );
+        let mut panel = Self::panel(bounds);
+        panel.origin.x = interpolate(
+            bounds.origin.x + bounds.size.width + PANEL_MARGIN,
+            panel.origin.x,
+            amount,
+        );
+        (panel, amount, next)
     }
 
     fn clear_rect(panel: Rect) -> Rect {
@@ -263,19 +370,138 @@ impl<C: View> NotificationCenterLayer<C> {
         )
     }
 
-    fn visible_count(panel: Rect) -> usize {
-        ((panel.size.height - HEADER_HEIGHT - PANEL_PADDING) / ROW_HEIGHT)
-            .floor()
-            .max(1.0) as usize
-    }
-
-    fn row_rect(panel: Rect, visible_index: usize) -> Rect {
+    fn body_rect(panel: Rect) -> Rect {
         Rect::new(
             panel.origin.x + PANEL_PADDING,
-            panel.origin.y + HEADER_HEIGHT + visible_index as f32 * ROW_HEIGHT,
-            panel.size.width - PANEL_PADDING * 2.0,
-            ROW_HEIGHT - 10.0,
+            panel.origin.y + HEADER_HEIGHT,
+            (panel.size.width - PANEL_PADDING * 2.0).max(0.0),
+            (panel.size.height - HEADER_HEIGHT - PANEL_PADDING).max(0.0),
         )
+    }
+
+    fn entries(&self, notifications: &[UserNotification]) -> Vec<CenterEntry> {
+        grouped_entries(notifications, &self.interaction.expanded_groups.borrow())
+    }
+
+    fn maximum_scroll(&self, panel: Rect, entries: &[CenterEntry]) -> f32 {
+        let theme = Theme::current();
+        (entries
+            .iter()
+            .map(|entry| entry.height(&theme))
+            .sum::<f32>()
+            - Self::body_rect(panel).size.height)
+            .max(0.0)
+    }
+
+    fn visible_entries(
+        &self,
+        panel: Rect,
+        notifications: &[UserNotification],
+    ) -> Vec<(CenterEntry, Rect)> {
+        let entries = self.entries(notifications);
+        let theme = Theme::current();
+        let offset = self
+            .interaction
+            .scroll
+            .get()
+            .clamp(0.0, self.maximum_scroll(panel, &entries));
+        self.interaction.scroll.set(offset);
+        let body = Self::body_rect(panel);
+        let mut y = body.origin.y - offset;
+        entries
+            .into_iter()
+            .filter_map(|entry| {
+                let height = entry.height(&theme);
+                let row = Rect::new(
+                    body.origin.x,
+                    y,
+                    body.size.width,
+                    (height - theme.spacing.small).max(0.0),
+                );
+                y += height;
+                row.intersection(body).map(|_| (entry, row))
+            })
+            .collect()
+    }
+
+    fn control(&self, hit: Hit, label: impl Into<String>) -> Button {
+        let state = self
+            .interaction
+            .controls
+            .borrow_mut()
+            .entry(hit)
+            .or_default()
+            .clone();
+        Button::with_interaction_and_label(state, label)
+            .style(ButtonStyle::Ghost)
+            .size(ButtonSize::Small)
+    }
+
+    fn row_control(&self, entry: &CenterEntry, row: Rect, apps: &[AppInfo]) -> (Hit, Rect, Button) {
+        match entry {
+            CenterEntry::Group {
+                latest,
+                bundle,
+                count,
+            } => {
+                let expanded = self.interaction.expanded_groups.borrow().contains(bundle);
+                let name = apps
+                    .iter()
+                    .find(|app| app.bundle_id == *bundle)
+                    .map(|app| app.name.as_str())
+                    .unwrap_or(bundle);
+                let label = format!("{name} ({count})");
+                let hit = Hit::Group(*latest);
+                let button = self
+                    .control(hit, label.clone())
+                    .accessibility_label(label.clone())
+                    .content(
+                        HStack::new()
+                            .gap(StackGap::Small)
+                            .child(
+                                Icon::new(if expanded {
+                                    SymbolName::ChevronDown
+                                } else {
+                                    SymbolName::ChevronRight
+                                })
+                                .size(14.0),
+                            )
+                            .child(Text::label(label).layout().flex_grow(1.0)),
+                    );
+                (hit, row, button)
+            }
+            CenterEntry::Notification(id) => {
+                let hit = Hit::Remove(*id);
+                let button = self
+                    .control(hit, "")
+                    .accessibility_label("Dismiss notification")
+                    .content(Icon::new(SymbolName::X).size(10.0));
+                (hit, Self::remove_rect(row), button)
+            }
+        }
+    }
+
+    fn apply(&self, hit: Hit, notifications: &[UserNotification]) {
+        match hit {
+            Hit::Clear => {
+                if self.platform.borrow_mut().clear_notifications().is_ok() {
+                    self.interaction.scroll.set(0.0);
+                    self.interaction.expanded_groups.borrow_mut().clear();
+                }
+            }
+            Hit::Remove(id) => {
+                let _ = self.platform.borrow_mut().remove_notification(id);
+            }
+            Hit::Notification(id) => self.activate(id),
+            Hit::Group(id) => {
+                if let Some(item) = notifications.iter().find(|item| item.id == id) {
+                    let mut groups = self.interaction.expanded_groups.borrow_mut();
+                    if !groups.remove(&item.bundle_id) {
+                        groups.insert(item.bundle_id.clone());
+                    }
+                }
+            }
+        }
     }
 
     fn remove_rect(row: Rect) -> Rect {
@@ -293,26 +519,29 @@ impl<C: View> NotificationCenterLayer<C> {
         position: Point,
         notifications: &[UserNotification],
     ) -> Option<Hit> {
-        let panel = Self::panel(bounds);
+        let (panel, _, _) = self.panel_presentation(bounds, Instant::now());
         if !panel.contains(position) {
             return None;
         }
         if Self::clear_rect(panel).contains(position) && !notifications.is_empty() {
             return Some(Hit::Clear);
         }
-        let start = self.scroll.get();
-        for (visible_index, notification) in notifications
-            .iter()
-            .skip(start)
-            .take(Self::visible_count(panel))
-            .enumerate()
-        {
-            let row = Self::row_rect(panel, visible_index);
-            if Self::remove_rect(row).contains(position) {
-                return Some(Hit::Remove(notification.id));
-            }
-            if row.contains(position) {
-                return Some(Hit::Notification(notification.id));
+        if !Self::body_rect(panel).contains(position) {
+            return None;
+        }
+        for (entry, row) in self.visible_entries(panel, notifications) {
+            match entry {
+                CenterEntry::Group { latest, .. } if row.contains(position) => {
+                    return Some(Hit::Group(latest));
+                }
+                CenterEntry::Notification(id) if row.contains(position) => {
+                    return Some(if Self::remove_rect(row).contains(position) {
+                        Hit::Remove(id)
+                    } else {
+                        Hit::Notification(id)
+                    });
+                }
+                _ => {}
             }
         }
         None
@@ -352,15 +581,13 @@ impl<C: View> NotificationCenterLayer<C> {
             self.hovered.get(),
             Some(Hit::Notification(id) | Hit::Remove(id)) if id == notification.id
         );
-        Rectangle::new()
+        Card::new()
             .color(RectangleColor::Custom(if hovered {
                 theme.shell.item_hover
-            } else if notification.read {
-                theme.shell.item_enabled
             } else {
-                theme.shell.selection_soft
+                theme.card.background
             }))
-            .radius(CornerRadius::Custom(16.0))
+            .shadow(ShadowStyle::None)
             .paint(row, context);
 
         let icon_bounds = Rect::new(row.origin.x + 12.0, row.origin.y + 13.0, 38.0, 38.0);
@@ -372,6 +599,11 @@ impl<C: View> NotificationCenterLayer<C> {
                 .content_mode(ImageContentMode::Fit)
                 .sampling(ImageSampling::Bicubic)
                 .radius(CornerRadius::Medium)
+                .paint(icon_bounds, context);
+        } else {
+            Icon::new(SymbolName::Bell)
+                .size(theme.layout.stepper_icon_size)
+                .color(theme.shell.secondary_text)
                 .paint(icon_bounds, context);
         }
 
@@ -385,11 +617,48 @@ impl<C: View> NotificationCenterLayer<C> {
                 Rect::new(
                     row.origin.x + 60.0,
                     row.origin.y + 8.0,
-                    row.size.width - 104.0,
+                    (row.size.width - 160.0).max(0.0),
                     20.0,
                 ),
                 context,
             );
+        #[cfg(not(target_os = "mochios"))]
+        let age = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(notification.created_at);
+        #[cfg(not(target_os = "mochios"))]
+        let timestamp = if age < 60 {
+            "Now".to_owned()
+        } else if age < 3600 {
+            format!("{}m", age / 60)
+        } else if age < 86400 {
+            format!("{}h", age / 3600)
+        } else {
+            format!("{}d", age / 86400)
+        };
+        // Native workspace timestamps are boot ticks, not Unix seconds.
+        #[cfg(target_os = "mochios")]
+        let timestamp = String::new();
+        Text::caption(timestamp)
+            .alignment(TextAlignment::End)
+            .color(theme.shell.tertiary_text)
+            .paint(
+                Rect::new(
+                    row.origin.x + row.size.width - 98.0,
+                    row.origin.y + 8.0,
+                    56.0,
+                    20.0,
+                ),
+                context,
+            );
+        if !notification.read {
+            Ellipse::new().color(RectangleColor::Accent).paint(
+                Rect::new(row.origin.x + 4.0, row.origin.y + 17.0, 4.0, 4.0),
+                context,
+            );
+        }
         Text::styled(&notification.title, TextRole::Label)
             .weight(650)
             .color(theme.shell.primary_text)
@@ -413,18 +682,6 @@ impl<C: View> NotificationCenterLayer<C> {
                 ),
                 context,
             );
-
-        let remove = Self::remove_rect(row);
-        if self.hovered.get() == Some(Hit::Remove(notification.id)) {
-            Rectangle::new()
-                .color(RectangleColor::Custom(theme.shell.item_hover))
-                .radius(CornerRadius::Custom(12.0))
-                .paint(remove, context);
-        }
-        Icon::new(SymbolName::X)
-            .size(9.0)
-            .color(theme.shell.secondary_text)
-            .paint(remove, context);
     }
 
     fn paint_banner(
@@ -457,17 +714,7 @@ impl<C: View> NotificationCenterLayer<C> {
         }
 
         let theme = Theme::current();
-        Rectangle::new()
-            .color(RectangleColor::Custom(
-                if self.interaction.banner_hovered.get() {
-                    theme.colors.elevated_surface
-                } else {
-                    theme.shell.panel_background
-                },
-            ))
-            .radius(CornerRadius::Custom(22.0))
-            .shadow(ShadowStyle::Floating)
-            .paint(card, context);
+        Surface::floating().paint(card, context);
 
         let icon_bounds = Rect::new(card.origin.x + 14.0, card.origin.y + 14.0, 44.0, 44.0);
         let app = self.app(notification, apps);
@@ -561,6 +808,10 @@ impl<C: View> View for NotificationCenterLayer<C> {
 
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.content.paint(bounds, context);
+        if self.interaction.was_open.replace(self.open.get()) != self.open.get() && self.open.get()
+        {
+            let _ = self.platform.borrow_mut().mark_all_notifications_read();
+        }
         let notifications = self.platform.borrow().notifications();
         let focus_enabled = self.platform.borrow().notification_settings().focus_enabled;
         let now = Instant::now();
@@ -575,27 +826,37 @@ impl<C: View> View for NotificationCenterLayer<C> {
             // Without it, the first visible frame can arrive after the entry transition ended.
             context.request_redraw_in_at(Self::banner_damage(bounds), now);
         }
-        if !self.open.get() {
+        let (panel, amount, next_panel_frame) = self.panel_presentation(bounds, now);
+        if let Some(next) = next_panel_frame {
+            context.request_redraw_in_at(Self::panel_damage(bounds), next);
+        }
+        if amount <= 0.0 && !self.open.get() {
             let apps = self.apps.get();
             self.paint_banner(bounds, &notifications, &apps, now, context);
             return;
         }
-        let panel = Self::panel(bounds);
         let apps = self.apps.get();
-        let maximum = notifications
-            .len()
-            .saturating_sub(Self::visible_count(panel));
-        self.scroll.set(self.scroll.get().min(maximum));
-
-        Rectangle::new()
-            .color(RectangleColor::Custom(
-                Theme::current().shell.panel_background,
-            ))
-            .radius(CornerRadius::Custom(22.0))
-            .shadow(ShadowStyle::Card)
-            .paint(panel, context);
+        self.interaction
+            .controls
+            .borrow_mut()
+            .retain(|hit, _| match hit {
+                Hit::Clear => true,
+                Hit::Remove(id) | Hit::Group(id) | Hit::Notification(id) => {
+                    notifications.iter().any(|item| item.id == *id)
+                }
+            });
+        self.interaction
+            .expanded_groups
+            .borrow_mut()
+            .retain(|bundle| notifications.iter().any(|item| item.bundle_id == *bundle));
+        Surface::floating().paint(panel, context);
+        if self.open.get() {
+            let mut scope = AccessibilityNode::new(AccessibilityRole::Group, Self::panel(bounds));
+            scope.label = Some("Notification Center".into());
+            scope.focus_scope = true;
+            context.record_accessibility(scope);
+        }
         Text::styled("Notifications", TextRole::TitleSmall)
-            .weight(700)
             .color(Theme::current().shell.primary_text)
             .paint(
                 Rect::new(
@@ -607,18 +868,8 @@ impl<C: View> View for NotificationCenterLayer<C> {
                 context,
             );
         if !notifications.is_empty() {
-            let clear = Self::clear_rect(panel);
-            if self.hovered.get() == Some(Hit::Clear) {
-                Rectangle::new()
-                    .color(RectangleColor::Custom(Theme::current().shell.item_hover))
-                    .radius(CornerRadius::Custom(14.0))
-                    .paint(clear, context);
-            }
-            Text::styled("Clear All", TextRole::Caption)
-                .weight(650)
-                .alignment(TextAlignment::Center)
-                .color(Theme::current().colors.accent)
-                .paint(clear, context);
+            self.control(Hit::Clear, "Clear All")
+                .paint(Self::clear_rect(panel), context);
         }
         if notifications.is_empty() {
             Icon::new(SymbolName::Bell)
@@ -647,19 +898,29 @@ impl<C: View> View for NotificationCenterLayer<C> {
                 );
             return;
         }
-        for (visible_index, notification) in notifications
-            .iter()
-            .skip(self.scroll.get())
-            .take(Self::visible_count(panel))
-            .enumerate()
-        {
-            self.paint_notification(
-                notification,
-                self.app(notification, &apps),
-                Self::row_rect(panel, visible_index),
-                context,
-            );
+        let body = Self::body_rect(panel);
+        context
+            .display_list
+            .push(viewkit::draw_command::DrawCommand::PushClip { rect: body });
+        for (entry, row) in self.visible_entries(panel, &notifications) {
+            if let CenterEntry::Notification(id) = entry {
+                if let Some(notification) = notifications.iter().find(|item| item.id == id) {
+                    self.paint_notification(
+                        notification,
+                        self.app(notification, &apps),
+                        row,
+                        context,
+                    );
+                }
+            }
+            let (_, control_bounds, control) = self.row_control(&entry, row, &apps);
+            if control_bounds.intersection(body) == Some(control_bounds) {
+                control.paint(control_bounds, context);
+            }
         }
+        context
+            .display_list
+            .push(viewkit::draw_command::DrawCommand::PopClip);
     }
 
     fn handle_event(
@@ -736,7 +997,51 @@ impl<C: View> View for NotificationCenterLayer<C> {
             return self.content.handle_event(bounds, event, context);
         }
         let notifications = self.platform.borrow().notifications();
-        let panel = Self::panel(bounds);
+        let (panel, _, _) = self.panel_presentation(bounds, Instant::now());
+        let bar_position = match event {
+            ViewEvent::PointerMoved { position }
+            | ViewEvent::PointerPressed { position, .. }
+            | ViewEvent::PointerReleased { position, .. }
+            | ViewEvent::PointerFocusRequested { position } => Some(*position),
+            _ => None,
+        };
+        if bar_position.is_some_and(|point| point.y < bounds.origin.y + PANEL_TOP) {
+            return self.content.handle_event(bounds, event, context);
+        }
+        let apps = self.apps.get();
+        let mut controls = Vec::new();
+        if !notifications.is_empty() {
+            controls.push((
+                Hit::Clear,
+                Self::clear_rect(panel),
+                self.control(Hit::Clear, "Clear All"),
+            ));
+        }
+        let body = Self::body_rect(panel);
+        for (entry, row) in self.visible_entries(panel, &notifications) {
+            let control = self.row_control(&entry, row, &apps);
+            if control.1.intersection(body) == Some(control.1) {
+                controls.push(control);
+            }
+        }
+        if let ViewEvent::PointerMoved { position } = event {
+            let hit = self.hit(bounds, *position, &notifications);
+            if self.hovered.replace(hit) != hit {
+                context.request_redraw_in(Self::panel_damage(bounds));
+            }
+        }
+        let mut consumed = false;
+        for (hit, frame, control) in controls {
+            consumed |= control.handle_event(frame, event, context).is_consumed();
+            if control.interaction().take_clicked() {
+                self.apply(hit, &notifications);
+                context.request_redraw_in(Self::panel_damage(bounds));
+                return EventResult::Consumed;
+            }
+        }
+        if consumed {
+            return EventResult::Consumed;
+        }
         match event {
             ViewEvent::KeyPressed {
                 key: Key::Escape, ..
@@ -769,16 +1074,8 @@ impl<C: View> View for NotificationCenterLayer<C> {
                 let released = self.hit(bounds, *position, &notifications);
                 let pressed = self.pressed.replace(None);
                 if pressed == released {
-                    match released {
-                        Some(Hit::Clear) => {
-                            let _ = self.platform.borrow_mut().clear_notifications();
-                            self.scroll.set(0);
-                        }
-                        Some(Hit::Remove(id)) => {
-                            let _ = self.platform.borrow_mut().remove_notification(id);
-                        }
-                        Some(Hit::Notification(id)) => self.activate(id),
-                        None => {}
+                    if let Some(hit) = released {
+                        self.apply(hit, &notifications);
                     }
                 }
                 context.request_redraw();
@@ -786,15 +1083,9 @@ impl<C: View> View for NotificationCenterLayer<C> {
             ViewEvent::Scroll {
                 position, delta_y, ..
             } if panel.contains(*position) => {
-                let maximum = notifications
-                    .len()
-                    .saturating_sub(Self::visible_count(panel));
-                let next = if *delta_y < 0.0 {
-                    self.scroll.get().saturating_add(1).min(maximum)
-                } else {
-                    self.scroll.get().saturating_sub(1)
-                };
-                if self.scroll.replace(next) != next {
+                let maximum = self.maximum_scroll(panel, &self.entries(&notifications));
+                let next = (self.interaction.scroll.get() - delta_y).clamp(0.0, maximum);
+                if self.interaction.scroll.replace(next) != next {
                     context.request_redraw_in(panel);
                 }
             }
@@ -807,6 +1098,68 @@ impl<C: View> View for NotificationCenterLayer<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn notice(id: u64, bundle: &str, created_at: u64) -> UserNotification {
+        UserNotification {
+            id,
+            created_at,
+            read: false,
+            bundle_id: bundle.into(),
+            title: format!("Notice {id}"),
+            body: "Body".into(),
+        }
+    }
+
+    #[test]
+    fn groups_sort_by_latest_delivery_and_expand_in_chronological_order() {
+        let notifications = vec![notice(3, "a", 30), notice(2, "b", 20), notice(1, "a", 10)];
+        assert_eq!(
+            grouped_entries(&notifications, &HashSet::new()),
+            [
+                CenterEntry::Group {
+                    latest: 3,
+                    bundle: "a".into(),
+                    count: 2
+                },
+                CenterEntry::Notification(3),
+                CenterEntry::Notification(2),
+            ]
+        );
+        assert_eq!(
+            grouped_entries(&notifications, &HashSet::from(["a".into()])),
+            [
+                CenterEntry::Group {
+                    latest: 3,
+                    bundle: "a".into(),
+                    count: 2
+                },
+                CenterEntry::Notification(3),
+                CenterEntry::Notification(1),
+                CenterEntry::Notification(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn equal_timestamps_preserve_service_delivery_order_instead_of_process_id_order() {
+        assert_eq!(
+            grouped_entries(&[notice(1, "a", 20), notice(999, "b", 20)], &HashSet::new()),
+            [CenterEntry::Notification(1), CenterEntry::Notification(999)]
+        );
+    }
+
+    #[test]
+    fn notification_panel_fits_small_displays() {
+        for bounds in [
+            Rect::new(0.0, 0.0, 320.0, 240.0),
+            Rect::new(15.0, 20.0, 1440.0, 1024.0),
+        ] {
+            let panel = NotificationCenterLayer::<Rectangle>::panel(bounds);
+            assert!(panel.origin.x >= bounds.origin.x);
+            assert!(panel.origin.x + panel.size.width <= bounds.origin.x + bounds.size.width);
+            assert!(panel.origin.y + panel.size.height <= bounds.origin.y + bounds.size.height);
+        }
+    }
 
     #[test]
     fn banner_enters_from_above_and_returns_above_on_dismiss() {

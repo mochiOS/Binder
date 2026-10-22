@@ -25,9 +25,10 @@ pub(crate) fn view(
     let settings_menu_open = menu_open.clone();
 
     Menu::new()
+        .compact()
         .item(system_action_item(
-            "Lock Screen",
-            SystemAction::LockScreen,
+            "Power off",
+            SystemAction::ShutDown,
             Rc::clone(&platform),
             menu_open.clone(),
         ))
@@ -43,19 +44,13 @@ pub(crate) fn view(
             Rc::clone(&platform),
             menu_open.clone(),
         ))
-        .item(system_action_item(
-            "Shutdown",
-            SystemAction::ShutDown,
-            Rc::clone(&platform),
-            menu_open.clone(),
-        ))
-        .item(system_action_item(
-            "Logout",
-            SystemAction::LogOut,
-            platform,
-            menu_open,
-        ))
-        .separator()
+        .group()
+        .item(MenuItem::new("Settings").on_select(move || {
+            settings_menu_open.set(false);
+            if let Err(error) = settings_platform.borrow().open_system_settings() {
+                eprintln!("failed to open system settings: {error:?}");
+            }
+        }))
         .item(MenuItem::new("About").on_select(move || {
             about_menu_open.set(false);
 
@@ -81,15 +76,14 @@ pub(crate) fn view(
                 eprintln!("failed to launch About: {error:?}",);
             }
         }))
-        .item(MenuItem::new("Settings").on_select(move || {
-            settings_menu_open.set(false);
-
-            if let Err(error) = settings_platform.borrow().open_system_settings() {
-                eprintln!("failed to open system settings: {error:?}",);
-            }
-        }))
-        .separator()
+        .group()
         .item(MenuItem::new(session_user).enabled(false))
+        .item(system_action_item(
+            "Logout",
+            SystemAction::LogOut,
+            platform,
+            menu_open,
+        ))
 }
 
 fn system_action_item(

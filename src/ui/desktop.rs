@@ -25,7 +25,7 @@ use viewkit::{
 
 const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const LAUNCH_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
-const SYSTEM_OVERLAY_DAMAGE_HEIGHT: f32 = 170.0;
+const SYSTEM_OVERLAY_DAMAGE_HEIGHT: f32 = 400.0;
 const DOCK_DAMAGE_HEIGHT: f32 = 150.0;
 const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 
@@ -33,6 +33,7 @@ pub(crate) fn view(
     system_bar: State<SystemBarState>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     menu_open: State<bool>,
+    menu_interaction: Rc<super::popup_menu::PopupMenuInteraction>,
     control_center_open: State<bool>,
     notification_center_open: State<bool>,
     notification_center_interaction: Rc<super::notification_center::NotificationCenterInteraction>,
@@ -57,6 +58,7 @@ pub(crate) fn view(
     pending_app_activation: Rc<RefCell<super::app_library::PendingAppActivation>>,
     fast_poll_until: Rc<Cell<Option<Instant>>>,
     cursor_pointer: Rc<std::cell::Cell<Option<Point>>>,
+    cursor_initialized: Rc<Cell<bool>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, super::test::TestWindowState>>>,
     launch_failure_states: Rc<
         RefCell<HashMap<WindowId, super::launch_failure::LaunchFailureWindowState>>,
@@ -83,7 +85,6 @@ pub(crate) fn view(
                 menu_open.clone(),
                 control_center_open.clone(),
                 notification_center_open.clone(),
-                Rc::clone(&platform),
             )
             .height(super::desktop_metrics::SYSTEM_HEIGHT),
         )
@@ -128,15 +129,15 @@ pub(crate) fn view(
         Rc::clone(&launch_failure_states),
     );
 
-    let menu = super::menu::view(
-        Rc::clone(&platform),
-        menu_open.clone(),
-        windows.clone(),
-        session_user,
-    );
-
-    let root = super::app_library::AppLibraryLayer::new(
+    let notified_desktop = super::notification_center::NotificationCenterLayer::new(
         docked_desktop,
+        notification_center_open.clone(),
+        Rc::clone(&platform),
+        apps.clone(),
+        notification_center_interaction,
+    );
+    let root = super::app_library::AppLibraryLayer::new(
+        notified_desktop,
         Rc::clone(&platform),
         windows.clone(),
         apps.clone(),
@@ -154,26 +155,26 @@ pub(crate) fn view(
         dock_running_apps,
         app_switcher,
     );
-    let root = super::popup_menu::PopupMenu::new(root, menu, menu_open.clone());
     let root = super::context_menu::ContextMenuLayer::new(root, Rc::clone(&platform), context_menu);
     let root = super::control_center::ControlCenterLayer::new(
         root,
         control_center_open.clone(),
-        system_bar,
+        system_bar.clone(),
         control_center_preferences,
         control_center_interaction,
         Rc::clone(&platform),
-        windows,
+        windows.clone(),
         apps.clone(),
-        fast_poll_until,
+        Rc::clone(&fast_poll_until),
     );
-    let root = super::notification_center::NotificationCenterLayer::new(
-        root,
-        notification_center_open.clone(),
+    let os_menu = super::menu::view(
         Rc::clone(&platform),
-        apps.clone(),
-        notification_center_interaction,
+        menu_open.clone(),
+        windows.clone(),
+        session_user,
     );
+    let root =
+        super::popup_menu::PopupMenu::new(root, os_menu, menu_open.clone(), menu_interaction);
     let root = super::spotlight::SpotlightLayer::new(
         root,
         spotlight,
@@ -189,12 +190,17 @@ pub(crate) fn view(
 
     #[cfg(target_os = "mochios")]
     {
+        let _ = cursor_initialized;
         Box::new(root)
     }
 
     #[cfg(not(target_os = "mochios"))]
     {
-        Box::new(super::cursor::CursorLayer::new(root, cursor_pointer))
+        Box::new(super::cursor::CursorLayer::new(
+            root,
+            cursor_pointer,
+            cursor_initialized,
+        ))
     }
 }
 
@@ -413,7 +419,7 @@ impl View for PlatformRefreshView {
 
                 let mut focus_changed = Vec::new();
 
-                self.windows.update(|desktop| {
+                self.windows.update_for_repaint(|desktop| {
                     close_requests = desktop.take_pending_close_requests();
 
                     (resized, focus_changed) = desktop.take_window_state_notifications();

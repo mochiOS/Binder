@@ -16,6 +16,7 @@ pub struct BinderApp {
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     system_bar: State<SystemBarState>,
     mochios_menu_open: State<bool>,
+    menu_interaction: Rc<crate::ui::popup_menu::PopupMenuInteraction>,
     control_center_open: State<bool>,
     notification_center_open: State<bool>,
     notification_center_interaction:
@@ -40,6 +41,7 @@ pub struct BinderApp {
     pending_app_activation: Rc<RefCell<crate::ui::app_library::PendingAppActivation>>,
     fast_poll_until: Rc<Cell<Option<Instant>>>,
     cursor_pointer: Rc<Cell<Option<Point>>>,
+    cursor_initialized: Rc<Cell<bool>>,
     test_window_states: Rc<RefCell<HashMap<WindowId, crate::ui::test::TestWindowState>>>,
     launch_failure_states:
         Rc<RefCell<HashMap<WindowId, crate::ui::launch_failure::LaunchFailureWindowState>>>,
@@ -82,6 +84,7 @@ impl App for BinderApp {
             platform,
             system_bar: State::new(system_bar),
             mochios_menu_open: State::new(false),
+            menu_interaction: Rc::new(crate::ui::popup_menu::PopupMenuInteraction::default()),
             control_center_open: State::new(false),
             notification_center_open: State::new(false),
             notification_center_interaction: Rc::new(
@@ -114,6 +117,7 @@ impl App for BinderApp {
             )),
             fast_poll_until: Rc::new(Cell::new(None)),
             cursor_pointer: Rc::new(Cell::new(None)),
+            cursor_initialized: Rc::new(Cell::new(false)),
             test_window_states: Rc::new(RefCell::new(HashMap::new())),
             launch_failure_states: Rc::new(RefCell::new(HashMap::new())),
             context_menu,
@@ -132,10 +136,16 @@ impl App for BinderApp {
     }
 
     fn window(&self) -> WindowOptions {
+        #[cfg(not(target_os = "linux"))]
         let options = WindowOptions::new("Binder").size(1280.0, 800.0);
         #[cfg(target_os = "linux")]
         {
-            options.resizable(true).fullscreen(false)
+            WindowOptions::new(
+                "Binder - Ctrl + Alt + G: Release mouse | Click inside: Capture mouse",
+            )
+            .size(1280.0, 800.0)
+            .resizable(true)
+            .fullscreen(false)
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -157,6 +167,7 @@ impl App for BinderApp {
             self.system_bar.clone(),
             Rc::clone(&self.platform),
             self.mochios_menu_open.clone(),
+            Rc::clone(&self.menu_interaction),
             self.control_center_open.clone(),
             self.notification_center_open.clone(),
             Rc::clone(&self.notification_center_interaction),
@@ -179,6 +190,7 @@ impl App for BinderApp {
             Rc::clone(&self.pending_app_activation),
             Rc::clone(&self.fast_poll_until),
             Rc::clone(&self.cursor_pointer),
+            Rc::clone(&self.cursor_initialized),
             Rc::clone(&self.test_window_states),
             Rc::clone(&self.launch_failure_states),
             self.context_menu.clone(),

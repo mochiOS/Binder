@@ -27,6 +27,12 @@ fn translated(mut rect: Rect, origin: Point) -> Rect {
 fn place(command: &DrawCommand, bounds: Rect) -> DrawCommand {
     let mut command = command.clone();
     match &mut command {
+        DrawCommand::DrawContour { points, .. } => {
+            for point in points {
+                point.x += bounds.origin.x;
+                point.y += bounds.origin.y;
+            }
+        }
         DrawCommand::Clear { color } => {
             return DrawCommand::FillRect {
                 rect: bounds,
@@ -206,5 +212,35 @@ mod tests {
                 rect: Rect::new(102.0, 203.0, 4.0, 5.0)
             }
         );
+    }
+    #[test]
+    fn places_native_contour_points_inside_the_child_window() {
+        let command = DrawCommand::DrawContour {
+            points: vec![
+                Point::new(0.0, 0.0),
+                Point::new(30.0, 0.0),
+                Point::new(15.0, 10.0),
+            ],
+            fill: Color::WHITE,
+            stroke: Color::BLACK,
+            stroke_width: 1.0,
+        };
+        let DrawCommand::DrawContour {
+            points,
+            stroke_width,
+            ..
+        } = place(&command, Rect::new(100.0, 200.0, 300.0, 400.0))
+        else {
+            panic!()
+        };
+        assert_eq!(
+            points,
+            vec![
+                Point::new(100.0, 200.0),
+                Point::new(130.0, 200.0),
+                Point::new(115.0, 210.0)
+            ]
+        );
+        assert_eq!(stroke_width, 1.0);
     }
 }
