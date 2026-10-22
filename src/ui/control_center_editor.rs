@@ -1,7 +1,8 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::control_center_preferences::ControlCenterPreferences;
+use crate::control_center_preferences::{ControlCenterPreferences, StatusItemPlacement};
 use crate::platform::AppInfo;
 use viewkit::{
     draw_command::DrawCommand,
@@ -15,7 +16,7 @@ use super::control_center::{CustomizationItem, customization_items};
 
 const CONTENT_PADDING: f32 = 22.0;
 const INTRO_HEIGHT: f32 = 68.0;
-const ROW_HEIGHT: f32 = 58.0;
+const ROW_HEIGHT: f32 = 92.0;
 const ROW_GAP: f32 = 8.0;
 const CONTROL_SIZE: f32 = 32.0;
 
@@ -24,7 +25,6 @@ enum EditorHit {
     Row(String),
     MoveUp(String),
     MoveDown(String),
-    Toggle(String),
 }
 
 #[derive(Default)]
@@ -34,6 +34,7 @@ pub(crate) struct ControlCenterEditorInteraction {
     scroll_offset: f32,
     cached_apps: Vec<AppInfo>,
     cached_items: Vec<CustomizationItem>,
+    placements: BTreeMap<String, (State<usize>, SegmentedControlInteractionState)>,
 }
 
 pub(crate) fn view(
@@ -55,12 +56,18 @@ struct ControlCenterEditorView {
 }
 
 impl ControlCenterEditorView {
-    fn items(&self) -> Vec<(CustomizationItem, bool)> {
+    fn items(&self) -> Vec<(CustomizationItem, StatusItemPlacement)> {
         let apps = self.apps.get();
         let mut interaction = self.interaction.borrow_mut();
-        if interaction.cached_apps != apps {
+        if interaction.cached_items.is_empty() || interaction.cached_apps != apps {
             interaction.cached_items = customization_items(&apps);
             interaction.cached_apps = apps;
+            let ids: Vec<_> = interaction
+                .cached_items
+                .iter()
+                .map(|item| item.id.clone())
+                .collect();
+            interaction.placements.retain(|id, _| ids.contains(id));
         }
         let ordered = self
             .preferences
@@ -77,8 +84,8 @@ impl ControlCenterEditorView {
         items
             .into_iter()
             .map(|item| {
-                let hidden = preferences.is_hidden(&item.id);
-                (item, hidden)
+                let placement = preferences.placement(&item.id, item.default_placement);
+                (item, placement)
             })
             .collect()
     }
@@ -110,22 +117,58 @@ impl ControlCenterEditorView {
     }
 
     fn button_bounds(row: Rect, slot: usize) -> Rect {
-        let toggle_left = row.origin.x + row.size.width - 82.0;
         Rect::new(
-            toggle_left - (2 - slot.min(1)) as f32 * (CONTROL_SIZE + 6.0),
-            row.origin.y + (row.size.height - CONTROL_SIZE) / 2.0,
+            row.origin.x + row.size.width - 12.0 - (2 - slot.min(1)) as f32 * (CONTROL_SIZE + 6.0),
+            row.origin.y + 12.0,
             CONTROL_SIZE,
             CONTROL_SIZE,
         )
     }
-
     fn toggle_bounds(row: Rect) -> Rect {
         Rect::new(
-            row.origin.x + row.size.width - 82.0,
-            row.origin.y + (row.size.height - CONTROL_SIZE) / 2.0,
-            70.0,
-            CONTROL_SIZE,
+            row.origin.x + 12.0,
+            row.origin.y + 54.0,
+            (row.size.width - 24.0).max(0.0),
+            28.0,
         )
+    }
+    fn placement_control(&self, item: &CustomizationItem) -> SegmentedControl {
+        let current = self
+            .preferences
+            .borrow()
+            .placement(&item.id, item.default_placement);
+        let value = match current {
+            StatusItemPlacement::Hidden => 0,
+            StatusItemPlacement::Menu => 1,
+            StatusItemPlacement::Pinned => 2,
+        };
+        let (state, interaction) = self
+            .interaction
+            .borrow_mut()
+            .placements
+            .entry(item.id.clone())
+            .or_insert_with(|| (State::new(value), SegmentedControlInteractionState::new()))
+            .clone();
+        let preferences = self.preferences.clone();
+        let id = item.id.clone();
+        SegmentedControl::with_interaction(state.binding(), interaction)
+            .item(0, "Hidden")
+            .item(1, "Menu")
+            .item(2, "Pinned")
+            .accessibility_label(format!("{} placement", item.title))
+            .on_change(move |value| {
+                let placement = match value {
+                    0 => StatusItemPlacement::Hidden,
+                    2 => StatusItemPlacement::Pinned,
+                    _ => StatusItemPlacement::Menu,
+                };
+                let mut preferences = preferences.borrow_mut();
+                if preferences.set_placement(&id, placement) {
+                    if let Err(error) = preferences.save() {
+                        eprintln!("failed to save status item placement: {error}");
+                    }
+                }
+            })
     }
 
     fn hit(&self, bounds: Rect, position: Point) -> Option<EditorHit> {
@@ -140,9 +183,6 @@ impl ControlCenterEditorView {
             let row = Self::row_bounds(list, index, offset);
             if row.intersection(list).is_none() || !row.contains(position) {
                 continue;
-            }
-            if Self::toggle_bounds(row).contains(position) {
-                return Some(EditorHit::Toggle(item.id.clone()));
             }
             if Self::button_bounds(row, 0).contains(position) {
                 return Some(EditorHit::MoveUp(item.id.clone()));
@@ -168,10 +208,6 @@ impl ControlCenterEditorView {
             .map(|(item, _)| item.id.clone())
             .collect::<Vec<_>>();
         let changed = match (pressed, released) {
-            (EditorHit::Toggle(from), EditorHit::Toggle(to)) if from == to => {
-                let hidden = self.preferences.borrow().is_hidden(&from);
-                self.preferences.borrow_mut().set_hidden(&from, !hidden)
-            }
             (EditorHit::MoveUp(from), EditorHit::MoveUp(to)) if from == to => {
                 self.preferences.borrow_mut().move_by(&from, -1, &available)
             }
@@ -230,7 +266,7 @@ impl View for ControlCenterEditorView {
     }
 
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
-        Text::styled("Choose and arrange controls", TextRole::TitleMedium)
+        Text::styled("Status items", TextRole::TitleMedium)
             .weight(700)
             .color(Theme::current().shell.primary_text)
             .paint(
@@ -243,7 +279,7 @@ impl View for ControlCenterEditorView {
                 context,
             );
         Text::styled(
-            "Drag a row or use the arrows. Changes are saved automatically.",
+            "Drag to reorder. Pinned items also remain in the menu.",
             TextRole::Caption,
         )
         .color(Theme::current().shell.secondary_text)
@@ -265,7 +301,7 @@ impl View for ControlCenterEditorView {
         context
             .display_list
             .push(DrawCommand::PushClip { rect: list });
-        for (index, (item, hidden)) in items.iter().enumerate() {
+        for (index, (item, placement)) in items.iter().enumerate() {
             let row = Self::row_bounds(list, index, offset);
             if row.intersection(list).is_none() {
                 continue;
@@ -287,16 +323,18 @@ impl View for ControlCenterEditorView {
 
             let icon = Rect::new(row.origin.x + 12.0, row.origin.y + 9.0, 40.0, 40.0);
             Rectangle::new()
-                .color(RectangleColor::Custom(if *hidden {
-                    Theme::current().shell.control_hover
-                } else {
-                    Theme::current().colors.accent
-                }))
+                .color(RectangleColor::Custom(
+                    if *placement == StatusItemPlacement::Hidden {
+                        Theme::current().shell.control_hover
+                    } else {
+                        Theme::current().colors.accent
+                    },
+                ))
                 .radius(CornerRadius::Medium)
                 .paint(icon, context);
             Icon::new(item.symbol)
                 .size(18.0)
-                .color(if *hidden {
+                .color(if *placement == StatusItemPlacement::Hidden {
                     Theme::current().shell.primary_text
                 } else {
                     Color::WHITE
@@ -306,13 +344,23 @@ impl View for ControlCenterEditorView {
                 .weight(650)
                 .color(Theme::current().shell.primary_text)
                 .paint(
-                    Rect::new(row.origin.x + 64.0, row.origin.y + 8.0, 190.0, 22.0),
+                    Rect::new(
+                        row.origin.x + 64.0,
+                        row.origin.y + 8.0,
+                        (row.size.width - 170.0).max(0.0),
+                        22.0,
+                    ),
                     context,
                 );
             Text::styled(item.source.clone(), TextRole::Caption)
                 .color(Theme::current().shell.secondary_text)
                 .paint(
-                    Rect::new(row.origin.x + 64.0, row.origin.y + 30.0, 190.0, 18.0),
+                    Rect::new(
+                        row.origin.x + 64.0,
+                        row.origin.y + 30.0,
+                        (row.size.width - 170.0).max(0.0),
+                        18.0,
+                    ),
                     context,
                 );
 
@@ -333,50 +381,8 @@ impl View for ControlCenterEditorView {
                 context,
             );
 
-            let toggle = Self::toggle_bounds(row);
-            let toggle_hit = EditorHit::Toggle(item.id.clone());
-            let toggle_hovered = self.interaction.borrow().hovered.as_ref() == Some(&toggle_hit);
-            Rectangle::new()
-                .color(RectangleColor::Custom(if toggle_hovered {
-                    Theme::current().shell.control_hover
-                } else {
-                    Theme::current().shell.item_enabled
-                }))
-                .radius(CornerRadius::Medium)
-                .paint(toggle, context);
-            Icon::new(if *hidden {
-                SymbolName::Plus
-            } else {
-                SymbolName::Minus
-            })
-            .size(13.0)
-            .color(if *hidden {
-                Theme::current().colors.accent
-            } else {
-                Theme::current().shell.alert
-            })
-            .paint(
-                Rect::new(
-                    toggle.origin.x + 6.0,
-                    toggle.origin.y,
-                    22.0,
-                    toggle.size.height,
-                ),
-                context,
-            );
-            Text::styled(if *hidden { "Add" } else { "Hide" }, TextRole::Caption)
-                .weight(650)
-                .color(Theme::current().shell.primary_text)
-                .alignment(TextAlignment::Center)
-                .paint(
-                    Rect::new(
-                        toggle.origin.x + 25.0,
-                        toggle.origin.y,
-                        toggle.size.width - 29.0,
-                        toggle.size.height,
-                    ),
-                    context,
-                );
+            self.placement_control(item)
+                .paint(Self::toggle_bounds(row), context);
         }
         context.display_list.push(DrawCommand::PopClip);
 
@@ -409,6 +415,35 @@ impl View for ControlCenterEditorView {
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
+        let list = Self::list_bounds(bounds);
+        let items = self.items();
+        let offset = self
+            .interaction
+            .borrow()
+            .scroll_offset
+            .clamp(0.0, Self::maximum_scroll(list, items.len()));
+        let mut placement_event = event.clone();
+        if event.position().is_some_and(|p| !list.contains(p)) {
+            match &mut placement_event {
+                ViewEvent::PointerPressed { position, .. }
+                | ViewEvent::PointerReleased { position, .. }
+                | ViewEvent::PointerMoved { position } => {
+                    *position = Point::new(list.origin.x - 1000.0, list.origin.y - 1000.0)
+                }
+                _ => {}
+            }
+        }
+        for (index, (item, _)) in items.iter().enumerate() {
+            let row = Self::row_bounds(list, index, offset);
+            let result = self.placement_control(item).handle_event(
+                Self::toggle_bounds(row),
+                &placement_event,
+                context,
+            );
+            if result.is_consumed() {
+                return result;
+            }
+        }
         match event {
             ViewEvent::PointerMoved { position } => {
                 let hit = self.hit(bounds, *position);
@@ -456,5 +491,87 @@ impl View for ControlCenterEditorView {
             _ => {}
         }
         EventResult::Consumed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use viewkit::typography::TextMeasurer;
+    static NEXT: AtomicUsize = AtomicUsize::new(1);
+    #[test]
+    fn native_placement_segments_update_shared_preferences_and_persist_every_choice() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "mochios-status-placement-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ))
+            .join("controls.conf");
+        let preferences = Rc::new(RefCell::new(ControlCenterPreferences::with_test_storage(
+            path.clone(),
+        )));
+        let interaction = Rc::new(RefCell::new(ControlCenterEditorInteraction::default()));
+        let editor = ControlCenterEditorView {
+            preferences: preferences.clone(),
+            interaction: interaction.clone(),
+            apps: State::new(Vec::new()),
+        };
+        let items = editor.items();
+        assert_eq!(items.len(), 4);
+        let bounds = Rect::new(0.0, 0.0, 540.0, 550.0);
+        let row = ControlCenterEditorView::row_bounds(
+            ControlCenterEditorView::list_bounds(bounds),
+            0,
+            0.0,
+        );
+        let selector = ControlCenterEditorView::toggle_bounds(row);
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        for (index, placement, prefix) in [
+            (0, StatusItemPlacement::Hidden, "hidden"),
+            (1, StatusItemPlacement::Menu, "menu"),
+            (2, StatusItemPlacement::Pinned, "pinned"),
+        ] {
+            let position = Point::new(
+                selector.origin.x + selector.size.width * (index as f32 + 0.5) / 3.0,
+                selector.origin.y + selector.size.height * 0.5,
+            );
+            editor.handle_event(
+                bounds,
+                &ViewEvent::PointerPressed {
+                    position,
+                    button: PointerButton::Primary,
+                },
+                &mut context,
+            );
+            editor.handle_event(
+                bounds,
+                &ViewEvent::PointerReleased {
+                    position,
+                    button: PointerButton::Primary,
+                },
+                &mut context,
+            );
+            assert_eq!(
+                preferences
+                    .borrow()
+                    .placement("builtin.input", StatusItemPlacement::Pinned),
+                placement
+            );
+            assert!(
+                std::fs::read_to_string(&path)
+                    .unwrap()
+                    .contains(&format!("{prefix}=builtin.input"))
+            );
+            assert_eq!(
+                interaction.borrow().placements["builtin.input"].0.get(),
+                index
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(path.parent().unwrap());
     }
 }
