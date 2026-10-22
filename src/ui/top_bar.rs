@@ -56,8 +56,9 @@ pub(crate) fn view(
     let menu = menu_open;
     let controls = control_open;
     let status = Button::new("")
-        .content(StatusContent)
         .style(ButtonStyle::Ghost)
+        .radius(CornerRadius::Full)
+        .shadow(ShadowStyle::None)
         .accessibility_label("Control Center")
         .on_click(move || {
             controls.set(!controls.get());
@@ -69,7 +70,10 @@ pub(crate) fn view(
         status,
         input,
         notifications: notification_button,
-        clock: Clock(state),
+        clock: Button::new("")
+            .content(Clock(state))
+            .style(ButtonStyle::Ghost)
+            .accessibility_label("Date and time"),
     }
 }
 
@@ -78,7 +82,7 @@ struct SystemBar {
     status: Button,
     input: Button,
     notifications: Button,
-    clock: Clock,
+    clock: Button,
 }
 fn logo_frame(bounds: Rect) -> Rect {
     Rect::new(
@@ -98,12 +102,13 @@ impl View for SystemBar {
             .color(RectangleColor::Custom(Color::rgba(255, 255, 255, 64)))
             .radius(CornerRadius::Full)
             .paint(status_frame(bounds), context);
-        self.status.paint(controls_frame(bounds), context);
+        StatusContent.paint(controls_frame(bounds), context);
         self.input.paint(input_frame(bounds), context);
         self.notifications
             .paint(status_content_frames(status_frame(bounds))[2], context);
         self.clock
             .paint(status_content_frames(status_frame(bounds))[0], context);
+        self.status.paint(status_frame(bounds), context);
     }
     fn handle_event(
         &self,
@@ -111,24 +116,34 @@ impl View for SystemBar {
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
+        let frames = status_content_frames(status_frame(bounds));
+        // Give individual controls priority while cancelling a background press
+        // if it is released over one of those independent controls.
+        let reserved = event.position().is_some_and(|p| {
+            frames[0].contains(p) || input_frame(bounds).contains(p) || frames[2].contains(p)
+        });
+        let mut background_event = event.clone();
+        if reserved {
+            let outside = Point::new(bounds.origin.x - 100.0, bounds.origin.y - 100.0);
+            match &mut background_event {
+                ViewEvent::PointerMoved { position }
+                | ViewEvent::PointerPressed { position, .. }
+                | ViewEvent::PointerReleased { position, .. } => *position = outside,
+                _ => {}
+            }
+        }
+        let background = self
+            .status
+            .handle_event(status_frame(bounds), &background_event, context);
         let input = self.input.handle_event(input_frame(bounds), event, context);
-        if input == EventResult::Consumed {
-            return input;
-        }
-        let notifications = self.notifications.handle_event(
-            status_content_frames(status_frame(bounds))[2],
-            event,
-            context,
-        );
-        if notifications == EventResult::Consumed {
-            return notifications;
-        }
+        let notifications = self.notifications.handle_event(frames[2], event, context);
+        let clock = self.clock.handle_event(frames[0], event, context);
         self.logo
             .handle_event(logo_frame(bounds), event, context)
-            .merge(
-                self.status
-                    .handle_event(controls_frame(bounds), event, context),
-            )
+            .merge(input)
+            .merge(notifications)
+            .merge(clock)
+            .merge(background)
     }
 }
 fn controls_frame(bounds: Rect) -> Rect {
@@ -368,7 +383,7 @@ mod alignment_tests {
         let bar = SystemBar {
             logo: Button::new(""),
             notifications: Button::new(""),
-            clock: Clock(State::new(SystemBarState::default())),
+            clock: Button::new("").content(Clock(State::new(SystemBarState::default()))),
             input: Button::new("").on_click(move || toggle_calls.set(toggle_calls.get() + 1)),
             status: Button::new("").on_click(move || control_calls.set(control_calls.get() + 1)),
         };
@@ -398,6 +413,66 @@ mod alignment_tests {
         assert_eq!(toggles.get(), 1);
         assert_eq!(controls.get(), 1);
     }
+    #[test]
+    fn whole_pill_gaps_open_controls_but_independent_items_cancel_background_presses() {
+        let count = Rc::new(Cell::new(0));
+        let clicks = count.clone();
+        let bar = SystemBar {
+            logo: Button::new(""),
+            input: Button::new(""),
+            notifications: Button::new(""),
+            clock: Button::new(""),
+            status: Button::new("")
+                .radius(CornerRadius::Full)
+                .on_click(move || clicks.set(clicks.get() + 1)),
+        };
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
+        let pill = status_frame(bounds);
+        let gap = Point::new(pill.origin.x + 134.0, pill.origin.y + 17.0);
+        let ime = input_frame(bounds);
+        let ime = Point::new(ime.origin.x + ime.size.width * 0.5, ime.origin.y + 17.0);
+        for (press, release) in [(gap, ime), (gap, gap)] {
+            bar.handle_event(
+                bounds,
+                &ViewEvent::PointerPressed {
+                    position: press,
+                    button: PointerButton::Primary,
+                },
+                &mut context,
+            );
+            bar.handle_event(
+                bounds,
+                &ViewEvent::PointerReleased {
+                    position: release,
+                    button: PointerButton::Primary,
+                },
+                &mut context,
+            );
+        }
+        assert_eq!(count.get(), 1);
+        let corner = Point::new(pill.origin.x, pill.origin.y);
+        bar.handle_event(
+            bounds,
+            &ViewEvent::PointerPressed {
+                position: corner,
+                button: PointerButton::Primary,
+            },
+            &mut context,
+        );
+        bar.handle_event(
+            bounds,
+            &ViewEvent::PointerReleased {
+                position: corner,
+                button: PointerButton::Primary,
+            },
+            &mut context,
+        );
+        assert_eq!(count.get(), 1);
+    }
+
     #[test]
     fn status_items_share_the_pill_center_at_any_origin_and_height() {
         for bounds in [
