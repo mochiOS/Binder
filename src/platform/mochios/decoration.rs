@@ -1,7 +1,7 @@
 use std::fmt;
 
-use mochi_user_syscall as syscall;
 use mochi_user_platform as platform;
+use mochi_user_syscall as syscall;
 #[path = "decoration_buffer.rs"]
 mod buffer;
 use buffer::TitleBarBuffer;
@@ -229,8 +229,7 @@ fn create_decoration(
     let reply = ipc_call(compositor, &create)?;
     let surface = read_u64(&reply, 4).ok_or(DecorationError(5))?;
     let interaction = WindowInteraction::default();
-    let buffer =
-        attach_title_bar_buffer(compositor, surface, width, title.clone(), interaction)?;
+    let buffer = attach_title_bar_buffer(compositor, surface, width, title.clone(), interaction)?;
     token_request(compositor, OP_DAMAGE, surface)?;
 
     let mut attach = [0u8; 36];

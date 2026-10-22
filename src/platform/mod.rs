@@ -297,6 +297,7 @@ pub trait DesktopPlatform {
         Vec::new()
     }
 
+    /// 通知サービスの配信順で、新しい通知を先頭に返します。
     fn notifications(&self) -> Vec<UserNotification> {
         Vec::new()
     }

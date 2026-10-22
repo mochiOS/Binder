@@ -368,7 +368,10 @@ fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), Platfo
         | syscall::HANDLE_RIGHT_DUPLICATE
         | syscall::HANDLE_RIGHT_TRANSFER;
     let message = mochi_user_platform::ipc::call_object_handles(
-        destination, &request, &mut reply, &mut handles,
+        destination,
+        &request,
+        &mut reply,
+        &mut handles,
     )
     .map_err(|error| {
         eprintln!("capability.service app launch request failed: {error:?}");

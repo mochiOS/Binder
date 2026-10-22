@@ -63,6 +63,8 @@ struct ManagedChild {
 }
 pub struct LinuxPlatform {
     system_bar: SystemBarState,
+    last_system_bar_refresh: Instant,
+    app_catalogue: RefCell<(Instant, Vec<AppInfo>)>,
     preview: RefCell<preview::PreviewDesktop>,
     notifications: RefCell<Vec<super::UserNotification>>,
     focus_enabled: bool,
@@ -88,6 +90,8 @@ impl LinuxPlatform {
     fn try_new() -> Result<Self, PlatformError> {
         Ok(Self {
             system_bar: read_system_bar_state().unwrap_or_default(),
+            last_system_bar_refresh: Instant::now(),
+            app_catalogue: RefCell::new((Instant::now(), read_apps())),
 
             transport: LinuxIpcServer::new()?,
             preview: RefCell::new(preview::PreviewDesktop::new().map_err(|_| PlatformError::TransportFailure)?),
@@ -387,19 +391,32 @@ impl DesktopPlatform for LinuxPlatform {
 
     fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError> {
         let mut notifications = self.notifications.borrow_mut();
-        let id = notifications.iter().map(|item| item.id).max().unwrap_or(0) + 1;
-        notifications.push(super::UserNotification {
-            id,
-            created_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            read: false,
-            bundle_id: "org.mochios.binder".into(),
-            title: format!("{action:?}"),
-            body: "This system action was requested in the Linux preview.".into(),
-        });
+        let id = notifications
+            .iter()
+            .map(|item| item.id)
+            .filter(|id| id >> 32 == 0)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        notifications.insert(
+            0,
+            super::UserNotification {
+                id,
+                created_at: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                read: false,
+                bundle_id: "org.mochios.binder".into(),
+                title: format!("{action:?}"),
+                body: "This system action was requested in the Linux preview.".into(),
+            },
+        );
         Ok(())
+    }
+
+    fn control_center_cards(&self) -> Vec<super::ControlCenterCard> {
+        self.preview.borrow().control_center_cards()
     }
 
     fn notifications(&self) -> Vec<super::UserNotification> {
@@ -616,6 +633,19 @@ impl DesktopPlatform for LinuxPlatform {
             .borrow_mut()
             .poll()
             .map_err(|_| PlatformError::TransportFailure)?;
+        let posted = std::mem::take(&mut self.preview.borrow_mut().posted_notifications);
+        let mut notifications_changed = false;
+        for notification in posted {
+            let notifications = self.notifications.get_mut();
+            if notifications.iter().any(|item| item.id == notification.id) {
+                continue;
+            }
+            if notifications.len() >= 128 {
+                notifications.pop();
+            }
+            notifications.insert(0, notification);
+            notifications_changed = true;
+        }
         self.reap_exited_children()?;
 
         let allowed_processes: HashSet<ProcessId> = self.children.keys().copied().collect();
@@ -626,11 +656,18 @@ impl DesktopPlatform for LinuxPlatform {
             self.handle_transport_event(event);
         }
 
+        // IPC and window updates run every frame; system status does not need
+        // a synchronous IME connection and clock lookup at that frequency.
+        if self.last_system_bar_refresh.elapsed() < Duration::from_millis(100) {
+            return Ok(notifications_changed);
+        }
+        self.last_system_bar_refresh = Instant::now();
         let mut next = read_system_bar_state()?;
         next.volume = self.system_bar.volume.clone();
         next.network = self.system_bar.network.clone();
+        next.notifications = self.system_bar_state()?.notifications;
 
-        let changed = next != self.system_bar;
+        let changed = next != self.system_bar || notifications_changed;
 
         if changed {
             self.system_bar = next;
@@ -640,7 +677,11 @@ impl DesktopPlatform for LinuxPlatform {
     }
 
     fn get_apps(&self) -> Vec<AppInfo> {
-        read_apps()
+        let mut catalogue = self.app_catalogue.borrow_mut();
+        if catalogue.0.elapsed() >= Duration::from_secs(1) {
+            *catalogue = (Instant::now(), read_apps());
+        }
+        catalogue.1.clone()
     }
 
     fn launch_app(&mut self, app: &AppInfo) -> Result<ProcessId, PlatformError> {
@@ -708,6 +749,7 @@ pub(super) fn run_internal_process(entry: &str) -> Result<(), PlatformError> {
 fn read_system_bar_state() -> Result<SystemBarState, PlatformError> {
     Ok(SystemBarState {
         clock: read_clock()?,
+        japanese_input: viewkit::platform::input_method::enabled().unwrap_or(false),
         network: super::NetworkState::Connected {
             network_name: Some("Preview Network".into()),
             signal_strength: Some(85),
