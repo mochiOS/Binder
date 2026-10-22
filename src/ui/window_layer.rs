@@ -27,8 +27,8 @@ pub(crate) fn window_work_area(bounds: Rect) -> Rect {
     let width = bounds.size.width.max(1.0);
     let height = bounds.size.height.max(1.0);
     let side_inset = 20.0_f32.min((width - 1.0) / 2.0);
-    let top_inset = (DESKTOP_TOP_INSET + 20.0).min(height - 1.0);
-    // Windows may occupy the Dock region; the Dock slides away on overlap.
+    let top_inset = 0.0;
+    // StatusArea is painted beneath windows; neither it nor the Dock reserves space.
     let desired_bottom_inset: f32 = 16.0;
     let bottom_inset = desired_bottom_inset.min(height - top_inset - 1.0);
     Rect::new(
@@ -152,7 +152,7 @@ where
                 .map(|window| window.frame)
         })?;
         let minimum_x = bounds.origin.x;
-        let minimum_y = bounds.origin.y + DESKTOP_TOP_INSET;
+        let minimum_y = bounds.origin.y;
         let maximum_x = (bounds.origin.x + bounds.size.width - previous.size.width).max(minimum_x);
         let maximum_y =
             (bounds.origin.y + bounds.size.height - previous.size.height).max(minimum_y);
@@ -281,12 +281,7 @@ where
     }
 
     fn desktop_work_area(bounds: Rect) -> Rect {
-        Rect::new(
-            bounds.origin.x,
-            bounds.origin.y + DESKTOP_TOP_INSET,
-            bounds.size.width,
-            (bounds.size.height - DESKTOP_TOP_INSET).max(0.0),
-        )
+        bounds
     }
 
     fn resize_edge_at(frame: Rect, position: Point) -> Option<ResizeEdge> {
@@ -1030,6 +1025,98 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use viewkit::{draw_command::DisplayList, typography::TextMeasurer};
+
+    struct StatusProbe(Rc<Cell<usize>>);
+    impl View for StatusProbe {
+        fn measure(&self, c: Constraints, _: &mut MeasureContext<'_>) -> Size {
+            c.constrain(Size::new(1280.0, 800.0))
+        }
+        fn paint(&self, _: Rect, _: &mut PaintContext<'_>) {}
+        fn handle_event(&self, _: Rect, _: &ViewEvent, _: &mut EventContext<'_>) -> EventResult {
+            self.0.set(self.0.get() + 1);
+            EventResult::Ignored
+        }
+    }
+
+    #[test]
+    fn windows_reach_screen_top_survive_paint_and_take_input_before_status_area() {
+        let bounds = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        let mut desktop = DesktopWindows::default();
+        let (id, _) =
+            desktop.open_test(crate::platform::ProcessId(1), "Test".into(), 640, 480, true);
+        let origin = desktop.windows[0].frame.origin;
+        let calls = Rc::new(Cell::new(0));
+        let layer = WindowLayer::new(
+            StatusProbe(calls.clone()),
+            State::new(desktop),
+            State::new(None),
+            State::new(None),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::new(RefCell::new(HashMap::new())),
+            Rc::new(RefCell::new(ControlCenterPreferences::default())),
+            Rc::new(RefCell::new(
+                super::super::control_center_editor::ControlCenterEditorInteraction::default(),
+            )),
+            State::new(Vec::new()),
+        );
+        layer.move_dragged_window(
+            bounds,
+            WindowDrag {
+                window: id,
+                pointer_origin: origin,
+                window_origin: origin,
+            },
+            Point::new(origin.x, -100.0),
+        );
+        assert_eq!(layer.windows.get().windows[0].frame.origin.y, 0.0);
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut list = DisplayList::new();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
+        );
+        assert_eq!(layer.windows.get().windows[0].frame.origin.y, 0.0);
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        layer.handle_event(
+            bounds,
+            &ViewEvent::PointerMoved {
+                position: Point::new(origin.x + 100.0, 20.0),
+            },
+            &mut context,
+        );
+        assert_eq!(
+            calls.get(),
+            0,
+            "covered StatusArea must not receive pointer input"
+        );
+        layer.handle_event(
+            bounds,
+            &ViewEvent::PointerMoved {
+                position: Point::new(100.0, 20.0),
+            },
+            &mut context,
+        );
+        assert_eq!(calls.get(), 1, "uncovered StatusArea remains interactive");
+        layer.resize_window(
+            bounds,
+            WindowResize {
+                window: id,
+                edge: ResizeEdge::Top,
+                pointer_origin: Point::new(origin.x, 100.0),
+                frame_origin: Point::new(origin.x, 100.0),
+                frame_size: Size::new(640.0, 480.0),
+            },
+            Point::new(origin.x, -100.0),
+        );
+        assert_eq!(layer.windows.get().windows[0].frame.origin.y, 0.0);
+        layer.windows.update(|desktop| {
+            desktop.toggle_maximize(id, WindowLayer::<StatusProbe>::desktop_work_area(bounds))
+        });
+        assert_eq!(layer.windows.get().windows[0].frame, bounds);
+    }
 
     #[test]
     fn initial_work_area_stays_inside_even_a_small_display() {
