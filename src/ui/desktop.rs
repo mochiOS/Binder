@@ -85,6 +85,9 @@ pub(crate) fn view(
                 menu_open.clone(),
                 control_center_open.clone(),
                 notification_center_open.clone(),
+                apps.clone(),
+                Rc::clone(&control_center_preferences),
+                Rc::clone(&control_center_interaction),
             )
             .height(super::desktop_metrics::SYSTEM_HEIGHT),
         )
@@ -159,6 +162,7 @@ pub(crate) fn view(
     let root = super::control_center::ControlCenterLayer::new(
         root,
         control_center_open.clone(),
+        notification_center_open.clone(),
         system_bar.clone(),
         control_center_preferences,
         control_center_interaction,

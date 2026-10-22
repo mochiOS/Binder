@@ -1,6 +1,6 @@
 use super::desktop_metrics as metrics;
 use std::cell::{Cell, RefCell};
-use std::fs;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -20,28 +20,12 @@ const PANEL_WIDTH: f32 = 300.0;
 const PANEL_MARGIN: f32 = metrics::CHROME_RIGHT;
 const PANEL_TOP: f32 = metrics::CONTROL_TOP;
 const PANEL_PADDING: f32 = 16.0;
-const MAX_APP_ITEMS: usize = 8;
 const TILE_LABEL_WIDTH: f32 = 135.0;
 const TILE_LABEL_GAP: f32 = 10.0;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ItemAction {
-    ToggleInput,
-    ToggleFocus,
-    ShowNetwork,
-    OpenSettings,
-    Lock,
-    OpenApplication(String),
-    ShowApplicationCard { bundle_id: String, item_id: String },
-}
-
-#[derive(Clone, Debug)]
-struct Item {
-    id: String,
-    title: String,
-    symbol: SymbolName,
-    action: ItemAction,
-}
+#[cfg(test)]
+use super::status_items::parse_app_items;
+use super::status_items::{self, Item, ItemAction, read_app_items};
 
 #[derive(Clone, Debug)]
 pub(crate) struct CustomizationItem {
@@ -49,6 +33,7 @@ pub(crate) struct CustomizationItem {
     pub(crate) title: String,
     pub(crate) source: String,
     pub(crate) symbol: SymbolName,
+    pub(crate) default_placement: appcore::StatusItemPlacement,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,12 +42,6 @@ enum Hit {
     Back,
     Mute,
     Item { id: String },
-}
-
-#[derive(Default)]
-struct AppItemCache {
-    apps: Vec<AppInfo>,
-    items: Vec<Item>,
 }
 
 /// Grid/detail share a reversible transition; retain the outgoing detail until its last frame.
@@ -107,6 +86,9 @@ fn navigation_transform(amount: f32, detail: bool, distance: f32) -> PaintTransf
 }
 
 pub(crate) struct ControlCenterInteraction {
+    pub(crate) pending_status_item: Option<String>,
+    pub(crate) status_buttons: BTreeMap<String, ButtonInteractionState>,
+    edit_button: ButtonInteractionState,
     transition: VisibilityTransition,
     navigation: DetailNavigation,
     navigation_presented: Option<(bool, PaintTransform)>,
@@ -124,6 +106,9 @@ pub(crate) struct ControlCenterInteraction {
 impl Default for ControlCenterInteraction {
     fn default() -> Self {
         Self {
+            pending_status_item: None,
+            status_buttons: BTreeMap::new(),
+            edit_button: ButtonInteractionState::new(),
             transition: VisibilityTransition::default(),
             navigation: DetailNavigation::default(),
             navigation_presented: None,
@@ -144,6 +129,7 @@ impl Default for ControlCenterInteraction {
 pub(crate) struct ControlCenterLayer<C> {
     content: C,
     open: State<bool>,
+    notification_open: State<bool>,
     system_bar: State<SystemBarState>,
     preferences: Rc<RefCell<ControlCenterPreferences>>,
     interaction: Rc<RefCell<ControlCenterInteraction>>,
@@ -151,7 +137,6 @@ pub(crate) struct ControlCenterLayer<C> {
     windows: State<DesktopWindows>,
     apps: State<Vec<AppInfo>>,
     fast_poll_until: Rc<Cell<Option<Instant>>>,
-    app_item_cache: RefCell<AppItemCache>,
     volume_level: State<f32>,
     volume_interaction: SliderInteractionState,
     detail: State<Option<ControlCenterDetail>>,
@@ -162,6 +147,7 @@ pub(crate) struct ControlCenterLayer<C> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ControlCenterDetail {
     Network,
+    Battery,
     Application {
         bundle_id: String,
         item_id: String,
@@ -174,6 +160,7 @@ impl<C: View> ControlCenterLayer<C> {
     pub(crate) fn new(
         content: C,
         open: State<bool>,
+        notification_open: State<bool>,
         system_bar: State<SystemBarState>,
         preferences: Rc<RefCell<ControlCenterPreferences>>,
         interaction: Rc<RefCell<ControlCenterInteraction>>,
@@ -191,6 +178,7 @@ impl<C: View> ControlCenterLayer<C> {
         Self {
             content,
             open,
+            notification_open,
             system_bar,
             preferences,
             interaction,
@@ -198,7 +186,6 @@ impl<C: View> ControlCenterLayer<C> {
             windows,
             apps,
             fast_poll_until,
-            app_item_cache: RefCell::new(AppItemCache::default()),
             volume_level,
             volume_interaction,
             detail,
@@ -212,14 +199,7 @@ impl<C: View> ControlCenterLayer<C> {
     }
 
     fn cached_app_items(&self) -> Vec<Item> {
-        self.apps.with(|apps| {
-            let mut cache = self.app_item_cache.borrow_mut();
-            if cache.apps != *apps {
-                cache.items = apps.iter().flat_map(read_app_items).collect();
-                cache.apps.clone_from(apps);
-            }
-            cache.items.clone()
-        })
+        status_items::catalog(&self.apps.get())
     }
 
     fn ordered_items(&self) -> Vec<Item> {
@@ -256,7 +236,8 @@ impl<C: View> ControlCenterLayer<C> {
             );
         }
         let height = metrics::CONTROL_WIDTH
-            + visible.saturating_sub(5).div_ceil(3) as f32 * metrics::CONTROL_PITCH;
+            + visible.saturating_sub(5).div_ceil(3) as f32 * metrics::CONTROL_PITCH
+            + 40.0;
         Rect::new(
             bounds.origin.x
                 + (bounds.size.width - metrics::CONTROL_WIDTH - metrics::CHROME_RIGHT).max(0.0),
@@ -264,6 +245,41 @@ impl<C: View> ControlCenterLayer<C> {
             metrics::CONTROL_WIDTH.min(bounds.size.width),
             height,
         )
+    }
+
+    fn edit_rect(panel: Rect) -> Rect {
+        Rect::new(
+            panel.origin.x,
+            panel.origin.y + panel.size.height - 32.0,
+            panel.size.width,
+            28.0,
+        )
+    }
+    fn editor_button(&self) -> Button {
+        let windows = self.windows.clone();
+        let open = self.open.clone();
+        let preferences = self.preferences.clone();
+        let apps = self.apps.clone();
+        Button::with_interaction_and_label(
+            self.interaction.borrow().edit_button.clone(),
+            "Edit status items",
+        )
+        .style(ButtonStyle::Ghost)
+        .shadow(ShadowStyle::None)
+        .on_click(move || {
+            let available = customization_items(&apps.get())
+                .into_iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>();
+            let mut preferences = preferences.borrow_mut();
+            if preferences.reconcile(&available) {
+                if let Err(error) = preferences.save() {
+                    eprintln!("failed to save status preferences: {error}");
+                }
+            }
+            windows.update(|windows| windows.open_control_center_editor());
+            open.set(false);
+        })
     }
 
     fn back_rect(panel: Rect) -> Rect {
@@ -377,6 +393,11 @@ impl<C: View> ControlCenterLayer<C> {
                     }
                     Err(error) => eprintln!("failed to change Focus mode: {error:?}"),
                 }
+            }
+            ItemAction::ShowBattery => self.detail.set(Some(ControlCenterDetail::Battery)),
+            ItemAction::ShowNotifications => {
+                self.notification_open.set(true);
+                self.open.set(false);
             }
             ItemAction::ShowNetwork => {
                 self.network_enabled
@@ -635,6 +656,89 @@ impl<C: View> ControlCenterLayer<C> {
         }
     }
 
+    fn paint_battery_detail(&self, panel: Rect, context: &mut PaintContext<'_>) {
+        let back = Self::back_rect(panel);
+        let mut node = viewkit::accessibility::AccessibilityNode::new(
+            viewkit::accessibility::AccessibilityRole::Button,
+            back,
+        );
+        node.label = Some("Back".into());
+        node.focusable = true;
+        node.focused = self.interaction.borrow().focused == Some(Hit::Back);
+        context.record_accessibility(node);
+        Icon::new(SymbolName::ChevronLeft)
+            .size(12.0)
+            .color(context.theme.colors.text_primary)
+            .paint(back, context);
+        Text::styled("Battery", TextRole::TitleSmall)
+            .alignment(TextAlignment::Center)
+            .paint(
+                Rect::new(
+                    panel.origin.x + 44.0,
+                    panel.origin.y + 12.0,
+                    panel.size.width - 88.0,
+                    28.0,
+                ),
+                context,
+            );
+        let battery = self.system_bar.get().battery;
+        let value = if battery.available {
+            format!("{}%", battery.percentage.min(100))
+        } else {
+            "Battery information is unavailable.".into()
+        };
+        Text::styled(value, TextRole::TitleSmall).paint(
+            Rect::new(
+                panel.origin.x + PANEL_PADDING,
+                panel.origin.y + 66.0,
+                panel.size.width - PANEL_PADDING * 2.0,
+                54.0,
+            ),
+            context,
+        );
+        if battery.available {
+            Text::caption(if battery.charging {
+                "Charging"
+            } else {
+                "On battery power"
+            })
+            .paint(
+                Rect::new(
+                    panel.origin.x + PANEL_PADDING,
+                    panel.origin.y + 126.0,
+                    panel.size.width - PANEL_PADDING * 2.0,
+                    24.0,
+                ),
+                context,
+            );
+        }
+    }
+
+    fn dispatch_status_request(&self, context: &mut EventContext<'_>) {
+        let request = self.interaction.borrow_mut().pending_status_item.take();
+        if let Some(id) = request {
+            if let Some(item) = self
+                .items()
+                .into_iter()
+                .find(|item| item.id == id && !self.preferences.borrow().is_hidden(&id))
+            {
+                self.open.set(true);
+                let keeps_open = matches!(
+                    item.action,
+                    ItemAction::ShowNetwork
+                        | ItemAction::ShowBattery
+                        | ItemAction::ShowApplicationCard { .. }
+                );
+                self.activate(&item);
+                if !keeps_open {
+                    self.open.set(false);
+                    self.detail.set(None);
+                }
+            }
+            context.request_redraw();
+        }
+    }
+
     fn paint_application_detail(
         &self,
         panel: Rect,
@@ -853,6 +957,7 @@ impl<C: View> ControlCenterLayer<C> {
                 .paint(panel, context);
             match detail {
                 ControlCenterDetail::Network => self.paint_network_detail(panel, context),
+                ControlCenterDetail::Battery => self.paint_battery_detail(panel, context),
                 ControlCenterDetail::Application {
                     bundle_id,
                     item_id,
@@ -873,6 +978,7 @@ impl<C: View> ControlCenterLayer<C> {
         for (index, item) in visible.iter().enumerate() {
             self.paint_tile(item, Self::tile_rect(panel, index, start_y), context);
         }
+        self.editor_button().paint(Self::edit_rect(panel), context);
     }
 }
 
@@ -1013,13 +1119,17 @@ impl<C: View> View for ControlCenterLayer<C> {
         if !self.open.get() {
             self.volume_interaction.reset();
             self.detail.set_if_changed(None);
-            return self.content.handle_event(bounds, event, context);
+            let result = self.content.handle_event(bounds, event, context);
+            self.dispatch_status_request(context);
+            return result;
         }
         if event
             .position()
             .is_some_and(|p| p.y < bounds.origin.y + 54.0)
         {
-            return self.content.handle_event(bounds, event, context);
+            let result = self.content.handle_event(bounds, event, context);
+            self.dispatch_status_request(context);
+            return result;
         }
         if matches!(event, ViewEvent::FocusChanged { focused: false }) {
             self.open.set(false);
@@ -1114,6 +1224,12 @@ impl<C: View> View for ControlCenterLayer<C> {
             context.request_redraw();
             return EventResult::Consumed;
         }
+        let edit_result = self
+            .editor_button()
+            .handle_event(Self::edit_rect(panel), event, context);
+        if edit_result.is_consumed() {
+            return edit_result;
+        }
         let before_volume = self.volume_level.get();
         let slider_result =
             self.volume_slider()
@@ -1192,7 +1308,9 @@ impl<C: View> View for ControlCenterLayer<C> {
                         if let Some(item) = self.items().into_iter().find(|item| item.id == id) {
                             let keeps_control_center_open = matches!(
                                 &item.action,
-                                ItemAction::ShowNetwork | ItemAction::ShowApplicationCard { .. }
+                                ItemAction::ShowNetwork
+                                    | ItemAction::ShowBattery
+                                    | ItemAction::ShowApplicationCard { .. }
                             );
                             self.activate(&item);
                             if !keeps_control_center_open {
@@ -1217,92 +1335,17 @@ pub(crate) fn declares_item(app: &AppInfo, item_id: &str) -> bool {
         .any(|item| item.id == format!("app.{}:{item_id}", app.bundle_id))
 }
 
-fn read_app_items(app: &AppInfo) -> Vec<Item> {
-    let Ok(text) = fs::read_to_string(app.root.join("manifest.toml")) else {
-        return Vec::new();
-    };
-    parse_app_items(&text, app).unwrap_or_else(|error| {
-        eprintln!(
-            "ignored invalid Control Center registration for {}: {error}",
-            app.bundle_id
-        );
-        Vec::new()
-    })
-}
-
 pub(crate) fn customization_items(apps: &[AppInfo]) -> Vec<CustomizationItem> {
-    let mut items = Vec::new();
-    items.extend(apps.iter().flat_map(|app| {
-        read_app_items(app)
-            .into_iter()
-            .map(|item| CustomizationItem {
-                id: item.id,
-                title: item.title,
-                source: app.name.clone(),
-                symbol: item.symbol,
-            })
-    }));
-    items
-}
-
-fn parse_app_items(text: &str, app: &AppInfo) -> Result<Vec<Item>, &'static str> {
-    let valid_format = text.lines().any(|line| {
-        line.split_once('=')
-            .is_some_and(|(key, value)| key.trim() == "format" && value.trim() == "1")
-    });
-    if !valid_format {
-        return Err("unsupported format");
-    }
-    let mut result = Vec::new();
-    for section in text
-        .split("[[application.control_center_items]]")
-        .skip(1)
-        .take(MAX_APP_ITEMS + 1)
-    {
-        if result.len() == MAX_APP_ITEMS {
-            return Err("too many items");
-        }
-        let field = |name: &str| -> Option<&str> {
-            section.lines().find_map(|line| {
-                let (key, value) = line.split_once('=')?;
-                if key.trim() != name {
-                    return None;
-                }
-                value.trim().strip_prefix('"')?.strip_suffix('"')
-            })
-        };
-        let id = field("id").ok_or("missing id")?;
-        let title = field("title").ok_or("missing title")?;
-        let symbol = field("symbol")
-            .and_then(SymbolName::from_asset_name)
-            .ok_or("invalid symbol")?;
-        if !valid_local_id(id) || title.is_empty() || title.len() > 40 {
-            return Err("invalid item fields");
-        }
-        let action = match field("action") {
-            Some("open-application") => ItemAction::OpenApplication(app.bundle_id.clone()),
-            Some("show-card") => ItemAction::ShowApplicationCard {
-                bundle_id: app.bundle_id.clone(),
-                item_id: id.to_string(),
-            },
-            _ => return Err("invalid item fields"),
-        };
-        result.push(Item {
-            id: format!("app.{}:{id}", app.bundle_id),
-            title: title.to_string(),
-            symbol,
-            action,
-        });
-    }
-    Ok(result)
-}
-
-fn valid_local_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id
-            .bytes()
-            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+    status_items::catalog(apps)
+        .into_iter()
+        .map(|item| CustomizationItem {
+            id: item.id,
+            title: item.title,
+            source: item.source,
+            symbol: item.symbol,
+            default_placement: item.default_placement,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1403,6 +1446,7 @@ mod tests {
         ControlCenterLayer::new(
             Rectangle::new(),
             State::new(true),
+            State::new(false),
             State::new(SystemBarState::default()),
             Rc::new(RefCell::new(ControlCenterPreferences::default())),
             Rc::new(RefCell::new(ControlCenterInteraction::default())),
@@ -1630,5 +1674,83 @@ mod tests {
             &mut context,
         );
         assert!(layer.detail.get().is_none());
+    }
+    #[test]
+    fn pinned_system_icons_open_their_registered_details_and_keep_date_independent() {
+        use viewkit::typography::TextMeasurer;
+        let state = State::new(SystemBarState::default());
+        let open = State::new(false);
+        let notifications = State::new(false);
+        let preferences = Rc::new(RefCell::new(ControlCenterPreferences::default()));
+        let shared = Rc::new(RefCell::new(ControlCenterInteraction::default()));
+        let apps = State::new(Vec::new());
+        let bar = super::super::top_bar::view(
+            state.clone(),
+            State::new(false),
+            open.clone(),
+            notifications.clone(),
+            apps.clone(),
+            preferences.clone(),
+            shared.clone(),
+        );
+        let layer = ControlCenterLayer::new(
+            bar,
+            open.clone(),
+            notifications.clone(),
+            state,
+            preferences.clone(),
+            shared,
+            Rc::new(RefCell::new(TestPlatform)),
+            State::new(DesktopWindows::default()),
+            apps,
+            Rc::new(Cell::new(None)),
+        );
+        let bounds = Rect::new(0.0, 0.0, 1440.0, 900.0);
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        let left = 1440.0 - metrics::CHROME_RIGHT - metrics::STATUS_GROUP_WIDTH;
+        for (offset, detail) in [
+            (220.0, ControlCenterDetail::Network),
+            (184.0, ControlCenterDetail::Battery),
+        ] {
+            let position = Point::new(left + offset, 27.0);
+            layer.handle_event(
+                bounds,
+                &ViewEvent::PointerPressed {
+                    position,
+                    button: PointerButton::Primary,
+                },
+                &mut context,
+            );
+            layer.handle_event(
+                bounds,
+                &ViewEvent::PointerReleased {
+                    position,
+                    button: PointerButton::Primary,
+                },
+                &mut context,
+            );
+            assert!(open.get());
+            assert_eq!(layer.detail.get(), Some(detail));
+        }
+        preferences
+            .borrow_mut()
+            .set_placement("builtin.network", appcore::StatusItemPlacement::Menu);
+        assert!(
+            layer
+                .ordered_items()
+                .iter()
+                .any(|item| item.id == "builtin.network")
+        );
+        preferences
+            .borrow_mut()
+            .set_placement("builtin.network", appcore::StatusItemPlacement::Hidden);
+        assert!(
+            !layer
+                .ordered_items()
+                .iter()
+                .any(|item| item.id == "builtin.network")
+        );
     }
 }

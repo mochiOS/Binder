@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+pub(crate) use appcore::StatusItemPlacement;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
 
@@ -19,10 +20,18 @@ fn config_path() -> std::path::PathBuf {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ControlCenterPreferences {
     order: Vec<String>,
-    hidden: HashSet<String>,
+    placements: BTreeMap<String, StatusItemPlacement>,
+    storage_path: Option<std::path::PathBuf>,
 }
 
 impl ControlCenterPreferences {
+    #[cfg(test)]
+    pub(crate) fn with_test_storage(path: std::path::PathBuf) -> Self {
+        Self {
+            storage_path: Some(path),
+            ..Self::default()
+        }
+    }
     pub(crate) fn load() -> Self {
         fs::read_to_string(config_path())
             .ok()
@@ -52,16 +61,28 @@ impl ControlCenterPreferences {
         result
     }
 
-    pub(crate) fn is_hidden(&self, id: &str) -> bool {
-        self.hidden.contains(id)
+    pub(crate) fn placement(&self, id: &str, default: StatusItemPlacement) -> StatusItemPlacement {
+        self.placements.get(id).copied().unwrap_or(default)
     }
-
-    pub(crate) fn set_hidden(&mut self, id: &str, hidden: bool) -> bool {
-        if hidden {
-            self.hidden.insert(id.to_string())
-        } else {
-            self.hidden.remove(id)
+    pub(crate) fn is_hidden(&self, id: &str) -> bool {
+        self.placements.get(id) == Some(&StatusItemPlacement::Hidden)
+    }
+    pub(crate) fn set_placement(&mut self, id: &str, placement: StatusItemPlacement) -> bool {
+        if !valid_id(id) || self.placements.get(id) == Some(&placement) {
+            return false;
         }
+        self.placements.insert(id.to_owned(), placement);
+        true
+    }
+    pub(crate) fn set_hidden(&mut self, id: &str, hidden: bool) -> bool {
+        self.set_placement(
+            id,
+            if hidden {
+                StatusItemPlacement::Hidden
+            } else {
+                StatusItemPlacement::Menu
+            },
+        )
     }
 
     pub(crate) fn move_before(&mut self, from: &str, to: &str, available: &[String]) -> bool {
@@ -105,14 +126,16 @@ impl ControlCenterPreferences {
     pub(crate) fn reconcile(&mut self, available: &[String]) -> bool {
         let available = available.iter().map(String::as_str).collect::<HashSet<_>>();
         let previous_order_len = self.order.len();
-        let previous_hidden_len = self.hidden.len();
+        let previous_hidden_len = self.placements.len();
         self.order.retain(|id| available.contains(id.as_str()));
-        self.hidden.retain(|id| available.contains(id.as_str()));
-        previous_order_len != self.order.len() || previous_hidden_len != self.hidden.len()
+        self.placements
+            .retain(|id, _| available.contains(id.as_str()));
+        previous_order_len != self.order.len() || previous_hidden_len != self.placements.len()
     }
 
     pub(crate) fn save(&self) -> io::Result<()> {
-        let path = &config_path();
+        let default_path = config_path();
+        let path = self.storage_path.as_ref().unwrap_or(&default_path);
         let Some(parent) = path.parent() else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -120,20 +143,22 @@ impl ControlCenterPreferences {
             ));
         };
         fs::create_dir_all(parent)?;
+        fs::write(path, self.to_text())
+    }
+    fn to_text(&self) -> String {
         let mut contents = String::new();
         for id in &self.order {
-            contents.push_str("item=");
-            contents.push_str(id);
-            contents.push('\n');
+            contents.push_str(&format!("item={id}\n"));
         }
-        let mut hidden = self.hidden.iter().collect::<Vec<_>>();
-        hidden.sort();
-        for id in hidden {
-            contents.push_str("hidden=");
-            contents.push_str(id);
-            contents.push('\n');
+        for (id, placement) in &self.placements {
+            let name = match placement {
+                StatusItemPlacement::Hidden => "hidden",
+                StatusItemPlacement::Menu => "menu",
+                StatusItemPlacement::Pinned => "pinned",
+            };
+            contents.push_str(&format!("{name}={id}\n"));
         }
-        fs::write(path, contents)
+        contents
     }
 
     fn parse(text: &str) -> Self {
@@ -144,10 +169,16 @@ impl ControlCenterPreferences {
                 if valid_id(id) && ordered.insert(id.to_string()) {
                     preferences.order.push(id.to_string());
                 }
-            } else if let Some(id) = line.strip_prefix("hidden=")
-                && valid_id(id)
-            {
-                preferences.hidden.insert(id.to_string());
+            } else if let Some((kind, id)) = line.split_once('=') {
+                let placement = match kind {
+                    "hidden" => StatusItemPlacement::Hidden,
+                    "menu" => StatusItemPlacement::Menu,
+                    "pinned" => StatusItemPlacement::Pinned,
+                    _ => continue,
+                };
+                if valid_id(id) {
+                    preferences.placements.insert(id.into(), placement);
+                }
             }
         }
         preferences
@@ -156,7 +187,7 @@ impl ControlCenterPreferences {
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
-        && id.len() <= 192
+        && id.len() <= 384
         && id.bytes().all(|byte| {
             matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'_' | b':')
         })
@@ -206,5 +237,27 @@ mod tests {
         assert_eq!(preferences.order, ["kept"]);
         assert!(!preferences.is_hidden("removed"));
         assert!(preferences.is_hidden("kept"));
+    }
+    #[test]
+    fn placement_defaults_overrides_and_roundtrip_are_stable() {
+        let mut p = ControlCenterPreferences::default();
+        assert_eq!(
+            p.placement("builtin.network", StatusItemPlacement::Pinned),
+            StatusItemPlacement::Pinned
+        );
+        for value in [
+            StatusItemPlacement::Hidden,
+            StatusItemPlacement::Menu,
+            StatusItemPlacement::Pinned,
+        ] {
+            assert!(p.set_placement("builtin.network", value));
+            let restored = ControlCenterPreferences::parse(&p.to_text());
+            assert_eq!(
+                restored.placement("builtin.network", StatusItemPlacement::Pinned),
+                value
+            );
+        }
+        let old = ControlCenterPreferences::parse("hidden=app.org.example:status\n");
+        assert!(old.is_hidden("app.org.example:status"));
     }
 }

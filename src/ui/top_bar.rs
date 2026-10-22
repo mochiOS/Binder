@@ -1,23 +1,51 @@
-use std::sync::OnceLock;
-
-use super::desktop_metrics as metrics;
-use crate::platform::SystemBarState;
+use super::{
+    control_center::ControlCenterInteraction,
+    desktop_metrics as metrics,
+    status_items::{self, Item, ItemAction},
+};
+use crate::{
+    control_center_preferences::{ControlCenterPreferences, StatusItemPlacement},
+    platform::{AppInfo, SystemBarState},
+};
+use std::{cell::RefCell, rc::Rc, sync::OnceLock};
 use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
     prelude::*,
     view::{Constraints, MeasureContext, PaintContext},
 };
 
+fn retained_button(
+    shared: &Rc<RefCell<ControlCenterInteraction>>,
+    id: &str,
+) -> ButtonInteractionState {
+    shared
+        .borrow_mut()
+        .status_buttons
+        .entry(id.into())
+        .or_default()
+        .clone()
+}
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn view(
     state: State<SystemBarState>,
     menu_open: State<bool>,
     control_open: State<bool>,
     notification_open: State<bool>,
+    apps: State<Vec<AppInfo>>,
+    preferences: Rc<RefCell<ControlCenterPreferences>>,
+    interaction: Rc<RefCell<ControlCenterInteraction>>,
 ) -> impl View + 'static {
-    let menu = menu_open.clone();
-    let controls = control_open.clone();
-    let notifications = notification_open.clone();
-    let logo = Button::new("")
+    let catalog = status_items::catalog(&apps.get());
+    interaction
+        .borrow_mut()
+        .status_buttons
+        .retain(|id, _| id.starts_with("chrome.") || catalog.iter().any(|item| item.id == *id));
+    let (menu, controls, notifications) = (
+        menu_open.clone(),
+        control_open.clone(),
+        notification_open.clone(),
+    );
+    let logo = Button::with_interaction_and_label(retained_button(&interaction, "chrome.logo"), "")
         .content(Logo)
         .style(ButtonStyle::Ghost)
         .accessibility_label("mochiOS menu")
@@ -26,63 +54,99 @@ pub(crate) fn view(
             controls.set(false);
             notifications.set(false);
         });
-    let notifications = notification_open.clone();
-    let controls = control_open.clone();
-    let menu = menu_open.clone();
-    let notification_button = Button::new("")
-        .content(
-            Icon::new(SymbolName::Bell)
-                .size(20.0)
-                .color(metrics::SYSTEM_FOREGROUND),
-        )
-        .style(ButtonStyle::Ghost)
-        .accessibility_label("Notification Center")
-        .accessibility_value(format!("{} unread", state.get().notifications.unread_count))
-        .on_click(move || {
-            notifications.set(!notifications.get());
-            controls.set(false);
-            menu.set(false);
-        });
-    let input_state = state.clone();
-    let input = Button::new("")
-        .content(InputLanguage(state.clone()))
-        .style(ButtonStyle::Ghost)
-        .accessibility_label("Switch input language")
-        .on_click(move || {
-            if let Some(enabled) = viewkit::platform::input_method::toggle() {
-                input_state.update(|state| state.japanese_input = enabled);
+    let (menu, controls, notifications) = (
+        menu_open.clone(),
+        control_open.clone(),
+        notification_open.clone(),
+    );
+    let status =
+        Button::with_interaction_and_label(retained_button(&interaction, "chrome.background"), "")
+            .style(ButtonStyle::Ghost)
+            .radius(CornerRadius::Full)
+            .shadow(ShadowStyle::None)
+            .accessibility_label("Control Center")
+            .on_click(move || {
+                controls.set(!controls.get());
+                menu.set(false);
+                notifications.set(false);
+            });
+    let mut entries = Vec::new();
+    for item in catalog {
+        let mut button =
+            Button::with_interaction_and_label(retained_button(&interaction, &item.id), "")
+                .style(ButtonStyle::Ghost)
+                .shadow(ShadowStyle::None)
+                .accessibility_label(&item.title);
+        if item.action == ItemAction::ToggleInput {
+            button = button.content(InputLanguage(state.clone()));
+        } else {
+            button = button.content(
+                Icon::new(item.symbol)
+                    .size(if item.action == ItemAction::ShowBattery {
+                        28.0
+                    } else {
+                        20.0
+                    })
+                    .color(metrics::SYSTEM_FOREGROUND),
+            );
+        }
+        let (menu, controls, notifications) = (
+            menu_open.clone(),
+            control_open.clone(),
+            notification_open.clone(),
+        );
+        let current = state.clone();
+        let shared = interaction.clone();
+        let action = item.action.clone();
+        let id = item.id.clone();
+        button = button.on_click(move || match action {
+            ItemAction::ToggleInput => {
+                if let Some(enabled) = viewkit::platform::input_method::toggle() {
+                    current.update(|s| s.japanese_input = enabled);
+                }
+            }
+            ItemAction::ShowNotifications => {
+                notifications.set(!notifications.get());
+                controls.set(false);
+                menu.set(false);
+            }
+            _ => {
+                shared.borrow_mut().pending_status_item = Some(id.clone());
+                controls.set(true);
+                notifications.set(false);
+                menu.set(false);
             }
         });
-    let menu = menu_open;
-    let controls = control_open;
-    let status = Button::new("")
-        .style(ButtonStyle::Ghost)
-        .radius(CornerRadius::Full)
-        .shadow(ShadowStyle::None)
-        .accessibility_label("Control Center")
-        .on_click(move || {
-            controls.set(!controls.get());
-            menu.set(false);
-            notification_open.set(false);
-        });
+        entries.push(StatusEntry { item, button });
+    }
+    let clock =
+        Button::with_interaction_and_label(retained_button(&interaction, "chrome.clock"), "")
+            .content(Clock(state))
+            .style(ButtonStyle::Ghost)
+            .accessibility_label("Date and time");
     SystemBar {
         logo,
         status,
-        input,
-        notifications: notification_button,
-        clock: Button::new("")
-            .content(Clock(state))
-            .style(ButtonStyle::Ghost)
-            .accessibility_label("Date and time"),
+        clock,
+        entries,
+        preferences,
     }
 }
-
+struct StatusEntry {
+    item: Item,
+    button: Button,
+}
 struct SystemBar {
     logo: Button,
     status: Button,
-    input: Button,
-    notifications: Button,
     clock: Button,
+    entries: Vec<StatusEntry>,
+    preferences: Rc<RefCell<ControlCenterPreferences>>,
+}
+struct StatusLayout {
+    pill: Rect,
+    date: Rect,
+    entries: Vec<(usize, Rect)>,
 }
 fn logo_frame(bounds: Rect) -> Rect {
     Rect::new(
@@ -92,23 +156,102 @@ fn logo_frame(bounds: Rect) -> Rect {
         44.0,
     )
 }
+fn entry_width(item: &Item) -> f32 {
+    match item.action {
+        ItemAction::ToggleInput => 16.0,
+        ItemAction::ShowBattery => 32.0,
+        _ => 24.0,
+    }
+}
+fn hit_frame(item: &Item, frame: Rect) -> Rect {
+    if item.action == ItemAction::ToggleInput {
+        Rect::new(
+            frame.origin.x - 4.0,
+            frame.origin.y,
+            frame.size.width + 8.0,
+            frame.size.height,
+        )
+    } else {
+        frame
+    }
+}
+impl SystemBar {
+    fn resolved_frames(&self, bounds: Rect) -> StatusLayout {
+        let preferences = self.preferences.borrow();
+        let ordered =
+            preferences.ordered_ids(self.entries.iter().map(|entry| entry.item.id.as_str()));
+        let maximum = (bounds.size.width - metrics::CHROME_RIGHT - 70.0).max(0.0);
+        let mut cursor = 112.0;
+        let mut entries = Vec::new();
+        for id in ordered {
+            let Some((index, entry)) = self
+                .entries
+                .iter()
+                .enumerate()
+                .find(|(_, entry)| entry.item.id == id)
+            else {
+                continue;
+            };
+            if preferences.placement(&id, entry.item.default_placement)
+                != StatusItemPlacement::Pinned
+            {
+                continue;
+            }
+            let width = entry_width(&entry.item);
+            // Overflow retains its menu entry and saved pin preference.
+            if cursor + width + 3.0 > maximum {
+                continue;
+            }
+            entries.push((index, Rect::new(cursor, 0.0, width, 34.0)));
+            cursor += width + 8.0;
+        }
+        let width = if entries.is_empty() {
+            115.0_f32.min(maximum)
+        } else {
+            cursor - 8.0 + 3.0
+        };
+        let pill = Rect::new(
+            bounds.origin.x + bounds.size.width - metrics::CHROME_RIGHT - width,
+            bounds.origin.y + metrics::STATUS_GROUP_TOP,
+            width,
+            34.0,
+        );
+        for (_, frame) in &mut entries {
+            frame.origin.x += pill.origin.x;
+            frame.origin.y = pill.origin.y;
+        }
+        let date = Rect::new(
+            pill.origin.x + 8.0,
+            pill.origin.y,
+            104.0_f32.min((width - 11.0).max(0.0)),
+            pill.size.height,
+        );
+        StatusLayout {
+            pill,
+            date,
+            entries,
+        }
+    }
+}
 impl View for SystemBar {
-    fn measure(&self, constraints: Constraints, _: &mut MeasureContext<'_>) -> Size {
-        constraints.constrain(Size::new(constraints.maximum.width, metrics::SYSTEM_HEIGHT))
+    fn measure(&self, c: Constraints, _: &mut MeasureContext<'_>) -> Size {
+        c.constrain(Size::new(c.maximum.width, metrics::SYSTEM_HEIGHT))
     }
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        let layout = self.resolved_frames(bounds);
         self.logo.paint(logo_frame(bounds), context);
         Rectangle::new()
             .color(RectangleColor::Custom(Color::rgba(255, 255, 255, 64)))
             .radius(CornerRadius::Full)
-            .paint(status_frame(bounds), context);
-        StatusContent.paint(controls_frame(bounds), context);
-        self.input.paint(input_frame(bounds), context);
-        self.notifications
-            .paint(status_content_frames(status_frame(bounds))[2], context);
-        self.clock
-            .paint(status_content_frames(status_frame(bounds))[0], context);
-        self.status.paint(status_frame(bounds), context);
+            .paint(layout.pill, context);
+        for (index, frame) in layout.entries {
+            self.entries[index]
+                .button
+                .paint(hit_frame(&self.entries[index].item, frame), context);
+        }
+        self.clock.paint(layout.date, context);
+        // Register the background after individual controls, preserving pointer focus priority.
+        self.status.paint(layout.pill, context);
     }
     fn handle_event(
         &self,
@@ -116,11 +259,13 @@ impl View for SystemBar {
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
-        let frames = status_content_frames(status_frame(bounds));
-        // Give individual controls priority while cancelling a background press
-        // if it is released over one of those independent controls.
+        let layout = self.resolved_frames(bounds);
         let reserved = event.position().is_some_and(|p| {
-            frames[0].contains(p) || input_frame(bounds).contains(p) || frames[2].contains(p)
+            layout.date.contains(p)
+                || layout
+                    .entries
+                    .iter()
+                    .any(|(i, f)| hit_frame(&self.entries[*i].item, *f).contains(p))
         });
         let mut background_event = event.clone();
         if reserved {
@@ -132,100 +277,20 @@ impl View for SystemBar {
                 _ => {}
             }
         }
-        let background = self
+        let mut result = self
             .status
-            .handle_event(status_frame(bounds), &background_event, context);
-        let input = self.input.handle_event(input_frame(bounds), event, context);
-        let notifications = self.notifications.handle_event(frames[2], event, context);
-        let clock = self.clock.handle_event(frames[0], event, context);
+            .handle_event(layout.pill, &background_event, context);
+        for (index, frame) in layout.entries {
+            result = result.merge(self.entries[index].button.handle_event(
+                hit_frame(&self.entries[index].item, frame),
+                event,
+                context,
+            ));
+        }
         self.logo
             .handle_event(logo_frame(bounds), event, context)
-            .merge(input)
-            .merge(notifications)
-            .merge(clock)
-            .merge(background)
-    }
-}
-fn controls_frame(bounds: Rect) -> Rect {
-    let group = status_frame(bounds);
-    Rect::new(
-        group.origin.x + 164.0,
-        group.origin.y,
-        group.size.width - 164.0,
-        group.size.height,
-    )
-}
-fn input_frame(bounds: Rect) -> Rect {
-    let frame = status_content_frames(status_frame(bounds))[1];
-    Rect::new(
-        frame.origin.x - 4.0,
-        frame.origin.y,
-        frame.size.width + 8.0,
-        frame.size.height,
-    )
-}
-fn status_frame(bounds: Rect) -> Rect {
-    Rect::new(
-        bounds.origin.x + bounds.size.width - metrics::CHROME_RIGHT - metrics::STATUS_GROUP_WIDTH,
-        bounds.origin.y + metrics::STATUS_GROUP_TOP,
-        metrics::STATUS_GROUP_WIDTH,
-        34.0,
-    )
-}
-// Every item shares the pill's full height and exact center; intrinsic ink is centered by ViewKit.
-fn status_content_frames(bounds: Rect) -> [Rect; 5] {
-    [
-        Rect::new(
-            bounds.origin.x + 8.0,
-            bounds.origin.y,
-            104.0,
-            bounds.size.height,
-        ),
-        Rect::new(
-            bounds.origin.x + 112.0,
-            bounds.origin.y,
-            16.0,
-            bounds.size.height,
-        ),
-        Rect::new(
-            bounds.origin.x + 136.0,
-            bounds.origin.y,
-            24.0,
-            bounds.size.height,
-        ),
-        Rect::new(
-            bounds.origin.x + 168.0,
-            bounds.origin.y,
-            32.0,
-            bounds.size.height,
-        ),
-        Rect::new(
-            bounds.origin.x + 208.0,
-            bounds.origin.y,
-            24.0,
-            bounds.size.height,
-        ),
-    ]
-}
-struct StatusContent;
-impl View for StatusContent {
-    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
-        let frames = status_content_frames(Rect::new(
-            bounds.origin.x - 164.0,
-            bounds.origin.y,
-            metrics::STATUS_GROUP_WIDTH,
-            bounds.size.height,
-        ));
-        Icon::new(SymbolName::BatteryFull)
-            .size(28.0)
-            .color(metrics::SYSTEM_FOREGROUND)
-            .accessibility_label("Battery")
-            .paint(frames[3], context);
-        Icon::new(SymbolName::Wifi)
-            .size(20.0)
-            .color(metrics::SYSTEM_FOREGROUND)
-            .accessibility_label("Network")
-            .paint(frames[4], context);
+            .merge(self.clock.handle_event(layout.date, event, context))
+            .merge(result)
     }
 }
 struct Logo;
@@ -322,142 +387,86 @@ fn short_date(date: &str) -> String {
 }
 
 #[cfg(test)]
-mod alignment_tests {
+mod tests {
     use super::*;
-    use std::{cell::Cell, rc::Rc};
-    use viewkit::platform::PointerButton;
-    use viewkit::typography::TextMeasurer;
-
-    #[test]
-    fn notification_bell_is_independent_and_date_is_reserved_for_calendar() {
-        let menu = State::new(false);
-        let controls = State::new(false);
-        let notifications = State::new(false);
-        let bar = view(
-            State::new(SystemBarState::default()),
-            menu,
-            controls.clone(),
-            notifications.clone(),
-        );
-        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
-        let theme = Theme::current();
-        let mut measurer = TextMeasurer::new();
-        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
-        let frames = status_content_frames(status_frame(bounds));
-        for (index, notification_open, control_open) in
-            [(0, false, false), (2, true, false), (4, false, true)]
-        {
-            let frame = frames[index];
-            let position = Point::new(
-                frame.origin.x + frame.size.width * 0.5,
-                frame.origin.y + frame.size.height * 0.5,
-            );
-            bar.handle_event(bounds, &ViewEvent::PointerMoved { position }, &mut context);
-            bar.handle_event(
-                bounds,
-                &ViewEvent::PointerPressed {
-                    position,
-                    button: PointerButton::Primary,
-                },
-                &mut context,
-            );
-            bar.handle_event(
-                bounds,
-                &ViewEvent::PointerReleased {
-                    position,
-                    button: PointerButton::Primary,
-                },
-                &mut context,
-            );
-            assert_eq!(notifications.get(), notification_open);
-            assert_eq!(controls.get(), control_open);
-        }
-    }
-
-    #[test]
-    fn input_language_click_does_not_open_control_center() {
-        let toggles = Rc::new(Cell::new(0));
-        let controls = Rc::new(Cell::new(0));
-        let toggle_calls = toggles.clone();
-        let control_calls = controls.clone();
-        let bar = SystemBar {
+    use std::cell::Cell;
+    use viewkit::{platform::PointerButton, typography::TextMeasurer};
+    fn bar(count: Rc<Cell<usize>>) -> SystemBar {
+        let entries = status_items::catalog(&[])
+            .into_iter()
+            .map(|item| StatusEntry {
+                item,
+                button: Button::new(""),
+            })
+            .collect();
+        SystemBar {
             logo: Button::new(""),
-            notifications: Button::new(""),
-            clock: Button::new("").content(Clock(State::new(SystemBarState::default()))),
-            input: Button::new("").on_click(move || toggle_calls.set(toggle_calls.get() + 1)),
-            status: Button::new("").on_click(move || control_calls.set(control_calls.get() + 1)),
-        };
-        let theme = Theme::current();
-        let mut measurer = TextMeasurer::new();
-        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
-        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
-        for position in [Point::new(1310.0, 27.0), Point::new(1410.0, 27.0)] {
-            bar.handle_event(bounds, &ViewEvent::PointerMoved { position }, &mut context);
-            bar.handle_event(
-                bounds,
-                &ViewEvent::PointerPressed {
-                    position,
-                    button: PointerButton::Primary,
-                },
-                &mut context,
-            );
-            bar.handle_event(
-                bounds,
-                &ViewEvent::PointerReleased {
-                    position,
-                    button: PointerButton::Primary,
-                },
-                &mut context,
-            );
-        }
-        assert_eq!(toggles.get(), 1);
-        assert_eq!(controls.get(), 1);
-    }
-    #[test]
-    fn whole_pill_gaps_open_controls_but_independent_items_cancel_background_presses() {
-        let count = Rc::new(Cell::new(0));
-        let clicks = count.clone();
-        let bar = SystemBar {
-            logo: Button::new(""),
-            input: Button::new(""),
-            notifications: Button::new(""),
             clock: Button::new(""),
+            entries,
+            preferences: Rc::new(RefCell::new(ControlCenterPreferences::default())),
             status: Button::new("")
                 .radius(CornerRadius::Full)
-                .on_click(move || clicks.set(clicks.get() + 1)),
-        };
-        let theme = Theme::current();
-        let mut measurer = TextMeasurer::new();
-        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
-        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
-        let pill = status_frame(bounds);
-        let gap = Point::new(pill.origin.x + 134.0, pill.origin.y + 17.0);
-        let ime = input_frame(bounds);
-        let ime = Point::new(ime.origin.x + ime.size.width * 0.5, ime.origin.y + 17.0);
-        for (press, release) in [(gap, ime), (gap, gap)] {
-            bar.handle_event(
-                bounds,
-                &ViewEvent::PointerPressed {
-                    position: press,
-                    button: PointerButton::Primary,
-                },
-                &mut context,
-            );
-            bar.handle_event(
-                bounds,
-                &ViewEvent::PointerReleased {
-                    position: release,
-                    button: PointerButton::Primary,
-                },
-                &mut context,
-            );
+                .on_click(move || count.set(count.get() + 1)),
         }
-        assert_eq!(count.get(), 1);
-        let corner = Point::new(pill.origin.x, pill.origin.y);
+    }
+    fn click(bar: &impl View, bounds: Rect, position: Point, context: &mut EventContext<'_>) {
         bar.handle_event(
             bounds,
             &ViewEvent::PointerPressed {
-                position: corner,
+                position,
+                button: PointerButton::Primary,
+            },
+            context,
+        );
+        bar.handle_event(
+            bounds,
+            &ViewEvent::PointerReleased {
+                position,
+                button: PointerButton::Primary,
+            },
+            context,
+        );
+    }
+    #[test]
+    fn default_registration_preserves_positions_and_exact_vertical_center() {
+        let bar = bar(Rc::new(Cell::new(0)));
+        for bounds in [
+            Rect::new(0.0, 0.0, 1440.0, 54.0),
+            Rect::new(80.0, 53.5, 1280.0, 90.0),
+        ] {
+            let layout = bar.resolved_frames(bounds);
+            assert_eq!(layout.pill.size.width, metrics::STATUS_GROUP_WIDTH);
+            assert_eq!(
+                layout
+                    .entries
+                    .iter()
+                    .map(|(_, r)| r.origin.x - layout.pill.origin.x)
+                    .collect::<Vec<_>>(),
+                [112.0, 136.0, 168.0, 208.0]
+            );
+            for (_, frame) in layout.entries {
+                assert_eq!(
+                    frame.origin.y + frame.size.height * 0.5,
+                    layout.pill.origin.y + 17.0
+                );
+            }
+        }
+    }
+    #[test]
+    fn background_gaps_open_menu_and_reserved_controls_cancel_a_background_press() {
+        let count = Rc::new(Cell::new(0));
+        let bar = bar(count.clone());
+        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
+        let layout = bar.resolved_frames(bounds);
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        let gap = Point::new(layout.pill.origin.x + 134.0, layout.pill.origin.y + 17.0);
+        let ime = Point::new(layout.pill.origin.x + 120.0, layout.pill.origin.y + 17.0);
+        bar.handle_event(
+            bounds,
+            &ViewEvent::PointerPressed {
+                position: gap,
                 button: PointerButton::Primary,
             },
             &mut context,
@@ -465,24 +474,109 @@ mod alignment_tests {
         bar.handle_event(
             bounds,
             &ViewEvent::PointerReleased {
-                position: corner,
+                position: ime,
                 button: PointerButton::Primary,
             },
             &mut context,
         );
+        assert_eq!(count.get(), 0);
+        click(&bar, bounds, gap, &mut context);
+        assert_eq!(count.get(), 1);
+        click(
+            &bar,
+            bounds,
+            Point::new(layout.date.origin.x + 30.0, layout.date.origin.y + 17.0),
+            &mut context,
+        );
+        assert_eq!(count.get(), 1);
+        click(&bar, bounds, layout.pill.origin, &mut context);
         assert_eq!(count.get(), 1);
     }
-
     #[test]
-    fn status_items_share_the_pill_center_at_any_origin_and_height() {
-        for bounds in [
-            Rect::new(1190.0, 10.0, 235.0, 34.0),
-            Rect::new(80.0, 53.5, 235.0, 51.0),
-        ] {
-            let center = bounds.origin.y + bounds.size.height * 0.5;
-            for frame in status_content_frames(bounds) {
-                assert_eq!(frame.origin.y + frame.size.height * 0.5, center);
-            }
-        }
+    fn menu_and_hidden_placement_remove_icons_and_narrow_windows_keep_overflow_in_registry() {
+        let bar = bar(Rc::new(Cell::new(0)));
+        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
+        bar.preferences
+            .borrow_mut()
+            .set_placement("builtin.network", StatusItemPlacement::Menu);
+        bar.preferences
+            .borrow_mut()
+            .set_placement("builtin.battery", StatusItemPlacement::Hidden);
+        assert_eq!(bar.resolved_frames(bounds).entries.len(), 2);
+        let layout = bar.resolved_frames(Rect::new(0.0, 0.0, 240.0, 54.0));
+        assert!(layout.pill.origin.x >= 70.0);
+        assert_eq!(status_items::catalog(&[]).len(), 4);
+    }
+    #[test]
+    fn application_registration_can_be_pinned_and_removed_without_changing_its_action() {
+        let app = AppInfo {
+            root: "/test/Example.app".into(),
+            name: "Example".into(),
+            bundle_id: "org.mochios.example".into(),
+            version: "1".into(),
+            developer: "mochiOS".into(),
+            entry: "entry.elf".into(),
+            description: String::new(),
+            icon: None,
+            resources: Vec::new(),
+        };
+        let item = status_items::parse_app_items(
+            "format = 1\n[[application.control_center_items]]\nid = \"status\"\ntitle = \"Example\"\nsymbol = \"wifi\"\naction = \"show-card\"\n",
+            &app,
+        ).unwrap().remove(0);
+        let id = item.id.clone();
+        assert!(matches!(
+            item.action,
+            ItemAction::ShowApplicationCard { .. }
+        ));
+        let mut bar = bar(Rc::new(Cell::new(0)));
+        bar.entries.push(StatusEntry {
+            item,
+            button: Button::new(""),
+        });
+        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
+        assert_eq!(bar.resolved_frames(bounds).entries.len(), 4);
+        bar.preferences
+            .borrow_mut()
+            .set_placement(&id, StatusItemPlacement::Pinned);
+        let frames = bar.resolved_frames(bounds);
+        assert_eq!(frames.entries.len(), 5);
+        assert_eq!(bar.entries[frames.entries[4].0].item.id, id);
+        bar.preferences
+            .borrow_mut()
+            .set_placement(&id, StatusItemPlacement::Hidden);
+        assert_eq!(bar.resolved_frames(bounds).entries.len(), 4);
+    }
+    #[test]
+    fn registered_icon_dispatch_does_not_toggle_the_background_or_calendar() {
+        let controls = State::new(false);
+        let notifications = State::new(false);
+        let shared = Rc::new(RefCell::new(ControlCenterInteraction::default()));
+        let bar = view(
+            State::new(SystemBarState::default()),
+            State::new(false),
+            controls.clone(),
+            notifications.clone(),
+            State::new(Vec::new()),
+            Rc::new(RefCell::new(ControlCenterPreferences::default())),
+            shared.clone(),
+        );
+        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
+        let x = 1440.0 - metrics::CHROME_RIGHT - metrics::STATUS_GROUP_WIDTH;
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        click(&bar, bounds, Point::new(x + 50.0, 27.0), &mut context);
+        assert!(!controls.get());
+        click(&bar, bounds, Point::new(x + 148.0, 27.0), &mut context);
+        assert!(notifications.get());
+        assert!(!controls.get());
+        click(&bar, bounds, Point::new(x + 220.0, 27.0), &mut context);
+        assert!(!notifications.get());
+        assert!(controls.get());
+        assert_eq!(
+            shared.borrow().pending_status_item.as_deref(),
+            Some("builtin.network")
+        );
     }
 }

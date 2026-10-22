@@ -15,6 +15,7 @@ pub(crate) mod popup_menu;
 pub(crate) mod spotlight;
 pub(crate) mod test;
 pub(crate) mod top_bar;
+pub(crate) mod status_items;
 pub(crate) mod wallpaper;
 pub(crate) mod window;
 pub(crate) mod window_decoration;
