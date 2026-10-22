@@ -285,7 +285,7 @@ impl View for Clock {
             format!("{}, {}", short_date(&clock.date), clock.time),
             bounds,
             TextAlignment::Start,
-            false,
+            true,
             context,
         );
     }
