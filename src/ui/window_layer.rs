@@ -164,7 +164,7 @@ where
             return None;
         }
 
-        self.windows.update(|desktop| {
+        self.windows.update_for_repaint(|desktop| {
             if let Some(window) = desktop
                 .windows
                 .iter_mut()
@@ -505,7 +505,7 @@ where
             return None;
         }
 
-        self.windows.update(|desktop| {
+        self.windows.update_for_repaint(|desktop| {
             if let Some(window) = desktop
                 .windows
                 .iter_mut()
