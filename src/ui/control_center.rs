@@ -317,7 +317,7 @@ impl<C: View> ControlCenterLayer<C> {
     fn hit(&self, bounds: Rect, position: Point) -> Option<Hit> {
         let visible = self.ordered_items();
         let panel = self.panel(bounds, visible.len());
-        if !panel.contains(position) {
+        if !panel.contains_rounded(22.0, position) {
             return None;
         }
         if self.detail.get().is_some() {
@@ -1086,7 +1086,7 @@ impl<C: View> View for ControlCenterLayer<C> {
                     button: PointerButton::Primary,
                 } => {
                     let hit = self.hit(bounds, *position);
-                    if !panel.contains(*position) {
+                    if !panel.contains_rounded(22.0, *position) {
                         self.detail.set(None);
                         self.open.set(false);
                     }
@@ -1108,7 +1108,7 @@ impl<C: View> View for ControlCenterLayer<C> {
             }
             return EventResult::Consumed;
         }
-        if matches!(event, ViewEvent::PointerPressed { position, button: PointerButton::Secondary } if panel.contains(*position))
+        if matches!(event, ViewEvent::PointerPressed { position, button: PointerButton::Secondary } if panel.contains_rounded(22.0,*position))
         {
             self.open_customizer();
             context.request_redraw();
@@ -1170,7 +1170,7 @@ impl<C: View> View for ControlCenterLayer<C> {
                 button: PointerButton::Primary,
             } => {
                 let hit = self.hit(bounds, *position);
-                if !panel.contains(*position) {
+                if !panel.contains_rounded(22.0, *position) {
                     self.open.set(false);
                     self.detail.set(None);
                 }

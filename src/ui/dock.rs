@@ -991,7 +991,8 @@ where
                     return EventResult::Consumed;
                 }
                 ViewEvent::PointerMoved { position } => {
-                    if menu_bounds.contains(*position) {
+                    if menu_bounds.contains_rounded(Theme::current().menu.compact_radius, *position)
+                    {
                         context.set_cursor(CursorIcon::Default);
                         if let Some(index) = self.menu_index.get() {
                             return self
@@ -1015,7 +1016,8 @@ where
                     position,
                     button: PointerButton::Primary,
                 } => {
-                    if menu_bounds.contains(*position) {
+                    if menu_bounds.contains_rounded(Theme::current().menu.compact_radius, *position)
+                    {
                         if let Some(index) = self.menu_index.get() {
                             return self
                                 .active_menu(index)
@@ -1032,7 +1034,9 @@ where
                     position,
                     button: PointerButton::Primary,
                 } => {
-                    if !menu_bounds.contains(*position) {
+                    if !menu_bounds
+                        .contains_rounded(Theme::current().menu.compact_radius, *position)
+                    {
                         return EventResult::Consumed;
                     }
 

@@ -520,7 +520,14 @@ impl<C: View> NotificationCenterLayer<C> {
         notifications: &[UserNotification],
     ) -> Option<Hit> {
         let (panel, _, _) = self.panel_presentation(bounds, Instant::now());
-        if !panel.contains(position) {
+        if !panel.contains_rounded(
+            Theme::current().surface.floating_radius.resolve(
+                &Theme::current().radius,
+                panel.size.width,
+                panel.size.height,
+            ),
+            position,
+        ) {
             return None;
         }
         if Self::clear_rect(panel).contains(position) && !notifications.is_empty() {
@@ -938,7 +945,16 @@ impl<C: View> View for NotificationCenterLayer<C> {
             });
             match event {
                 ViewEvent::PointerMoved { position } => {
-                    let hovered = banner_hit.is_some_and(|(_, rect)| rect.contains(*position));
+                    let hovered = banner_hit.is_some_and(|(_, rect)| {
+                        rect.contains_rounded(
+                            Theme::current().surface.floating_radius.resolve(
+                                &Theme::current().radius,
+                                rect.size.width,
+                                rect.size.height,
+                            ),
+                            *position,
+                        )
+                    });
                     let changed = self.interaction.banner_hovered.get() != hovered;
                     self.set_banner_hovered(hovered, now);
                     if changed {
@@ -953,7 +969,16 @@ impl<C: View> View for NotificationCenterLayer<C> {
                     button: PointerButton::Primary,
                 } => {
                     let pressed = banner_hit
-                        .filter(|(_, rect)| rect.contains(*position))
+                        .filter(|(_, rect)| {
+                            rect.contains_rounded(
+                                Theme::current().surface.floating_radius.resolve(
+                                    &Theme::current().radius,
+                                    rect.size.width,
+                                    rect.size.height,
+                                ),
+                                *position,
+                            )
+                        })
                         .map(|(id, _)| id);
                     self.interaction.banner_pressed.set(pressed);
                     if pressed.is_some() {
@@ -966,7 +991,16 @@ impl<C: View> View for NotificationCenterLayer<C> {
                     button: PointerButton::Primary,
                 } => {
                     let released = banner_hit
-                        .filter(|(_, rect)| rect.contains(*position))
+                        .filter(|(_, rect)| {
+                            rect.contains_rounded(
+                                Theme::current().surface.floating_radius.resolve(
+                                    &Theme::current().radius,
+                                    rect.size.width,
+                                    rect.size.height,
+                                ),
+                                *position,
+                            )
+                        })
                         .map(|(id, _)| id);
                     let pressed = self.interaction.banner_pressed.replace(None);
                     if pressed.is_some() && pressed == released {
@@ -1060,7 +1094,14 @@ impl<C: View> View for NotificationCenterLayer<C> {
                 position,
                 button: PointerButton::Primary,
             } => {
-                if !panel.contains(*position) {
+                if !panel.contains_rounded(
+                    Theme::current().surface.floating_radius.resolve(
+                        &Theme::current().radius,
+                        panel.size.width,
+                        panel.size.height,
+                    ),
+                    *position,
+                ) {
                     self.open.set(false);
                 }
                 self.pressed
@@ -1082,7 +1123,15 @@ impl<C: View> View for NotificationCenterLayer<C> {
             }
             ViewEvent::Scroll {
                 position, delta_y, ..
-            } if panel.contains(*position) => {
+            } if panel.contains_rounded(
+                Theme::current().surface.floating_radius.resolve(
+                    &Theme::current().radius,
+                    panel.size.width,
+                    panel.size.height,
+                ),
+                *position,
+            ) =>
+            {
                 let maximum = self.maximum_scroll(panel, &self.entries(&notifications));
                 let next = (self.interaction.scroll.get() - delta_y).clamp(0.0, maximum);
                 if self.interaction.scroll.replace(next) != next {

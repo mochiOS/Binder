@@ -162,51 +162,7 @@ pub(crate) fn view(
 }
 
 pub(crate) fn contains(bounds: Rect, point: Point) -> bool {
-    if !bounds.contains(point) {
-        return false;
-    }
-
-    let radius = WINDOW_CORNER_RADIUS
-        .max(0.0)
-        .min(bounds.size.width.min(bounds.size.height) / 2.0);
-
-    if radius == 0.0 {
-        return true;
-    }
-
-    let left = bounds.origin.x;
-
-    let top = bounds.origin.y;
-
-    let right = left + bounds.size.width;
-
-    let bottom = top + bounds.size.height;
-
-    if point.x >= left + radius && point.x < right - radius {
-        return true;
-    }
-
-    if point.y >= top + radius && point.y < bottom - radius {
-        return true;
-    }
-
-    let center_x = if point.x < left + radius {
-        left + radius
-    } else {
-        right - radius
-    };
-
-    let center_y = if point.y < top + radius {
-        top + radius
-    } else {
-        bottom - radius
-    };
-
-    let delta_x = point.x - center_x;
-
-    let delta_y = point.y - center_y;
-
-    delta_x * delta_x + delta_y * delta_y <= radius * radius
+    bounds.contains_rounded(WINDOW_CORNER_RADIUS, point)
 }
 
 fn remote_content_view(renderer: &str) -> Box<dyn View> {

@@ -650,7 +650,9 @@ where
                 | ViewEvent::PointerReleased {
                     position,
                     button: PointerButton::Primary,
-                } if menu_bounds.contains(*position) => {
+                } if menu_bounds
+                    .contains_rounded(Theme::current().menu.compact_radius, *position) =>
+                {
                     let result = self.active_menu().handle_event(menu_bounds, event, context);
                     self.apply_menu_action(context, bounds);
                     return result.merge(EventResult::Consumed);
@@ -767,7 +769,7 @@ where
                 position,
                 button: PointerButton::Primary,
             } => {
-                if !panel.contains(*position) {
+                if !panel.contains_rounded(22.0, *position) {
                     self.open.set(false);
                     context.request_redraw_in(bounds);
                 } else if self.page_count(&self.filtered_indices()) > 1
@@ -815,7 +817,7 @@ where
             }
             ViewEvent::Scroll {
                 position, delta_y, ..
-            } if panel.contains(*position) && *delta_y != 0.0 => {
+            } if panel.contains_rounded(22.0, *position) && *delta_y != 0.0 => {
                 if *delta_y > 0.0 {
                     self.select_page(self.page.get().saturating_sub(1));
                 } else {

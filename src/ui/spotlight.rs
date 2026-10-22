@@ -467,7 +467,14 @@ impl<C: View> View for SpotlightLayer<C> {
                 position,
                 button: PointerButton::Primary,
             } => {
-                if !panel.contains(*position) {
+                if !panel.contains_rounded(
+                    Theme::current().card.radius.resolve(
+                        &Theme::current().radius,
+                        panel.size.width,
+                        panel.size.height,
+                    ),
+                    *position,
+                ) {
                     self.close();
                 } else if search.contains(*position) {
                     forward_to_search = true;

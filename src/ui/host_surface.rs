@@ -45,6 +45,10 @@ fn place(command: &DrawCommand, bounds: Rect) -> DrawCommand {
         | DrawCommand::StrokeEllipse { rect, .. }
         | DrawCommand::StrokeRect { rect, .. }
         | DrawCommand::StrokeRoundedRect { rect, .. }
+        | DrawCommand::StrokeInsideRoundedRect { rect, .. }
+        | DrawCommand::FillRoundedCornersRect { rect, .. }
+        | DrawCommand::StrokeInsideRoundedCornersRect { rect, .. }
+        | DrawCommand::PushRoundedCornersClip { rect, .. }
         | DrawCommand::PushClip { rect }
         | DrawCommand::PushRoundedClip { rect, .. } => {
             *rect = translated(*rect, bounds.origin);

@@ -199,7 +199,7 @@ impl View for LaunchFailureView {
                 EventResult::Consumed
             }
             ViewEvent::PointerMoved { position } => {
-                let hovered = button.contains(*position);
+                let hovered = button.contains_rounded(7.0, *position);
                 if self.state.button_hovered.replace(hovered) != hovered {
                     context.request_redraw_in(button.expanded(4.0));
                 }
@@ -208,7 +208,7 @@ impl View for LaunchFailureView {
             ViewEvent::PointerPressed {
                 position,
                 button: PointerButton::Primary,
-            } if button.contains(*position) => {
+            } if button.contains_rounded(7.0, *position) => {
                 self.state.button_pressed.set(true);
                 context.request_redraw_in(button.expanded(4.0));
                 EventResult::Consumed
@@ -217,8 +217,8 @@ impl View for LaunchFailureView {
                 position,
                 button: PointerButton::Primary,
             } => {
-                let activate =
-                    self.state.button_pressed.replace(false) && button.contains(*position);
+                let activate = self.state.button_pressed.replace(false)
+                    && button.contains_rounded(7.0, *position);
                 if activate {
                     self.close(bounds, context);
                 } else {

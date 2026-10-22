@@ -44,9 +44,9 @@ pub(super) fn logical_event(event: &ViewEvent, transform: PaintTransform) -> Vie
     event
 }
 
-pub(crate) struct PopupMenu<C, M> {
+pub(crate) struct PopupMenu<C> {
     content: C,
-    menu: M,
+    menu: Menu,
 
     open: State<bool>,
     interaction: Rc<PopupMenuInteraction>,
@@ -55,14 +55,13 @@ pub(crate) struct PopupMenu<C, M> {
     trigger_frame: Rect,
 }
 
-impl<C, M> PopupMenu<C, M>
+impl<C> PopupMenu<C>
 where
     C: View,
-    M: View,
 {
     pub(crate) fn new(
         content: C,
-        menu: M,
+        menu: Menu,
         open: State<bool>,
         interaction: Rc<PopupMenuInteraction>,
     ) -> Self {
@@ -111,10 +110,9 @@ where
     }
 }
 
-impl<C, M> View for PopupMenu<C, M>
+impl<C> View for PopupMenu<C>
 where
     C: View,
-    M: View,
 {
     fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
         self.content.measure(constraints, context)
@@ -167,7 +165,6 @@ where
         let transform = self.interaction.presented.get().unwrap_or_else(|| {
             presentation(menu_bounds, 1.0, context.theme().motion.menu_closed_scale)
         });
-        let presented_bounds = transform.rect(menu_bounds);
         let menu_event = logical_event(event, transform);
 
         match event {
@@ -192,7 +189,11 @@ where
                 .merge(EventResult::Consumed),
 
             ViewEvent::PointerMoved { position } => {
-                if presented_bounds.contains(*position) {
+                if self.menu.contains(
+                    menu_bounds,
+                    transform.inverse_point(*position),
+                    context.theme(),
+                ) {
                     let result = self.menu.handle_event(menu_bounds, &menu_event, context);
 
                     return result.merge(EventResult::Consumed);
@@ -211,7 +212,11 @@ where
                 position,
                 button: PointerButton::Primary,
             } => {
-                if presented_bounds.contains(*position) {
+                if self.menu.contains(
+                    menu_bounds,
+                    transform.inverse_point(*position),
+                    context.theme(),
+                ) {
                     return self
                         .menu
                         .handle_event(menu_bounds, &menu_event, context)
@@ -234,7 +239,11 @@ where
                 position,
                 button: PointerButton::Primary,
             } => {
-                if presented_bounds.contains(*position) {
+                if self.menu.contains(
+                    menu_bounds,
+                    transform.inverse_point(*position),
+                    context.theme(),
+                ) {
                     let result = self.menu.handle_event(menu_bounds, &menu_event, context);
 
                     if !self.open.get() {
@@ -261,7 +270,11 @@ where
 
             _ => {
                 if let Some(position) = event.position() {
-                    if presented_bounds.contains(position) {
+                    if self.menu.contains(
+                        menu_bounds,
+                        transform.inverse_point(position),
+                        context.theme(),
+                    ) {
                         return self
                             .menu
                             .handle_event(menu_bounds, &menu_event, context)
@@ -392,10 +405,12 @@ mod tests {
         interaction.presented.set(Some(transform));
         let logical = Point::new(
             popup.menu_frame.origin.x + theme.menu.compact_padding + 0.1,
-            popup.menu_frame.origin.y + theme.menu.compact_padding + 0.1,
+            popup.menu_frame.origin.y
+                + theme.menu.compact_padding
+                + theme.menu.compact_row_height * 0.5,
         );
         let visible = transform.point(logical);
-        // The visible corner falls outside the untransformed item. Using logical hit testing directly would miss it.
+        // The visible left edge falls outside the untransformed item.
         assert!(visible.x < logical.x - 0.1);
         let mut measurer = TextMeasurer::new();
         let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
