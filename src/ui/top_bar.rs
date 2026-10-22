@@ -199,16 +199,16 @@ impl SystemBar {
             }
             let width = entry_width(&entry.item);
             // Overflow retains its menu entry and saved pin preference.
-            if cursor + width + 3.0 > maximum {
+            if cursor + width + metrics::STATUS_MENU_SPACE > maximum {
                 continue;
             }
             entries.push((index, Rect::new(cursor, 0.0, width, 34.0)));
             cursor += width + 8.0;
         }
         let width = if entries.is_empty() {
-            115.0_f32.min(maximum)
+            (112.0 + metrics::STATUS_MENU_SPACE).min(maximum)
         } else {
-            cursor - 8.0 + 3.0
+            cursor - 8.0 + metrics::STATUS_MENU_SPACE
         };
         let pill = Rect::new(
             bounds.origin.x + bounds.size.width - metrics::CHROME_RIGHT - width,
@@ -482,15 +482,21 @@ mod tests {
         assert_eq!(count.get(), 0);
         click(&bar, bounds, gap, &mut context);
         assert_eq!(count.get(), 1);
+        let menu_space = Point::new(
+            layout.pill.origin.x + layout.pill.size.width - metrics::STATUS_MENU_SPACE * 0.5,
+            layout.pill.origin.y + 17.0,
+        );
+        click(&bar, bounds, menu_space, &mut context);
+        assert_eq!(count.get(), 2);
         click(
             &bar,
             bounds,
             Point::new(layout.date.origin.x + 30.0, layout.date.origin.y + 17.0),
             &mut context,
         );
-        assert_eq!(count.get(), 1);
+        assert_eq!(count.get(), 2);
         click(&bar, bounds, layout.pill.origin, &mut context);
-        assert_eq!(count.get(), 1);
+        assert_eq!(count.get(), 2);
     }
     #[test]
     fn menu_and_hidden_placement_remove_icons_and_narrow_windows_keep_overflow_in_registry() {
