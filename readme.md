@@ -38,6 +38,8 @@ to choose **Always show** or **Hide when windows overlap**. This is saved as
 The right group samples its underlying background at five points, at most ten
 times per second. Light backgrounds use black text/symbols on a translucent light
 surface; dark backgrounds use white text/symbols on a translucent dark surface.
+The surface appears only while the pointer is over the group. At rest, only
+text and symbols remain; opening a menu does not keep the surface highlighted.
 Luminance hysteresis avoids rapid switching near the threshold. The shell's own
 surfaces are excluded: Linux preview samples the underlying display list and
 mochiOS queries the compositor's underlying surfaces through the privileged

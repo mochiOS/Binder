@@ -41,7 +41,7 @@ pub(crate) struct StatusAreaInteraction {
 
 pub(crate) struct StatusAreaLayer<C> {
     content: C,
-    bar: SystemBar,
+    bar: Rc<SystemBar>,
     pub(crate) interaction: Rc<StatusAreaInteraction>,
     windows: State<DesktopWindows>,
     drag: State<Option<WindowDrag>>,
@@ -56,7 +56,7 @@ impl<C: View> StatusAreaLayer<C> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         content: C,
-        bar: SystemBar,
+        bar: Rc<SystemBar>,
         interaction: Rc<StatusAreaInteraction>,
         windows: State<DesktopWindows>,
         drag: State<Option<WindowDrag>>,
@@ -262,11 +262,19 @@ impl<C: View> View for StatusAreaLayer<C> {
                     opacity: amount,
                 };
                 state.presented.set(Some(transform));
+                if part == 1 {
+                    self.bar.set_presented_frame(Some(
+                        transform.rect(self.bar.pill(Self::strip(bounds))),
+                    ));
+                }
                 context.with_presentation(transform, visible, |context| {
                     self.bar.paint_part(part, Self::strip(bounds), context)
                 });
             } else {
                 state.presented.set(None);
+                if part == 1 {
+                    self.bar.set_presented_frame(None);
+                }
             }
         }
         if let Some(menu) = self.context()
@@ -408,7 +416,7 @@ mod tests {
         );
         StatusAreaLayer::new(
             WindowProbe(Rc::new(Cell::new(0))),
-            bar,
+            Rc::new(bar),
             Rc::new(StatusAreaInteraction::default()),
             State::new(DesktopWindows::default()),
             State::new(None),
@@ -560,6 +568,12 @@ mod tests {
         );
         // A completed reveal must retain the status pill's original 64/255
         // alpha, rather than turning it into an opaque white cover.
+        layer.bar.sync_pointer(Some(Point::new(1235.0, 25.0)));
+        list.clear();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
+        );
         assert!(list.commands().iter().any(|command| matches!(command,
             viewkit::draw_command::DrawCommand::FillRoundedRect { rect, color, .. }
                 if rect.size.width == metrics::STATUS_GROUP_WIDTH && rect.size.height == 34.0

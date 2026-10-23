@@ -95,17 +95,18 @@ pub(crate) fn view(
         apps.clone(),
     );
 
+    let chrome = Rc::new(top_bar::view(
+        system_bar.clone(),
+        menu_open.clone(),
+        control_center_open.clone(),
+        notification_center_open.clone(),
+        apps.clone(),
+        control_center_preferences.clone(),
+        control_center_interaction.clone(),
+    ));
     let windowed_desktop = super::status_area::StatusAreaLayer::new(
         windowed_desktop,
-        top_bar::view(
-            system_bar.clone(),
-            menu_open.clone(),
-            control_center_open.clone(),
-            notification_center_open.clone(),
-            apps.clone(),
-            control_center_preferences.clone(),
-            control_center_interaction.clone(),
-        ),
+        chrome.clone(),
         status_area_interaction,
         windows.clone(),
         window_drag,
@@ -192,7 +193,7 @@ pub(crate) fn view(
         notification_center_open,
         app_library_open,
     );
-    let root = PointerTracker::new(root, Rc::clone(&cursor_pointer));
+    let root = PointerTracker::new(root, Rc::clone(&cursor_pointer)).with_chrome(chrome);
 
     #[cfg(target_os = "mochios")]
     {
@@ -213,11 +214,20 @@ pub(crate) fn view(
 struct PointerTracker<C> {
     content: C,
     position: Rc<Cell<Option<Point>>>,
+    chrome: Option<Rc<top_bar::SystemBar>>,
 }
 
 impl<C: View> PointerTracker<C> {
+    fn with_chrome(mut self, chrome: Rc<top_bar::SystemBar>) -> Self {
+        self.chrome = Some(chrome);
+        self
+    }
     fn new(content: C, position: Rc<Cell<Option<Point>>>) -> Self {
-        Self { content, position }
+        Self {
+            content,
+            position,
+            chrome: None,
+        }
     }
 }
 
@@ -228,6 +238,11 @@ impl<C: View> View for PointerTracker<C> {
 
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.content.paint(bounds, context);
+        if let Some(chrome) = &self.chrome
+            && let Some(damage) = chrome.sync_pointer(self.position.get())
+        {
+            context.request_redraw_in_at(damage, Instant::now());
+        }
     }
 
     fn handle_event(
@@ -259,6 +274,24 @@ impl<C: View> View for PointerTracker<C> {
                 }
             }
         }
+        if let Some(chrome) = &self.chrome
+            && let Some(damage) = chrome.sync_pointer(self.position.get())
+        {
+            if !chrome.is_hovered() {
+                chrome.handle_part(
+                    1,
+                    Rect::new(
+                        bounds.origin.x,
+                        bounds.origin.y,
+                        bounds.size.width,
+                        super::desktop_metrics::SYSTEM_HEIGHT,
+                    ),
+                    &ViewEvent::PointerLeft,
+                    context,
+                );
+            }
+            context.request_redraw_in(damage);
+        }
         self.content.handle_event(bounds, event, context)
     }
 }
@@ -284,6 +317,51 @@ mod pointer_tracker_tests {
         ) -> EventResult {
             EventResult::Consumed
         }
+    }
+
+    #[test]
+    fn removes_status_hover_even_when_a_menu_consumes_pointer_motion() {
+        let position = Rc::new(Cell::new(None));
+        let interaction = Rc::new(RefCell::new(
+            super::super::control_center::ControlCenterInteraction::default(),
+        ));
+        let chrome = Rc::new(top_bar::view(
+            State::new(SystemBarState::default()),
+            State::new(false),
+            State::new(true),
+            State::new(false),
+            State::new(Vec::new()),
+            Rc::new(RefCell::new(ControlCenterPreferences::default())),
+            interaction.clone(),
+        ));
+        let bounds = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        let strip = Rect::new(
+            0.0,
+            0.0,
+            1280.0,
+            super::super::desktop_metrics::SYSTEM_HEIGHT,
+        );
+        chrome.set_presented_frame(Some(chrome.pill(strip)));
+        let layer = PointerTracker::new(ConsumingView, position).with_chrome(chrome.clone());
+        let theme = Theme::current();
+        let mut measurer = viewkit::typography::TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        let inside = ViewEvent::PointerMoved {
+            position: Point::new(chrome.pill(strip).origin.x + 60.0, 27.0),
+        };
+        chrome.handle_part(1, strip, &inside, &mut context);
+        layer.handle_event(bounds, &inside, &mut context);
+        assert!(chrome.is_hovered());
+        assert!(interaction.borrow().status_buttons["chrome.clock"].is_hovered());
+        layer.handle_event(
+            bounds,
+            &ViewEvent::PointerMoved {
+                position: Point::new(1100.0, 180.0),
+            },
+            &mut context,
+        );
+        assert!(!chrome.is_hovered());
+        assert!(!interaction.borrow().status_buttons["chrome.clock"].is_hovered());
     }
 
     #[test]

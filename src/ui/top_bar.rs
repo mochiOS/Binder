@@ -40,6 +40,7 @@ pub(crate) fn view(
     interaction: Rc<RefCell<ControlCenterInteraction>>,
 ) -> SystemBar {
     let palette = interaction.borrow().status_palette.clone();
+    let hovered = interaction.borrow().status_hovered.clone();
     let catalog = status_items::catalog(&apps.get());
     interaction
         .borrow_mut()
@@ -136,6 +137,8 @@ pub(crate) fn view(
         entries,
         preferences,
         palette,
+        hovered,
+        presented_frame: Cell::new(None),
     }
 }
 struct StatusEntry {
@@ -149,6 +152,8 @@ pub(crate) struct SystemBar {
     entries: Vec<StatusEntry>,
     preferences: Rc<RefCell<ControlCenterPreferences>>,
     palette: Rc<Cell<ChromePalette>>,
+    hovered: Rc<Cell<bool>>,
+    presented_frame: Cell<Option<Rect>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -207,6 +212,23 @@ fn hit_frame(item: &Item, frame: Rect) -> Rect {
     }
 }
 impl SystemBar {
+    pub(crate) fn pill(&self, bounds: Rect) -> Rect {
+        self.resolved_frames(bounds).pill
+    }
+    pub(crate) fn set_presented_frame(&self, frame: Option<Rect>) {
+        self.presented_frame.set(frame);
+    }
+    pub(crate) fn sync_pointer(&self, position: Option<Point>) -> Option<Rect> {
+        let frame = self.presented_frame.get();
+        let hovered = frame.is_some_and(|frame| {
+            position.is_some_and(|point| frame.contains_rounded(frame.size.height * 0.5, point))
+        });
+        (self.hovered.replace(hovered) != hovered)
+            .then_some(frame.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)))
+    }
+    pub(crate) fn is_hovered(&self) -> bool {
+        self.hovered.get()
+    }
     pub(crate) fn regions(&self, bounds: Rect) -> [Rect; 2] {
         let left = 64.0_f32.min(bounds.size.width);
         let x = (self.resolved_frames(bounds).pill.origin.x - 8.0).max(bounds.origin.x + left);
@@ -328,10 +350,12 @@ impl SystemBar {
             return;
         }
         let layout = self.resolved_frames(bounds);
-        Rectangle::new()
-            .color(RectangleColor::Custom(self.palette.get().background))
-            .radius(CornerRadius::Full)
-            .paint(layout.pill, context);
+        if self.hovered.get() {
+            Rectangle::new()
+                .color(RectangleColor::Custom(self.palette.get().background))
+                .radius(CornerRadius::Full)
+                .paint(layout.pill, context);
+        }
         for (index, frame) in layout.entries {
             self.entries[index]
                 .button
@@ -352,6 +376,22 @@ impl SystemBar {
             return self.logo.handle_event(logo_frame(bounds), event, context);
         }
         let layout = self.resolved_frames(bounds);
+        let hovered = match event {
+            ViewEvent::PointerMoved { position }
+            | ViewEvent::PointerPressed { position, .. }
+            | ViewEvent::PointerReleased { position, .. } => Some(
+                layout
+                    .pill
+                    .contains_rounded(layout.pill.size.height * 0.5, *position),
+            ),
+            ViewEvent::PointerLeft | ViewEvent::FocusChanged { focused: false } => Some(false),
+            _ => None,
+        };
+        if let Some(hovered) = hovered
+            && self.hovered.replace(hovered) != hovered
+        {
+            context.request_redraw_in(layout.pill);
+        }
         let reserved = event.position().is_some_and(|p| {
             layout.date.contains(p)
                 || layout
@@ -518,6 +558,8 @@ mod tests {
             entries,
             preferences: Rc::new(RefCell::new(ControlCenterPreferences::default())),
             palette: Rc::new(Cell::new(ChromePalette::default())),
+            hovered: Rc::new(Cell::new(false)),
+            presented_frame: Cell::new(None),
             status: Button::new("")
                 .radius(CornerRadius::Full)
                 .on_click(move || count.set(count.get() + 1)),
@@ -542,6 +584,52 @@ mod tests {
         );
     }
     #[test]
+    fn status_surface_is_absent_at_rest_and_only_drawn_during_hover() {
+        use viewkit::draw_command::{DisplayList, DrawCommand};
+        let bar = bar(Rc::new(Cell::new(0)));
+        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut list = DisplayList::new();
+        let has_plate = |list: &DisplayList| {
+            list.commands().iter().any(|command| matches!(command,
+            DrawCommand::FillRoundedRect { rect, color, .. } if rect.size.width == metrics::STATUS_GROUP_WIDTH
+                && *color == Color::rgba(255, 255, 255, 64)))
+        };
+        bar.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
+        );
+        assert!(!has_plate(&list));
+        {
+            let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+            bar.handle_event(
+                bounds,
+                &ViewEvent::PointerMoved {
+                    position: Point::new(1400.0, 27.0),
+                },
+                &mut context,
+            );
+        }
+        list.clear();
+        bar.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
+        );
+        assert!(has_plate(&list));
+        {
+            let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+            bar.handle_event(bounds, &ViewEvent::PointerLeft, &mut context);
+        }
+        list.clear();
+        bar.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
+        );
+        assert!(!has_plate(&list));
+    }
+
+    #[test]
     fn backdrop_changes_native_text_symbols_and_translucent_surface_together() {
         use viewkit::draw_command::{DisplayList, DrawCommand};
         let bar = view(
@@ -562,6 +650,7 @@ mod tests {
             (Color::BLACK, Color::WHITE, Color::rgba(0, 0, 0, 96)),
         ] {
             bar.set_backdrop(background);
+            bar.hovered.set(true);
             list.clear();
             bar.paint(
                 bounds,
