@@ -212,6 +212,10 @@ fn hit_frame(item: &Item, frame: Rect) -> Rect {
     }
 }
 impl SystemBar {
+    pub(crate) fn on_clock_click(mut self, callback: impl FnMut() + 'static) -> Self {
+        self.clock = self.clock.on_click(callback);
+        self
+    }
     pub(crate) fn pill(&self, bounds: Rect) -> Rect {
         self.resolved_frames(bounds).pill
     }
@@ -793,6 +797,25 @@ mod tests {
             .set_placement(&id, StatusItemPlacement::Hidden);
         assert_eq!(bar.resolved_frames(bounds).entries.len(), 4);
     }
+    #[test]
+    fn clicking_the_clock_uses_its_registered_action_only() {
+        let count = Rc::new(Cell::new(0));
+        let clicked = count.clone();
+        let bar = bar(Rc::new(Cell::new(0))).on_clock_click(move || clicked.set(clicked.get() + 1));
+        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
+        let frame = bar.resolved_frames(bounds).date;
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        click(
+            &bar,
+            bounds,
+            Point::new(frame.origin.x + 20.0, frame.origin.y + 12.0),
+            &mut context,
+        );
+        assert_eq!(count.get(), 1);
+    }
+
     #[test]
     fn registered_icon_dispatch_does_not_toggle_the_background_or_calendar() {
         let controls = State::new(false);

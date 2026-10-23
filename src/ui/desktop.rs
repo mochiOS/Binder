@@ -95,15 +95,34 @@ pub(crate) fn view(
         apps.clone(),
     );
 
-    let chrome = Rc::new(top_bar::view(
-        system_bar.clone(),
-        menu_open.clone(),
-        control_center_open.clone(),
-        notification_center_open.clone(),
-        apps.clone(),
-        control_center_preferences.clone(),
-        control_center_interaction.clone(),
-    ));
+    let calendar_apps = apps.clone();
+    let calendar_activation = pending_app_activation.clone();
+    let calendar_menu = menu_open.clone();
+    let calendar_controls = control_center_open.clone();
+    let calendar_notifications = notification_center_open.clone();
+    let chrome = Rc::new(
+        top_bar::view(
+            system_bar.clone(),
+            menu_open.clone(),
+            control_center_open.clone(),
+            notification_center_open.clone(),
+            apps.clone(),
+            control_center_preferences.clone(),
+            control_center_interaction.clone(),
+        )
+        .on_clock_click(move || {
+            if let Some(calendar) = calendar_apps
+                .get()
+                .into_iter()
+                .find(|app| app.bundle_id == "org.mochios.calendar")
+            {
+                calendar_menu.set(false);
+                calendar_controls.set(false);
+                calendar_notifications.set(false);
+                calendar_activation.borrow_mut().queue(calendar);
+            }
+        }),
+    );
     let windowed_desktop = super::status_area::StatusAreaLayer::new(
         windowed_desktop,
         chrome.clone(),
