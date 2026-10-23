@@ -134,7 +134,7 @@ where
             .iter()
             .rev()
             .find(|desktop_window| {
-                !desktop_window.minimized && window::contains(desktop_window.frame, position)
+                !desktop_window.minimized && window::contains(desktop_window, position)
             })
             .cloned()
     }

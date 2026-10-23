@@ -18,6 +18,7 @@ struct WindowView {
     content: Box<dyn View + 'static>,
     shadow: ShadowStyle,
     focused: bool,
+    radius: f32,
 }
 
 impl WindowView {
@@ -63,13 +64,13 @@ impl View for WindowView {
 
         Rectangle::new()
             .color(RectangleColor::Custom(Color::TRANSPARENT))
-            .radius(CornerRadius::Custom(WINDOW_CORNER_RADIUS))
+            .radius(CornerRadius::Custom(self.radius))
             .shadow(self.shadow)
             .paint(bounds, context);
 
         context.display_list.push(DrawCommand::PushRoundedClip {
             rect: bounds,
-            radius: WINDOW_CORNER_RADIUS,
+            radius: self.radius,
         });
 
         Rectangle::new()
@@ -88,7 +89,7 @@ impl View for WindowView {
         if self.focused {
             Rectangle::new()
                 .color(RectangleColor::Custom(Color::TRANSPARENT))
-                .radius(CornerRadius::Custom(WINDOW_CORNER_RADIUS))
+                .radius(CornerRadius::Custom(self.radius))
                 .border(BorderStyle::custom(
                     Theme::current().shell.window_border,
                     1.0,
@@ -152,17 +153,28 @@ pub(crate) fn view(
 
         content,
 
-        shadow: if focused {
+        shadow: if window.restore_frame.is_some() {
+            ShadowStyle::None
+        } else if focused {
             ShadowStyle::Custom(Theme::current().shell.active_window_shadow)
         } else {
             ShadowStyle::Custom(Theme::current().shell.inactive_window_shadow)
         },
         focused,
+        radius: corner_radius(window),
     }
 }
 
-pub(crate) fn contains(bounds: Rect, point: Point) -> bool {
-    bounds.contains_rounded(WINDOW_CORNER_RADIUS, point)
+pub(crate) fn corner_radius(window: &DesktopWindow) -> f32 {
+    if window.restore_frame.is_some() {
+        0.0
+    } else {
+        WINDOW_CORNER_RADIUS
+    }
+}
+
+pub(crate) fn contains(window: &DesktopWindow, point: Point) -> bool {
+    window.frame.contains_rounded(corner_radius(window), point)
 }
 
 fn remote_content_view(renderer: &str) -> Box<dyn View> {
@@ -189,4 +201,47 @@ fn remote_placeholder_view() -> impl View + 'static {
                 .alignment(TextAlignment::Center)
                 .color(Theme::current().shell.tertiary_text),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use viewkit::{draw_command::DisplayList, typography::TextMeasurer};
+    #[test]
+    fn maximizing_and_restoring_match_paint_clip_and_hit_test() {
+        let mut desktop = crate::window::DesktopWindows::default();
+        let (id, _) =
+            desktop.open_test(crate::platform::ProcessId(1), "Test".into(), 640, 480, true);
+        let display = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        for maximized in [false, true, false] {
+            if desktop.windows[0].restore_frame.is_some() != maximized {
+                desktop.toggle_maximize(id, display);
+            }
+            let window = &desktop.windows[0];
+            let radius = corner_radius(window);
+            assert_eq!(radius, if maximized { 0.0 } else { WINDOW_CORNER_RADIUS });
+            assert_eq!(
+                contains(
+                    window,
+                    Point::new(window.frame.origin.x + 0.01, window.frame.origin.y + 0.01)
+                ),
+                maximized
+            );
+            let view = WindowView {
+                decoration: window_decoration::WindowDecoration::new("Test", window.interaction),
+                content: Box::new(Rectangle::new()),
+                shadow: ShadowStyle::None,
+                focused: true,
+                radius,
+            };
+            let theme = Theme::current();
+            let mut measurer = TextMeasurer::new();
+            let mut list = DisplayList::new();
+            view.paint(
+                window.frame,
+                &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
+            );
+            assert!(list.commands().iter().any(|command| matches!(command, DrawCommand::PushRoundedClip { rect, radius: actual } if *rect == window.frame && *actual == radius)));
+        }
+    }
 }
