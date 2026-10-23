@@ -34,7 +34,7 @@ pub(crate) fn view(
     apps: State<Vec<AppInfo>>,
     preferences: Rc<RefCell<ControlCenterPreferences>>,
     interaction: Rc<RefCell<ControlCenterInteraction>>,
-) -> impl View + 'static {
+) -> SystemBar {
     let catalog = status_items::catalog(&apps.get());
     interaction
         .borrow_mut()
@@ -136,7 +136,7 @@ struct StatusEntry {
     item: Item,
     button: Button,
 }
-struct SystemBar {
+pub(crate) struct SystemBar {
     logo: Button,
     status: Button,
     clock: Button,
@@ -176,6 +176,15 @@ fn hit_frame(item: &Item, frame: Rect) -> Rect {
     }
 }
 impl SystemBar {
+    pub(crate) fn is_blank(&self, bounds: Rect, position: Point) -> bool {
+        let layout = self.resolved_frames(bounds);
+        bounds.contains(position)
+            && !logo_frame(bounds).contains(position)
+            && !layout.date.contains(position)
+            && !layout.entries.iter().any(|(index, frame)| {
+                hit_frame(&self.entries[*index].item, *frame).contains(position)
+            })
+    }
     fn resolved_frames(&self, bounds: Rect) -> StatusLayout {
         let preferences = self.preferences.borrow();
         let ordered =

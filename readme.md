@@ -25,3 +25,14 @@ application items default to Menu. Overflow remains accessible in Control Center
 Preferences retain the existing `control-center.conf` path and `item=` ordering,
 and accept `hidden=`, `menu=` and `pinned=` placement records. Existing hidden
 preferences are preserved.
+
+StatusArea (the logo and right-hand status group) appears above windows. By
+default it slides away when a visible window comes within 8px below its 54px
+strip. Moving the pointer into the top 9px reveals it; moving into the revealed
+strip keeps it open. Open shell menus retain it, while an active window
+drag/resize retains pointer ownership. Right-click empty space in StatusArea
+to choose **Always show** or **Hide when windows overlap**. This is saved as
+`status-area=always` / `status-area=automatic` in the same preferences file.
+
+Maximized window outlines, clips and corner hit tests use radius zero, and
+restore the usual continuous corners when returned to their previous size.

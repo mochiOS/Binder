@@ -31,6 +31,7 @@ const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
+    status_area_interaction: Rc<super::status_area::StatusAreaInteraction>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     menu_open: State<bool>,
     menu_interaction: Rc<super::popup_menu::PopupMenuInteraction>,
@@ -76,43 +77,44 @@ pub(crate) fn view(
         Rc::clone(&fast_poll_until),
     );
 
-    let content = VStack::new()
-        .alignment(StackAlignment::Stretch)
-        .gap(StackGap::None)
-        .child(
-            top_bar::view(
-                system_bar.clone(),
-                menu_open.clone(),
-                control_center_open.clone(),
-                notification_center_open.clone(),
-                apps.clone(),
-                Rc::clone(&control_center_preferences),
-                Rc::clone(&control_center_interaction),
-            )
-            .height(super::desktop_metrics::SYSTEM_HEIGHT),
-        )
-        .child(Spacer::new());
-
     let desktop_content = Background::new().background(refresh_driver).content(
         Background::new()
-            .background(
-                Background::new()
-                    .background(Rectangle::new().color(RectangleColor::Custom(Color::TRANSPARENT)))
-                    .content(wallpaper),
-            )
-            .content(content),
+            .background(Rectangle::new().color(RectangleColor::Custom(Color::TRANSPARENT)))
+            .content(wallpaper),
     );
 
     let windowed_desktop = super::window_layer::WindowLayer::new(
         desktop_content,
         windows.clone(),
-        window_drag,
-        resize,
+        window_drag.clone(),
+        resize.clone(),
         test_window_states,
         Rc::clone(&launch_failure_states),
         Rc::clone(&control_center_preferences),
         control_center_editor_interaction,
         apps.clone(),
+    );
+
+    let windowed_desktop = super::status_area::StatusAreaLayer::new(
+        windowed_desktop,
+        top_bar::view(
+            system_bar.clone(),
+            menu_open.clone(),
+            control_center_open.clone(),
+            notification_center_open.clone(),
+            apps.clone(),
+            control_center_preferences.clone(),
+            control_center_interaction.clone(),
+        ),
+        status_area_interaction,
+        windows.clone(),
+        window_drag,
+        resize,
+        control_center_preferences.clone(),
+        platform.clone(),
+        menu_open.clone(),
+        control_center_open.clone(),
+        notification_center_open.clone(),
     );
 
     let docked_desktop = dock::DockLayer::new(

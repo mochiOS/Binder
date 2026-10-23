@@ -23,3 +23,5 @@ pub(crate) mod window_layer;
 
 #[cfg(target_os = "linux")]
 mod host_surface;
+
+pub(crate) mod status_area;

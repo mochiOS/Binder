@@ -22,9 +22,16 @@ pub(crate) struct ControlCenterPreferences {
     order: Vec<String>,
     placements: BTreeMap<String, StatusItemPlacement>,
     storage_path: Option<std::path::PathBuf>,
+    always_show_status: bool,
 }
 
 impl ControlCenterPreferences {
+    pub(crate) fn always_show_status(&self) -> bool {
+        self.always_show_status
+    }
+    pub(crate) fn set_always_show_status(&mut self, value: bool) {
+        self.always_show_status = value;
+    }
     #[cfg(test)]
     pub(crate) fn with_test_storage(path: std::path::PathBuf) -> Self {
         Self {
@@ -147,6 +154,11 @@ impl ControlCenterPreferences {
     }
     fn to_text(&self) -> String {
         let mut contents = String::new();
+        contents.push_str(if self.always_show_status {
+            "status-area=always\n"
+        } else {
+            "status-area=automatic\n"
+        });
         for id in &self.order {
             contents.push_str(&format!("item={id}\n"));
         }
@@ -165,6 +177,14 @@ impl ControlCenterPreferences {
         let mut preferences = Self::default();
         let mut ordered = HashSet::new();
         for line in text.lines().map(str::trim) {
+            if let Some(value) = line.strip_prefix("status-area=") {
+                match value {
+                    "always" => preferences.always_show_status = true,
+                    "automatic" => preferences.always_show_status = false,
+                    _ => {}
+                }
+                continue;
+            }
             if let Some(id) = line.strip_prefix("item=") {
                 if valid_id(id) && ordered.insert(id.to_string()) {
                     preferences.order.push(id.to_string());
@@ -196,6 +216,22 @@ fn valid_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn status_visibility_round_trips_without_affecting_item_placements() {
+        let mut preferences =
+            ControlCenterPreferences::parse("hidden=builtin.network\nstatus-area=always\n");
+        assert!(preferences.always_show_status());
+        assert_eq!(
+            ControlCenterPreferences::parse(&preferences.to_text()),
+            preferences
+        );
+        preferences.set_always_show_status(false);
+        assert_eq!(
+            ControlCenterPreferences::parse(&preferences.to_text()),
+            preferences
+        );
+        assert!(preferences.is_hidden("builtin.network"));
+    }
 
     #[test]
     fn parses_order_and_hidden_items_strictly() {

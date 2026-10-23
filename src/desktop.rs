@@ -33,6 +33,7 @@ pub struct BinderApp {
     dock_pressed_app: Rc<Cell<Option<usize>>>,
     dock_pointer: Rc<Cell<Option<Point>>>,
     dock_visibility: Rc<RefCell<crate::ui::dock::DockVisibility>>,
+    status_area_interaction: Rc<crate::ui::status_area::StatusAreaInteraction>,
     dock_running_apps: State<Vec<String>>,
     dock_preferences: State<DockPreferences>,
     app_library_open: State<bool>,
@@ -105,6 +106,9 @@ impl App for BinderApp {
             dock_pressed_app: Rc::new(Cell::new(None)),
             dock_pointer: Rc::new(Cell::new(None)),
             dock_visibility: Rc::new(RefCell::new(crate::ui::dock::DockVisibility::default())),
+            status_area_interaction: Rc::new(
+                crate::ui::status_area::StatusAreaInteraction::default(),
+            ),
             dock_running_apps: State::new(Vec::new()),
             dock_preferences: State::new(DockPreferences::load()),
             app_library_open: State::new(false),
@@ -165,6 +169,7 @@ impl App for BinderApp {
     fn body(&self, _context: &ViewContext) -> Self::Body {
         crate::ui::desktop::view(
             self.system_bar.clone(),
+            self.status_area_interaction.clone(),
             Rc::clone(&self.platform),
             self.mochios_menu_open.clone(),
             Rc::clone(&self.menu_interaction),
