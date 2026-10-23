@@ -614,7 +614,7 @@ impl View for PlatformRefreshView {
                 }
                 // Clamp a newly spawned frame before registering its remote
                 // surface or rendering its first visible frame.
-                desktop.fit_to_work_area(work_area);
+                desktop.fit_new_windows(work_area);
             });
             if let Some(dirty) = Self::window_change_damage(before, self.visible_windows_damage()) {
                 context.request_redraw_in_at(dirty, Instant::now());

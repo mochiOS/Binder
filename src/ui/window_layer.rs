@@ -139,7 +139,7 @@ where
             .cloned()
     }
 
-    fn move_dragged_window(&self, bounds: Rect, drag: WindowDrag, pointer: Point) -> Option<Rect> {
+    fn move_dragged_window(&self, _bounds: Rect, drag: WindowDrag, pointer: Point) -> Option<Rect> {
         let delta_x = pointer.x - drag.pointer_origin.x;
 
         let delta_y = pointer.y - drag.pointer_origin.y;
@@ -151,13 +151,8 @@ where
                 .find(|window| window.id == drag.window)
                 .map(|window| window.frame)
         })?;
-        let minimum_x = bounds.origin.x;
-        let minimum_y = bounds.origin.y;
-        let maximum_x = (bounds.origin.x + bounds.size.width - previous.size.width).max(minimum_x);
-        let maximum_y =
-            (bounds.origin.y + bounds.size.height - previous.size.height).max(minimum_y);
-        let x = (drag.window_origin.x + delta_x).clamp(minimum_x, maximum_x);
-        let y = (drag.window_origin.y + delta_y).clamp(minimum_y, maximum_y);
+        let x = drag.window_origin.x + delta_x;
+        let y = drag.window_origin.y + delta_y;
         let next = Rect::new(x, y, previous.size.width, previous.size.height);
 
         if next == previous {
@@ -529,22 +524,17 @@ where
         // Fit them before their first visible frame, then promptly notify the
         // application of any resized surface on the next paint.
         let work_area = window_work_area(bounds);
-        let needs_resize_notification = self.windows.with(|desktop| {
-            desktop.windows.iter().any(|window| {
-                window.restore_frame.is_none()
-                    && (window.frame.origin.x < work_area.origin.x
-                        || window.frame.origin.y < work_area.origin.y
-                        || window.frame.origin.x + window.frame.size.width
-                            > work_area.origin.x + work_area.size.width
-                        || window.frame.origin.y + window.frame.size.height
-                            > work_area.origin.y + work_area.size.height)
-            })
-        });
-        if needs_resize_notification {
+        if self
+            .windows
+            .with(|desktop| desktop.needs_work_area_fit(work_area))
+        {
+            let mut changed = false;
             self.windows.update(|desktop| {
-                desktop.fit_to_work_area(work_area);
+                changed = desktop.fit_new_windows(work_area);
             });
-            context.request_redraw_in_at(bounds, Instant::now());
+            if changed {
+                context.request_redraw_in_at(bounds, Instant::now());
+            }
         }
 
         self.windows.with(|desktop| {
@@ -1046,6 +1036,7 @@ mod tests {
         let mut desktop = DesktopWindows::default();
         let (id, _) =
             desktop.open_test(crate::platform::ProcessId(1), "Test".into(), 640, 480, true);
+        desktop.fit_new_windows(window_work_area(bounds));
         let origin = desktop.windows[0].frame.origin;
         let calls = Rc::new(Cell::new(0));
         let layer = WindowLayer::new(
@@ -1068,7 +1059,7 @@ mod tests {
                 pointer_origin: origin,
                 window_origin: origin,
             },
-            Point::new(origin.x, -100.0),
+            Point::new(origin.x, 0.0),
         );
         assert_eq!(layer.windows.get().windows[0].frame.origin.y, 0.0);
         let theme = Theme::current();
@@ -1100,6 +1091,31 @@ mod tests {
             &mut context,
         );
         assert_eq!(calls.get(), 1, "uncovered StatusArea remains interactive");
+        for destination in [Point::new(-200.0, -100.0), Point::new(1100.0, 700.0)] {
+            layer.move_dragged_window(
+                bounds,
+                WindowDrag {
+                    window: id,
+                    pointer_origin: origin,
+                    window_origin: origin,
+                },
+                destination,
+            );
+            for _ in 0..2 {
+                list.clear();
+                layer.paint(
+                    bounds,
+                    &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
+                );
+                assert_eq!(layer.windows.get().windows[0].frame.origin, destination);
+                assert!(
+                    !layer
+                        .windows
+                        .get()
+                        .needs_work_area_fit(window_work_area(bounds))
+                );
+            }
+        }
         layer.resize_window(
             bounds,
             WindowResize {

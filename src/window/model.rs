@@ -62,6 +62,8 @@ pub struct DesktopWindows {
     pending_close_requests: Vec<CloseWindowRequest>,
     reported_sizes: HashMap<(ProcessId, RemoteWindowId), (u32, u32)>,
     reported_focus: HashMap<(ProcessId, RemoteWindowId), bool>,
+    fitted_windows: HashSet<WindowId>,
+    fitted_work_area: Option<Rect>,
 }
 
 impl Default for DesktopWindows {
@@ -73,6 +75,8 @@ impl Default for DesktopWindows {
             pending_close_requests: Vec::new(),
             reported_sizes: HashMap::new(),
             reported_focus: HashMap::new(),
+            fitted_windows: HashSet::new(),
+            fitted_work_area: None,
         }
     }
 }
@@ -81,8 +85,29 @@ impl DesktopWindows {
     /// Keep every window reachable when the display is smaller than its
     /// requested size (or when the display resolution changes).
     pub fn fit_to_work_area(&mut self, area: Rect) -> bool {
+        self.fit_windows(area, false)
+    }
+
+    pub fn needs_work_area_fit(&self, area: Rect) -> bool {
+        self.fitted_work_area != Some(area)
+            || self
+                .windows
+                .iter()
+                .any(|window| !self.fitted_windows.contains(&window.id))
+    }
+
+    /// Fit new windows once; refit existing ones only when the display changes.
+    pub fn fit_new_windows(&mut self, area: Rect) -> bool {
+        self.fit_windows(area, self.fitted_work_area == Some(area))
+    }
+
+    fn fit_windows(&mut self, area: Rect, only_new: bool) -> bool {
         let mut changed = false;
         for window in &mut self.windows {
+            let first_fit = self.fitted_windows.insert(window.id);
+            if only_new && !first_fit {
+                continue;
+            }
             if window.restore_frame.is_some() {
                 continue;
             }
@@ -104,6 +129,9 @@ impl DesktopWindows {
                 changed = true;
             }
         }
+        self.fitted_work_area = Some(area);
+        self.fitted_windows
+            .retain(|id| self.windows.iter().any(|window| window.id == *id));
         changed
     }
 
@@ -702,6 +730,32 @@ pub struct WindowDrag {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_fit_preserves_user_movement_when_other_windows_open_or_close() {
+        let mut desktop = DesktopWindows::default();
+        let area = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        desktop.open_test(ProcessId(1), "First".into(), 640, 480, true);
+        desktop.fit_new_windows(area);
+        let outside = Rect::new(-150.0, -100.0, 640.0, 480.0);
+        desktop.windows[0].frame = outside;
+        assert!(!desktop.needs_work_area_fit(area));
+        assert!(!desktop.fit_new_windows(area));
+        desktop.open_test(ProcessId(2), "Second".into(), 4000, 3000, true);
+        assert!(desktop.needs_work_area_fit(area));
+        assert!(desktop.fit_new_windows(area));
+        assert_eq!(desktop.windows[0].frame, outside);
+        assert_eq!(desktop.windows[1].frame, area);
+        desktop.close_process(ProcessId(2));
+        assert!(!desktop.fit_new_windows(area));
+        assert_eq!(desktop.windows[0].frame, outside);
+        assert_eq!(desktop.fitted_windows.len(), 1);
+        let smaller = Rect::new(0.0, 0.0, 500.0, 400.0);
+        assert!(desktop.needs_work_area_fit(smaller));
+        assert!(desktop.fit_new_windows(smaller));
+        assert_eq!(desktop.windows[0].frame, smaller);
+        assert!(!desktop.needs_work_area_fit(smaller));
+    }
 
     #[test]
     fn new_windows_fit_inside_the_display_work_area() {
