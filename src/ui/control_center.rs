@@ -1711,8 +1711,8 @@ mod tests {
         let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
         let left = 1440.0 - metrics::CHROME_RIGHT - metrics::STATUS_GROUP_WIDTH;
         for (offset, detail) in [
-            (220.0, ControlCenterDetail::Network),
-            (184.0, ControlCenterDetail::Battery),
+            (244.0, ControlCenterDetail::Network),
+            (208.0, ControlCenterDetail::Battery),
         ] {
             let position = Point::new(left + offset, 27.0);
             layer.handle_event(

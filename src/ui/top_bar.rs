@@ -181,7 +181,8 @@ impl SystemBar {
         let ordered =
             preferences.ordered_ids(self.entries.iter().map(|entry| entry.item.id.as_str()));
         let maximum = (bounds.size.width - metrics::CHROME_RIGHT - 70.0).max(0.0);
-        let mut cursor = 112.0;
+        let content_start = metrics::STATUS_MENU_SPACE + 104.0;
+        let mut cursor = content_start;
         let mut entries = Vec::new();
         for id in ordered {
             let Some((index, entry)) = self
@@ -206,7 +207,7 @@ impl SystemBar {
             cursor += width + 8.0;
         }
         let width = if entries.is_empty() {
-            (112.0 + metrics::STATUS_MENU_SPACE).min(maximum)
+            (content_start + metrics::STATUS_MENU_SPACE).min(maximum)
         } else {
             cursor - 8.0 + metrics::STATUS_MENU_SPACE
         };
@@ -221,9 +222,9 @@ impl SystemBar {
             frame.origin.y = pill.origin.y;
         }
         let date = Rect::new(
-            pill.origin.x + 8.0,
+            pill.origin.x + metrics::STATUS_MENU_SPACE.min(width),
             pill.origin.y,
-            104.0_f32.min((width - 11.0).max(0.0)),
+            104.0_f32.min((width - metrics::STATUS_MENU_SPACE * 2.0).max(0.0)),
             pill.size.height,
         );
         StatusLayout {
@@ -442,7 +443,7 @@ mod tests {
                     .iter()
                     .map(|(_, r)| r.origin.x - layout.pill.origin.x)
                     .collect::<Vec<_>>(),
-                [112.0, 136.0, 168.0, 208.0]
+                [136.0, 160.0, 192.0, 232.0]
             );
             for (_, frame) in layout.entries {
                 assert_eq!(
@@ -461,8 +462,8 @@ mod tests {
         let theme = Theme::current();
         let mut measurer = TextMeasurer::new();
         let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
-        let gap = Point::new(layout.pill.origin.x + 134.0, layout.pill.origin.y + 17.0);
-        let ime = Point::new(layout.pill.origin.x + 120.0, layout.pill.origin.y + 17.0);
+        let gap = Point::new(layout.pill.origin.x + 158.0, layout.pill.origin.y + 17.0);
+        let ime = Point::new(layout.pill.origin.x + 144.0, layout.pill.origin.y + 17.0);
         bar.handle_event(
             bounds,
             &ViewEvent::PointerPressed {
@@ -487,16 +488,21 @@ mod tests {
             layout.pill.origin.y + 17.0,
         );
         click(&bar, bounds, menu_space, &mut context);
-        assert_eq!(count.get(), 2);
+        let left_space = Point::new(
+            layout.pill.origin.x + metrics::STATUS_MENU_SPACE * 0.5,
+            layout.pill.origin.y + 17.0,
+        );
+        click(&bar, bounds, left_space, &mut context);
+        assert_eq!(count.get(), 3);
         click(
             &bar,
             bounds,
             Point::new(layout.date.origin.x + 30.0, layout.date.origin.y + 17.0),
             &mut context,
         );
-        assert_eq!(count.get(), 2);
+        assert_eq!(count.get(), 3);
         click(&bar, bounds, layout.pill.origin, &mut context);
-        assert_eq!(count.get(), 2);
+        assert_eq!(count.get(), 3);
     }
     #[test]
     fn menu_and_hidden_placement_remove_icons_and_narrow_windows_keep_overflow_in_registry() {
@@ -574,10 +580,10 @@ mod tests {
         let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
         click(&bar, bounds, Point::new(x + 50.0, 27.0), &mut context);
         assert!(!controls.get());
-        click(&bar, bounds, Point::new(x + 148.0, 27.0), &mut context);
+        click(&bar, bounds, Point::new(x + 172.0, 27.0), &mut context);
         assert!(notifications.get());
         assert!(!controls.get());
-        click(&bar, bounds, Point::new(x + 220.0, 27.0), &mut context);
+        click(&bar, bounds, Point::new(x + 244.0, 27.0), &mut context);
         assert!(!notifications.get());
         assert!(controls.get());
         assert_eq!(
