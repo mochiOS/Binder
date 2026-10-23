@@ -443,6 +443,44 @@ impl PreviewDesktop {
         Ok(())
     }
 
+    fn open_image_document(
+        &mut self,
+        path: &std::path::Path,
+        content_type: &str,
+        bundle_id: &str,
+        roles: u16,
+    ) -> Result<ProcessId, String> {
+        if roles & 1 == 0
+            || roles & !3 != 0
+            || path.as_os_str().len() > 4096
+            || (!bundle_id.is_empty() && bundle_id != "org.mochios.viewer")
+        {
+            return Err("No preview image viewer matches this request.".into());
+        }
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(
+            extension.as_str(),
+            "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg"
+        ) || !content_type.starts_with("image/")
+            || !path.is_file()
+        {
+            return Err("The selected image is unavailable or unsupported.".into());
+        }
+        let app = super::read_apps()
+            .into_iter()
+            .find(|app| app.bundle_id == "org.mochios.viewer")
+            .ok_or("Viewer.app is unavailable in this preview session.")?;
+        let path = path
+            .to_str()
+            .ok_or("The document path is not valid UTF-8.")?;
+        self.spawn(&app, &[path.into()], None)
+            .map_err(|_| "Viewer.app could not be started.".into())
+    }
+
     fn poll_panels(&mut self) {
         let mut waiting = Vec::new();
         for (owner, mut connection, started) in std::mem::take(&mut self.panel_requests) {
@@ -456,10 +494,27 @@ impl PreviewDesktop {
                     waiting.push((owner, connection, started));
                 }
                 Ok(mut packets) if packets.len() == 1 => {
+                    let packet = packets.remove(0);
+                    if let Packet::OpenDocument {
+                        path,
+                        content_type,
+                        bundle_id,
+                        roles,
+                    } = packet
+                    {
+                        let result =
+                            self.open_image_document(&path, &content_type, &bundle_id, roles);
+                        let (process_id, error) = match result {
+                            Ok(pid) => (Some(pid.0), None),
+                            Err(error) => (None, Some(error)),
+                        };
+                        let _ = connection.send(Packet::DocumentOpened { process_id, error });
+                        continue;
+                    }
                     let Packet::FilePanelRequest {
                         configuration,
                         reply_socket,
-                    } = packets.remove(0)
+                    } = packet
                     else {
                         continue;
                     };
@@ -633,5 +688,77 @@ impl Drop for PreviewDesktop {
         }
         let _ = fs::remove_file(self.directory.join("viewkit.sock"));
         let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+#[cfg(test)]
+mod document_open_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "subprocess fixture for the document-open transport test"]
+    fn document_request_child() {
+        let socket = std::env::var_os(SOCKET_ENV).unwrap();
+        let _application_connection =
+            Connection::new(std::os::unix::net::UnixStream::connect(socket).unwrap()).unwrap();
+        let path = PathBuf::from(std::env::var_os("MOCHIOS_VIEWER_SMOKE_IMAGE").unwrap());
+        let pid = viewkit::platform::linux::preview::open_document(&path, "image/svg+xml", "", 1)
+            .unwrap();
+        fs::write(path.with_extension("result"), pid.to_string()).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires mmake ui-check binaries and a generated MOCHIOS_PREVIEW_APPS catalogue"]
+    fn authenticated_file_open_renders_the_real_viewer_document_without_a_host_display() {
+        let mut desktop = PreviewDesktop::new().unwrap();
+        let path = desktop.directory.join("viewer-open.svg");
+        fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>"#).unwrap();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "platform::linux::preview::document_open_tests::document_request_child",
+                "--ignored",
+            ])
+            .env(SOCKET_ENV, desktop.directory.join("viewkit.sock"))
+            .env("MOCHIOS_VIEWER_SMOKE_IMAGE", &path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let owner = ProcessId(child.id());
+        desktop.children.insert(
+            owner,
+            Application {
+                child,
+                bundle_id: "org.mochios.files".into(),
+                started: Instant::now(),
+                connection: None,
+                pending: VecDeque::new(),
+                windows: HashMap::new(),
+                local_windows: HashSet::new(),
+                cards: HashMap::new(),
+            },
+        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut rendered = false;
+        while Instant::now() < deadline {
+            desktop.poll().unwrap();
+            rendered = desktop.creates.iter().filter(|request| request.process_id != owner && request.title.contains("viewer-open.svg"))
+                .any(|request| surface(&request.renderer).is_some_and(|surface| surface.borrow().list.commands().iter().any(|command|
+                    matches!(command, viewkit::draw_command::DrawCommand::DrawSvg { command } if command.svg.size() == (20.0, 10.0)))));
+            if rendered && path.with_extension("result").is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            rendered,
+            "the real Viewer must decode and draw the selected image"
+        );
+        let pid = fs::read_to_string(path.with_extension("result"))
+            .unwrap()
+            .parse::<u32>()
+            .unwrap();
+        assert!(desktop.children.contains_key(&ProcessId(pid)));
     }
 }
