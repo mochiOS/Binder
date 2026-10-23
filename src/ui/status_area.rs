@@ -463,6 +463,16 @@ mod tests {
         assert!(
             matches!(&list.commands()[0], viewkit::draw_command::DrawCommand::DrawText { command } if command.text == "WINDOW-CONTENT")
         );
+        // A completed reveal must retain the status pill's original 64/255
+        // alpha, rather than turning it into an opaque white cover.
+        assert!(list.commands().iter().any(|command| matches!(command,
+            viewkit::draw_command::DrawCommand::FillRoundedRect { rect, color, .. }
+                if rect.size.width == metrics::STATUS_GROUP_WIDTH && rect.size.height == 34.0
+                    && *color == Color::rgba(255, 255, 255, 64))));
+        assert!(!list.commands().iter().any(|command| matches!(command,
+            viewkit::draw_command::DrawCommand::FillRoundedRect { rect, color, .. }
+                if rect.size.width == metrics::STATUS_GROUP_WIDTH && rect.size.height == 34.0
+                    && color.alpha == 255)));
         {
             let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
             layer.handle_event(
