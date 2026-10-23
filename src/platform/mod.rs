@@ -221,6 +221,13 @@ pub enum PlatformError {
 pub trait DesktopPlatform {
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError>;
 
+    fn native_background_color(
+        &self,
+        _area: viewkit::prelude::Rect,
+    ) -> Result<Option<viewkit::prelude::Color>, PlatformError> {
+        Ok(None)
+    }
+
     fn native_windows_overlap(&self, _area: viewkit::prelude::Rect) -> Result<bool, PlatformError> {
         Ok(false)
     }

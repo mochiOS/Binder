@@ -7,7 +7,11 @@ use crate::{
     control_center_preferences::{ControlCenterPreferences, StatusItemPlacement},
     platform::{AppInfo, SystemBarState},
 };
-use std::{cell::RefCell, rc::Rc, sync::OnceLock};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::OnceLock,
+};
 use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
     prelude::*,
@@ -35,6 +39,7 @@ pub(crate) fn view(
     preferences: Rc<RefCell<ControlCenterPreferences>>,
     interaction: Rc<RefCell<ControlCenterInteraction>>,
 ) -> SystemBar {
+    let palette = interaction.borrow().status_palette.clone();
     let catalog = status_items::catalog(&apps.get());
     interaction
         .borrow_mut()
@@ -78,17 +83,17 @@ pub(crate) fn view(
                 .shadow(ShadowStyle::None)
                 .accessibility_label(&item.title);
         if item.action == ItemAction::ToggleInput {
-            button = button.content(InputLanguage(state.clone()));
+            button = button.content(InputLanguage(state.clone(), palette.clone()));
         } else {
-            button = button.content(
-                Icon::new(item.symbol)
-                    .size(if item.action == ItemAction::ShowBattery {
-                        28.0
-                    } else {
-                        20.0
-                    })
-                    .color(metrics::SYSTEM_FOREGROUND),
-            );
+            button = button.content(StatusIcon(
+                item.symbol,
+                if item.action == ItemAction::ShowBattery {
+                    28.0
+                } else {
+                    20.0
+                },
+                palette.clone(),
+            ));
         }
         let (menu, controls, notifications) = (
             menu_open.clone(),
@@ -121,7 +126,7 @@ pub(crate) fn view(
     }
     let clock =
         Button::with_interaction_and_label(retained_button(&interaction, "chrome.clock"), "")
-            .content(Clock(state))
+            .content(Clock(state, palette.clone()))
             .style(ButtonStyle::Ghost)
             .accessibility_label("Date and time");
     SystemBar {
@@ -130,6 +135,7 @@ pub(crate) fn view(
         clock,
         entries,
         preferences,
+        palette,
     }
 }
 struct StatusEntry {
@@ -142,6 +148,31 @@ pub(crate) struct SystemBar {
     clock: Button,
     entries: Vec<StatusEntry>,
     preferences: Rc<RefCell<ControlCenterPreferences>>,
+    palette: Rc<Cell<ChromePalette>>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct ChromePalette {
+    foreground: Color,
+    background: Color,
+}
+impl Default for ChromePalette {
+    fn default() -> Self {
+        Self {
+            foreground: metrics::SYSTEM_FOREGROUND,
+            background: Color::rgba(255, 255, 255, 64),
+        }
+    }
+}
+
+struct StatusIcon(SymbolName, f32, Rc<Cell<ChromePalette>>);
+impl View for StatusIcon {
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        Icon::new(self.0)
+            .size(self.1)
+            .color(self.2.get().foreground)
+            .paint(bounds, context);
+    }
 }
 struct StatusLayout {
     pill: Rect,
@@ -176,6 +207,53 @@ fn hit_frame(item: &Item, frame: Rect) -> Rect {
     }
 }
 impl SystemBar {
+    pub(crate) fn regions(&self, bounds: Rect) -> [Rect; 2] {
+        let left = 64.0_f32.min(bounds.size.width);
+        let x = (self.resolved_frames(bounds).pill.origin.x - 8.0).max(bounds.origin.x + left);
+        [
+            Rect::new(bounds.origin.x, bounds.origin.y, left, bounds.size.height),
+            Rect::new(
+                x,
+                bounds.origin.y,
+                (bounds.origin.x + bounds.size.width - x).max(0.0),
+                bounds.size.height,
+            ),
+        ]
+    }
+    pub(crate) fn set_backdrop(&self, background: Color) -> bool {
+        let linear = |channel: u8| {
+            let value = f32::from(channel) / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let luminance = 0.2126 * linear(background.red)
+            + 0.7152 * linear(background.green)
+            + 0.0722 * linear(background.blue);
+        let threshold = if self.palette.get().foreground == Color::BLACK {
+            0.14
+        } else {
+            0.22
+        };
+        let dark_text = luminance > threshold;
+        let palette = ChromePalette {
+            foreground: if dark_text {
+                Color::BLACK
+            } else {
+                Color::WHITE
+            },
+            background: if dark_text {
+                Color::rgba(255, 255, 255, 64)
+            } else {
+                Color::rgba(0, 0, 0, 96)
+            },
+        };
+        let changed = self.palette.get() != palette;
+        self.palette.set(palette);
+        changed
+    }
     pub(crate) fn is_blank(&self, bounds: Rect, position: Point) -> bool {
         let layout = self.resolved_frames(bounds);
         bounds.contains(position)
@@ -243,15 +321,15 @@ impl SystemBar {
         }
     }
 }
-impl View for SystemBar {
-    fn measure(&self, c: Constraints, _: &mut MeasureContext<'_>) -> Size {
-        c.constrain(Size::new(c.maximum.width, metrics::SYSTEM_HEIGHT))
-    }
-    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+impl SystemBar {
+    pub(crate) fn paint_part(&self, part: usize, bounds: Rect, context: &mut PaintContext<'_>) {
+        if part == 0 {
+            self.logo.paint(logo_frame(bounds), context);
+            return;
+        }
         let layout = self.resolved_frames(bounds);
-        self.logo.paint(logo_frame(bounds), context);
         Rectangle::new()
-            .color(RectangleColor::Custom(Color::rgba(255, 255, 255, 64)))
+            .color(RectangleColor::Custom(self.palette.get().background))
             .radius(CornerRadius::Full)
             .paint(layout.pill, context);
         for (index, frame) in layout.entries {
@@ -263,12 +341,16 @@ impl View for SystemBar {
         // Register the background after individual controls, preserving pointer focus priority.
         self.status.paint(layout.pill, context);
     }
-    fn handle_event(
+    pub(crate) fn handle_part(
         &self,
+        part: usize,
         bounds: Rect,
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
+        if part == 0 {
+            return self.logo.handle_event(logo_frame(bounds), event, context);
+        }
         let layout = self.resolved_frames(bounds);
         let reserved = event.position().is_some_and(|p| {
             layout.date.contains(p)
@@ -297,12 +379,30 @@ impl View for SystemBar {
                 context,
             ));
         }
-        self.logo
-            .handle_event(logo_frame(bounds), event, context)
-            .merge(self.clock.handle_event(layout.date, event, context))
+        self.clock
+            .handle_event(layout.date, event, context)
             .merge(result)
     }
 }
+impl View for SystemBar {
+    fn measure(&self, c: Constraints, _: &mut MeasureContext<'_>) -> Size {
+        c.constrain(Size::new(c.maximum.width, metrics::SYSTEM_HEIGHT))
+    }
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        self.paint_part(0, bounds, context);
+        self.paint_part(1, bounds, context);
+    }
+    fn handle_event(
+        &self,
+        bounds: Rect,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> EventResult {
+        self.handle_part(0, bounds, event, context)
+            .merge(self.handle_part(1, bounds, event, context))
+    }
+}
+
 struct Logo;
 impl View for Logo {
     fn measure(&self, constraints: Constraints, _: &mut MeasureContext<'_>) -> Size {
@@ -329,6 +429,7 @@ fn label(
     bounds: Rect,
     alignment: TextAlignment,
     center_visible_ink: bool,
+    foreground: Color,
     context: &mut PaintContext<'_>,
 ) {
     let height = 20.0 * context.text_measurer.font_scale();
@@ -347,11 +448,11 @@ fn label(
         .line_height(20.0)
         .weight(400)
         .alignment(alignment)
-        .color(metrics::SYSTEM_FOREGROUND)
+        .color(foreground)
         .center_visible_ink(center_visible_ink)
         .paint(text_bounds, context);
 }
-struct InputLanguage(State<SystemBarState>);
+struct InputLanguage(State<SystemBarState>, Rc<Cell<ChromePalette>>);
 impl View for InputLanguage {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         label(
@@ -363,11 +464,12 @@ impl View for InputLanguage {
             bounds,
             TextAlignment::Center,
             true,
+            self.1.get().foreground,
             context,
         );
     }
 }
-struct Clock(State<SystemBarState>);
+struct Clock(State<SystemBarState>, Rc<Cell<ChromePalette>>);
 impl View for Clock {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         let clock = self.0.get().clock;
@@ -376,6 +478,7 @@ impl View for Clock {
             bounds,
             TextAlignment::Start,
             true,
+            self.1.get().foreground,
             context,
         );
     }
@@ -414,6 +517,7 @@ mod tests {
             clock: Button::new(""),
             entries,
             preferences: Rc::new(RefCell::new(ControlCenterPreferences::default())),
+            palette: Rc::new(Cell::new(ChromePalette::default())),
             status: Button::new("")
                 .radius(CornerRadius::Full)
                 .on_click(move || count.set(count.get() + 1)),
@@ -437,6 +541,38 @@ mod tests {
             context,
         );
     }
+    #[test]
+    fn backdrop_changes_native_text_symbols_and_translucent_surface_together() {
+        use viewkit::draw_command::{DisplayList, DrawCommand};
+        let bar = view(
+            State::new(SystemBarState::default()),
+            State::new(false),
+            State::new(false),
+            State::new(false),
+            State::new(Vec::new()),
+            Rc::new(RefCell::new(ControlCenterPreferences::default())),
+            Rc::new(RefCell::new(ControlCenterInteraction::default())),
+        );
+        let bounds = Rect::new(0.0, 0.0, 1440.0, 54.0);
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut list = DisplayList::new();
+        for (background, foreground, surface) in [
+            (Color::WHITE, Color::BLACK, Color::rgba(255, 255, 255, 64)),
+            (Color::BLACK, Color::WHITE, Color::rgba(0, 0, 0, 96)),
+        ] {
+            bar.set_backdrop(background);
+            list.clear();
+            bar.paint(
+                bounds,
+                &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
+            );
+            assert!(list.commands().iter().any(|command| matches!(command, DrawCommand::DrawText { command } if command.color == foreground)));
+            assert!(list.commands().iter().any(|command| matches!(command, DrawCommand::DrawSvg { command } if command.tint == Some(foreground))));
+            assert!(list.commands().iter().any(|command| matches!(command, DrawCommand::FillRoundedRect { rect, color, .. } if rect.size.width == metrics::STATUS_GROUP_WIDTH && *color == surface)));
+        }
+    }
+
     #[test]
     fn default_registration_preserves_positions_and_exact_vertical_center() {
         let bar = bar(Rc::new(Cell::new(0)));

@@ -25,6 +25,7 @@ const OP_DECOR_MINIMIZE: u32 = 107;
 const OP_DECOR_TOGGLE_MAXIMIZE: u32 = 108;
 const OP_DECOR_CLOSE_REQUEST: u32 = 109;
 const OP_DECOR_QUERY_OVERLAP: u32 = 110;
+const OP_DECOR_SAMPLE_BACKGROUND: u32 = 111;
 const DECOR_EVENT_WINDOW: u32 = 0x5749_4e44;
 const DECOR_EVENT_POINTER_BUTTON: u32 = 0x4e54_4244;
 const DECOR_EVENT_POINTER_MOTION: u32 = 0x544f_4d50;
@@ -83,6 +84,33 @@ impl DecorationManager {
         put_u32(&mut request, 16, (bottom - top) as u32)?;
         let reply = ipc_call(self.compositor, &request)?;
         Ok(read_u32(&reply, 4) == Some(1))
+    }
+
+    pub(super) fn background_color(&self, area: Rect) -> Result<Option<Color>, DecorationError> {
+        if ![
+            area.origin.x,
+            area.origin.y,
+            area.size.width,
+            area.size.height,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+            || area.is_empty()
+        {
+            return Err(DecorationError(22));
+        }
+        let mut request = [0u8; 20];
+        put_u32(&mut request, 0, OP_DECOR_SAMPLE_BACKGROUND)?;
+        put_u32(&mut request, 4, (area.origin.x.floor() as i32) as u32)?;
+        put_u32(&mut request, 8, (area.origin.y.floor() as i32) as u32)?;
+        put_u32(&mut request, 12, area.size.width.ceil() as u32)?;
+        put_u32(&mut request, 16, area.size.height.ceil() as u32)?;
+        let reply = ipc_call(self.compositor, &request)?;
+        Ok(if read_u32(&reply, 4) == Some(1) {
+            read_u32(&reply, 8).map(Color::from_rgba_hex)
+        } else {
+            None
+        })
     }
 
     pub(super) fn connect() -> Result<Self, DecorationError> {

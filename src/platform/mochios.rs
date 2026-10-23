@@ -503,6 +503,25 @@ impl DesktopPlatform for MochiOsPlatform {
         Ok(self.system_bar.clone())
     }
 
+    fn native_background_color(
+        &self,
+        area: viewkit::prelude::Rect,
+    ) -> Result<Option<viewkit::prelude::Color>, PlatformError> {
+        #[cfg(target_os = "mochios")]
+        {
+            self.decoration_manager
+                .as_ref()
+                .ok_or(PlatformError::ServiceUnavailable)?
+                .background_color(area)
+                .map_err(|_| PlatformError::TransportFailure)
+        }
+        #[cfg(not(target_os = "mochios"))]
+        {
+            let _ = area;
+            Ok(None)
+        }
+    }
+
     fn native_windows_overlap(&self, area: viewkit::prelude::Rect) -> Result<bool, PlatformError> {
         #[cfg(target_os = "mochios")]
         {

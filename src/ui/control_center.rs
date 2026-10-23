@@ -86,6 +86,7 @@ fn navigation_transform(amount: f32, detail: bool, distance: f32) -> PaintTransf
 }
 
 pub(crate) struct ControlCenterInteraction {
+    pub(crate) status_palette: Rc<Cell<super::top_bar::ChromePalette>>,
     pub(crate) pending_status_item: Option<String>,
     pub(crate) status_buttons: BTreeMap<String, ButtonInteractionState>,
     edit_button: ButtonInteractionState,
@@ -106,6 +107,7 @@ pub(crate) struct ControlCenterInteraction {
 impl Default for ControlCenterInteraction {
     fn default() -> Self {
         Self {
+            status_palette: Rc::new(Cell::new(Default::default())),
             pending_status_item: None,
             status_buttons: BTreeMap::new(),
             edit_button: ButtonInteractionState::new(),
