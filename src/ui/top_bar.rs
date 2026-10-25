@@ -52,6 +52,7 @@ pub(crate) fn view(
         notification_open.clone(),
     );
     let logo = Button::with_interaction_and_label(retained_button(&interaction, "chrome.logo"), "")
+        .content_padding(false)
         .content(Logo)
         .style(ButtonStyle::Ghost)
         .accessibility_label("mochiOS menu")
@@ -80,6 +81,7 @@ pub(crate) fn view(
     for item in catalog {
         let mut button =
             Button::with_interaction_and_label(retained_button(&interaction, &item.id), "")
+                .content_padding(false)
                 .style(ButtonStyle::Ghost)
                 .shadow(ShadowStyle::None)
                 .accessibility_label(&item.title);
@@ -127,6 +129,7 @@ pub(crate) fn view(
     }
     let clock =
         Button::with_interaction_and_label(retained_button(&interaction, "chrome.clock"), "")
+            .content_padding(false)
             .content(Clock(state, palette.clone()))
             .style(ButtonStyle::Ghost)
             .accessibility_label("Date and time");

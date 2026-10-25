@@ -475,6 +475,7 @@ impl<C: View> NotificationCenterLayer<C> {
                 let button = self
                     .control(hit, "")
                     .accessibility_label("Dismiss notification")
+                    .content_padding(false)
                     .content(Icon::new(SymbolName::X).size(10.0));
                 (hit, Self::remove_rect(row), button)
             }
