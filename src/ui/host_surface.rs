@@ -27,7 +27,7 @@ fn translated(mut rect: Rect, origin: Point) -> Rect {
 fn place(command: &DrawCommand, bounds: Rect) -> DrawCommand {
     let mut command = command.clone();
     match &mut command {
-        DrawCommand::DrawContour { points, .. } => {
+        DrawCommand::DrawContour { points, .. } | DrawCommand::FillPolygon { points, .. } => {
             for point in points {
                 point.x += bounds.origin.x;
                 point.y += bounds.origin.y;
@@ -247,4 +247,17 @@ mod tests {
         );
         assert_eq!(stroke_width, 1.0);
     }
+    #[test]
+    fn places_omochi_polygons_inside_the_child_window() {
+        let command = DrawCommand::FillPolygon {
+            points: vec![Point::new(0.0, 0.0), Point::new(30.0, 0.0), Point::new(15.0, 10.0)],
+            color: Color::WHITE,
+        };
+        assert_eq!(place(&command, Rect::new(100.0, 200.0, 300.0, 400.0)),
+            DrawCommand::FillPolygon {
+                points: vec![Point::new(100.0, 200.0), Point::new(130.0, 200.0), Point::new(115.0, 210.0)],
+                color: Color::WHITE,
+            });
+    }
+
 }
