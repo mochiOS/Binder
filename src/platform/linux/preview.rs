@@ -664,7 +664,9 @@ fn valid_list(list: &DisplayList) -> bool {
     let mut depth = 0;
     for command in list.commands() {
         match command {
-            DrawCommand::PushClip { .. } | DrawCommand::PushRoundedClip { .. } => depth += 1,
+            DrawCommand::PushClip { .. }
+            | DrawCommand::PushRoundedClip { .. }
+            | DrawCommand::PushRoundedCornersClip { .. } => depth += 1,
             DrawCommand::PopClip => {
                 if depth == 0 {
                     return false;
@@ -694,6 +696,17 @@ impl Drop for PreviewDesktop {
 #[cfg(test)]
 mod document_open_tests {
     use super::*;
+
+    #[test]
+    fn asymmetric_list_row_clips_are_balanced_in_preview_scenes() {
+        let mut list = DisplayList::new();
+        list.push(viewkit::draw_command::DrawCommand::PushRoundedCornersClip {
+            rect: viewkit::prelude::Rect::new(0.0, 0.0, 120.0, 48.0),
+            radii: [0.0, 0.0, 6.0, 6.0],
+        });
+        list.push(viewkit::draw_command::DrawCommand::PopClip);
+        assert!(valid_list(&list));
+    }
 
     #[test]
     #[ignore = "subprocess fixture for the document-open transport test"]
