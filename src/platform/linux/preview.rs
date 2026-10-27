@@ -443,42 +443,34 @@ impl PreviewDesktop {
         Ok(())
     }
 
-    fn open_image_document(
+    fn open_associated_document(
         &mut self,
         path: &std::path::Path,
         content_type: &str,
         bundle_id: &str,
         roles: u16,
     ) -> Result<ProcessId, String> {
-        if roles & 1 == 0
-            || roles & !3 != 0
-            || path.as_os_str().len() > 4096
-            || (!bundle_id.is_empty() && bundle_id != "org.mochios.viewer")
-        {
-            return Err("No preview image viewer matches this request.".into());
+        if roles == 0 || roles & !3 != 0 || path.as_os_str().len() > 4096 || !path.is_file() {
+            return Err("The selected document is unavailable or unsupported.".into());
         }
         let extension = path
             .extension()
             .and_then(|value| value.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if !matches!(
-            extension.as_str(),
-            "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg"
-        ) || !content_type.starts_with("image/")
-            || !path.is_file()
-        {
-            return Err("The selected image is unavailable or unsupported.".into());
-        }
+            .unwrap_or("");
         let app = super::read_apps()
             .into_iter()
-            .find(|app| app.bundle_id == "org.mochios.viewer")
-            .ok_or("Viewer.app is unavailable in this preview session.")?;
+            .find(|app| {
+                (bundle_id.is_empty() || app.bundle_id == bundle_id)
+                    && fs::read_to_string(app.root.join("manifest.toml")).is_ok_and(|manifest| {
+                        manifest_handles_document(&manifest, extension, content_type, roles)
+                    })
+            })
+            .ok_or("No installed preview application handles this document.")?;
         let path = path
             .to_str()
             .ok_or("The document path is not valid UTF-8.")?;
         self.spawn(&app, &[path.into()], None)
-            .map_err(|_| "Viewer.app could not be started.".into())
+            .map_err(|_| "The document application could not be started.".into())
     }
 
     fn poll_panels(&mut self) {
@@ -503,7 +495,7 @@ impl PreviewDesktop {
                     } = packet
                     {
                         let result =
-                            self.open_image_document(&path, &content_type, &bundle_id, roles);
+                            self.open_associated_document(&path, &content_type, &bundle_id, roles);
                         let (process_id, error) = match result {
                             Ok(pid) => (Some(pid.0), None),
                             Err(error) => (None, Some(error)),
@@ -659,6 +651,36 @@ mod notification_tests {
     }
 }
 
+fn manifest_handles_document(
+    manifest: &str,
+    extension: &str,
+    content_type: &str,
+    roles: u16,
+) -> bool {
+    let declared = super::parse_string_array_field(manifest, "document_roles")
+        .iter()
+        .fold(0, |bits, role| {
+            bits | match role.as_str() {
+                "view" => 1,
+                "edit" => 2,
+                _ => 0,
+            }
+        });
+    roles != 0
+        && roles & !3 == 0
+        && declared & roles == roles
+        && (super::parse_string_array_field(manifest, "document_extensions")
+            .iter()
+            .any(|value| {
+                value
+                    .trim_start_matches('.')
+                    .eq_ignore_ascii_case(extension)
+            })
+            || super::parse_string_array_field(manifest, "document_content_types")
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(content_type)))
+}
+
 fn valid_list(list: &DisplayList) -> bool {
     use viewkit::draw_command::DrawCommand;
     let mut depth = 0;
@@ -696,6 +718,22 @@ impl Drop for PreviewDesktop {
 #[cfg(test)]
 mod document_open_tests {
     use super::*;
+
+    #[test]
+    fn preview_dispatch_uses_manifest_document_associations() {
+        let manifest = include_str!("../../../../fonts/manifest.toml");
+        for (extension, mime) in [
+            ("TTF", "font/ttf"),
+            ("otf", "font/otf"),
+            ("ttc", "font/collection"),
+            ("otc", "font/collection"),
+        ] {
+            assert!(manifest_handles_document(manifest, extension, mime, 1));
+        }
+        assert!(!manifest_handles_document(manifest, "png", "image/png", 1));
+        assert!(!manifest_handles_document(manifest, "ttf", "font/ttf", 2));
+        assert!(!manifest_handles_document(manifest, "ttf", "font/ttf", 0));
+    }
 
     #[test]
     fn asymmetric_list_row_clips_are_balanced_in_preview_scenes() {
