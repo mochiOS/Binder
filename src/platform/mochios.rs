@@ -361,19 +361,29 @@ fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), Platfo
         mochi_user_platform::handle::inherited(mochios_posix_protocol::CONTROL_HANDLE_KEY)
             .map_err(|_| PlatformError::ProcessLaunchFailed)?;
     let destination = u32::try_from(endpoint).map_err(|_| PlatformError::ProcessLaunchFailed)?;
+    let client = mochios_posix_client::Client::new(
+        mochios_posix_client::SyscallEndpointTransport::new(posix_endpoint),
+    );
+    let scope = client.create_read_scope().map_err(|error| {
+        eprintln!("failed to capture application launch scope: {error:?}");
+        PlatformError::ProcessLaunchFailed
+    })?;
     let mut handles = mochi_user_platform::ipc::IpcObjectHandles::default();
-    handles.count = 1;
+    handles.count = 2;
     handles.handles[0].handle = posix_endpoint;
     handles.handles[0].rights = syscall::HANDLE_RIGHT_SEND
         | syscall::HANDLE_RIGHT_DUPLICATE
         | syscall::HANDLE_RIGHT_TRANSFER;
+    handles.handles[1].handle = scope.handle;
+    handles.handles[1].rights = mochios_posix_protocol::read_scope::ATTACH_RIGHTS;
     let message = mochi_user_platform::ipc::call_object_handles(
         destination,
         &request,
         &mut reply,
         &mut handles,
-    )
-    .map_err(|error| {
+    );
+    let _ = mochi_user_platform::handle::close(scope.handle);
+    let message = message.map_err(|error| {
         eprintln!("capability.service app launch request failed: {error:?}");
         PlatformError::ProcessLaunchFailed
     })?;
