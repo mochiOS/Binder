@@ -14,8 +14,6 @@ pub(crate) const DOCK_GAP: f32 = 10.0;
 pub(crate) const DOCK_RADIUS: f32 = 26.5;
 pub(crate) const DOCK_SEPARATOR_SPACE: f32 = 11.0;
 pub(crate) const DOCK_SEPARATOR_HEIGHT: f32 = 48.0;
-pub(crate) const DOCK_SEPARATOR_COLOR: viewkit::theme::Color =
-    viewkit::theme::Color::rgb(123, 123, 123);
 
 // Menu - Mock.png (1440 × 1024), independent of app control defaults.
 pub(crate) const OS_MENU_TOP: f32 = 47.0;

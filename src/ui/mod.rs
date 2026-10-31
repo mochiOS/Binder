@@ -8,6 +8,7 @@ pub(crate) mod cursor;
 pub(crate) mod desktop;
 pub(crate) mod desktop_metrics;
 pub(crate) mod dock;
+mod dock_material;
 pub(crate) mod launch_failure;
 pub(crate) mod menu;
 pub(crate) mod notification_center;

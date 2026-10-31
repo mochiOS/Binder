@@ -14,7 +14,7 @@ not a reason to replace the continuous-corner model or the existing assets.
 | Control centre | One material across grid/detail pages, inset the grid within a padded floating frame, match visible boundary and input, and use theme colours for secondary text. |
 | Window chrome | Keep 40px title bar and existing controls; use native label weight/ink centring and retain title space in narrow utility windows. Make shell backing opaque and soften the separator. |
 | Native window elevation | ViewKit and compositor read the same dependency-free window_elevation.rs data. Preserve the 20px damage budget and window corner radius. |
-| Dock | Preserve the mock geometry, icon assets, item layout and 10px bottom margin. Raise material opacity from 128 to 208, add the existing restrained dock shadow and inside outline. |
+| Dock | Preserve the mock geometry, icon assets, item layout and 10px bottom margin. Use a quiet translucent backing, restrained shadow and inside outline; see the material revision below. |
 | Status area | Preserve logo, assets, position, icon dimensions and background-dependent black/white foreground. Share text/row metrics and native label weight; reject clicks outside the visible rounded background. No permanent bar. |
 | OS-menu density | Use existing 13px control text and 24px small-control rows. Derive popup height from actual items/groups/padding instead of a fixed 144px frame. |
 
@@ -53,3 +53,30 @@ part of the validation. Native Binder/compositor builds use workspace-local POSI
 client/protocol overrides to avoid mixing a cached Git client with the current
 workspace syscall ABI. UI interaction and subjective appearance review remain
 with the user; passing render/geometry tests is not presented as visual approval.
+
+## Dock material revision
+
+The earlier increase to 208 alpha made the backing compete with the application
+icons and wallpaper. The Dock remains an application entry point and task
+switcher, with its existing overlap auto-hide and bottom-edge reveal behaviour.
+It is not removed or made permanently hidden in this revision.
+
+Light backing alpha is now 72/255 and dark backing alpha is 96/255. The outline
+and shadow are reduced, and the separator uses a theme token instead of opaque
+grey. Hover feedback scales the theme's existing alpha rather than overwriting
+it with a strong 120–170 alpha patch. These are implementation choices to review,
+not inherited specifications. No backdrop blur or gradient is added.
+
+App Library icon colours have their own tokens retaining the previous values,
+so reducing the Dock material does not accidentally wash out that icon. Icon
+assets, geometry, magnification and running indicators remain unchanged.
+All Dock-specific colours, icon materials and elevation belong to Binder's
+`ui/dock_material.rs`. The legacy Dock fields are removed from ViewKit's
+`ShellTokens`; ViewKit has no Dock component or Dock palette. Binder uses its
+generic Rectangle, Surface, Theme and shadow primitives.
+
+Dock tooltips use the same floating material and foreground as menus, rather
+than an isolated inverse black label. Text width is measured with the current
+font metrics, horizontal padding is preserved, and redraw includes the floating
+shadow. The intended hierarchy is wallpaper as the environment, windows as work,
+and quiet shell controls as navigation; this is not a wholesale macOS reskin.

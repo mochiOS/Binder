@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use super::desktop_metrics as metrics;
+use super::{desktop_metrics as metrics, dock_material::DockMaterial};
 use crate::dock_preferences::DockPreferences;
 use crate::platform::{AppInfo, DesktopPlatform};
 
@@ -399,8 +399,11 @@ where
         let Some(dock) = self.dock_rect(bounds) else {
             return;
         };
-        let top = DOCK_ICON_LIFT + DOCK_TOOLTIP_MARGIN + DOCK_TOOLTIP_HEIGHT + DOCK_REDRAW_MARGIN;
-        let side_margin = DOCK_TOOLTIP_HORIZONTAL_PADDING + DOCK_TOOLTIP_MAX_WIDTH / 2.0;
+        let tooltip_shadow = context.theme().surface.shadow_outset(&context.theme().shadows);
+        let top = DOCK_ICON_LIFT + DOCK_TOOLTIP_MARGIN + DOCK_TOOLTIP_HEIGHT
+            + DOCK_REDRAW_MARGIN.max(tooltip_shadow);
+        let side_margin = DOCK_TOOLTIP_HORIZONTAL_PADDING + DOCK_TOOLTIP_MAX_WIDTH / 2.0
+            + tooltip_shadow;
         let vertical = Rect::new(
             dock.origin.x - side_margin,
             dock.origin.y - top,
@@ -720,12 +723,13 @@ where
     }
 
     fn paint_app_library_icon(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        let material = DockMaterial::for_theme(context.theme);
         Rectangle::new()
             .color(RectangleColor::Custom(
-                context.theme.shell.dock_background,
+                material.app_library_icon_background,
             ))
             .radius(CornerRadius::Custom(bounds.size.width * 0.3))
-            .border(BorderStyle::custom(context.theme.shell.dock_border, 1.0))
+            .border(BorderStyle::custom(material.app_library_icon_border, 1.0))
             .paint(bounds, context);
 
         let cell_size = bounds.size.width * 0.3;
@@ -747,7 +751,7 @@ where
 
             Rectangle::new()
                 .color(RectangleColor::Custom(
-                    context.theme.shell.dock_item_hover,
+                    material.app_library_icon_tile,
                 ))
                 .radius(CornerRadius::Custom(cell_size * 0.24))
                 .paint(cell, context);
@@ -771,16 +775,21 @@ where
         }
     }
 
-    fn tooltip_width(text: &str) -> f32 {
-        let character_count = text.chars().count() as f32;
-
-        let text_width = character_count * 7.5;
-
-        (text_width + DOCK_TOOLTIP_HORIZONTAL_PADDING * 2.0).clamp(48.0, DOCK_TOOLTIP_MAX_WIDTH)
-    }
-
     fn paint_tooltip(app: &AppInfo, icon: Rect, context: &mut PaintContext<'_>) {
-        let width = Self::tooltip_width(&app.name);
+        let label = Text::styled(app.name.clone(), TextRole::Label)
+            .alignment(TextAlignment::Center)
+            .center_visible_ink(true)
+            .color(context.theme.shell.primary_text);
+        let measured = label.measure(
+            Constraints::loose(Size::new(f32::INFINITY, DOCK_TOOLTIP_HEIGHT)),
+            &mut MeasureContext {
+                theme: context.theme,
+                typography: context.typography,
+                text_measurer: context.text_measurer,
+            },
+        );
+        let width = (measured.width + DOCK_TOOLTIP_HORIZONTAL_PADDING * 2.0)
+            .clamp(48.0, DOCK_TOOLTIP_MAX_WIDTH);
 
         let center_x = icon.origin.x + icon.size.width / 2.0;
 
@@ -791,26 +800,20 @@ where
             DOCK_TOOLTIP_HEIGHT,
         );
 
-        Rectangle::new()
-            .color(RectangleColor::Custom(
-                context.theme.shell.inverse_surface,
-            ))
+        Surface::floating()
             .radius(CornerRadius::Custom(DOCK_TOOLTIP_RADIUS))
             .paint(tooltip, context);
 
         let label_style = context.theme.typography.style(TextRole::Label);
-        Text::styled(app.name.clone(), TextRole::Label)
-            .alignment(TextAlignment::Center)
-            .color(context.theme.shell.inverse_text)
-            .paint(
-                Rect::new(
-                    tooltip.origin.x,
-                    tooltip.origin.y + (tooltip.size.height - label_style.line_height) / 2.0,
-                    tooltip.size.width,
-                    label_style.line_height,
-                ),
-                context,
-            );
+        label.paint(
+            Rect::new(
+                tooltip.origin.x + DOCK_TOOLTIP_HORIZONTAL_PADDING,
+                tooltip.origin.y + (tooltip.size.height - label_style.line_height) / 2.0,
+                tooltip.size.width - DOCK_TOOLTIP_HORIZONTAL_PADDING * 2.0,
+                label_style.line_height,
+            ),
+            context,
+        );
     }
 
     fn is_running(&self, app: &AppInfo) -> bool {
@@ -829,7 +832,7 @@ where
 
         Ellipse::new()
             .color(EllipseColor::Custom(
-                context.theme.shell.running_indicator,
+                DockMaterial::for_theme(context.theme).running_indicator,
             ))
             .paint(Rect::new(x, y, size, size), context);
     }
@@ -868,13 +871,14 @@ where
             return;
         };
 
+        let material = DockMaterial::for_theme(context.theme);
         Rectangle::new()
             .color(RectangleColor::Custom(
-                context.theme.shell.dock_background,
+                material.background,
             ))
             .radius(CornerRadius::Custom(DOCK_RADIUS))
-            .shadow(ShadowStyle::Custom(context.theme.shell.dock_shadow))
-            .border(BorderStyle::custom(context.theme.shell.dock_border, context.theme.surface.floating_stroke_width))
+            .shadow(ShadowStyle::Custom(material.shadow))
+            .border(BorderStyle::custom(material.border, context.theme.surface.floating_stroke_width))
             .paint(dock, context);
 
         let apps = self.dock_apps();
@@ -891,15 +895,13 @@ where
             let visual = self.item_visual(dock, index, pointer, pressed);
 
             if hovered == Some(index) || pressed == Some(index) {
-                let opacity = 120.0 + 50.0 * visual.influence;
+                let hover = material.item_hover;
+                let opacity = hover.alpha as f32 * (0.7 + 0.3 * visual.influence);
                 let item = snap_rect(visual.item);
 
                 Rectangle::new()
                     .color(RectangleColor::Custom(
-                        context.theme
-                            .shell
-                            .dock_item_hover
-                            .with_alpha(opacity as u8),
+                        hover.with_alpha(opacity as u8),
                     ))
                     .radius(CornerRadius::Custom(DOCK_ITEM_RADIUS))
                     .paint(item, context);
@@ -924,7 +926,7 @@ where
             let right = self.item_rect(dock, pinned_count);
             let x = (left.origin.x + left.size.width + right.origin.x) / 2.0;
             Rectangle::new()
-                .color(RectangleColor::Custom(metrics::DOCK_SEPARATOR_COLOR))
+                .color(RectangleColor::Custom(material.separator))
                 .radius(CornerRadius::Custom(1.0))
                 .paint(
                     Rect::new(
