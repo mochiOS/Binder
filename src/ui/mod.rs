@@ -1,4 +1,5 @@
 pub(crate) mod about;
+mod app_icon;
 pub(crate) mod app_library;
 pub(crate) mod app_switcher;
 pub(crate) mod context_menu;

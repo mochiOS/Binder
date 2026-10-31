@@ -11,7 +11,6 @@ use crate::platform::{AppInfo, DesktopPlatform};
 
 use crate::window::{DesktopWindows, ProcessActivation};
 use viewkit::{
-    draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
     prelude::*,
@@ -709,11 +708,7 @@ where
         }
         if let Some(icon) = &app.icon {
             if let DockIcon::Image(image) = self.load_icon(icon) {
-                Image::new(image)
-                    .content_mode(ImageContentMode::Fit)
-                    .radius(CornerRadius::Custom(10.0))
-                    .sampling(ImageSampling::Bicubic)
-                    .paint(bounds, context);
+                super::app_icon::paint(image, bounds, context);
 
                 return;
             }
@@ -728,7 +723,7 @@ where
             .color(RectangleColor::Custom(
                 material.app_library_icon_background,
             ))
-            .radius(CornerRadius::Custom(bounds.size.width * 0.3))
+            .radius(super::app_icon::radius(bounds))
             .border(BorderStyle::custom(material.app_library_icon_border, 1.0))
             .paint(bounds, context);
 
@@ -753,7 +748,7 @@ where
                 .color(RectangleColor::Custom(
                     material.app_library_icon_tile,
                 ))
-                .radius(CornerRadius::Custom(cell_size * 0.24))
+                .radius(super::app_icon::radius(cell))
                 .paint(cell, context);
 
             let inset = cell_size * 0.08;
@@ -766,11 +761,7 @@ where
             if let Some(path) = app.icon.as_deref()
                 && let DockIcon::Image(image) = self.load_icon(path)
             {
-                Image::new(image)
-                    .content_mode(ImageContentMode::Fit)
-                    .radius(CornerRadius::Custom(cell_size * 0.2))
-                    .sampling(ImageSampling::Bicubic)
-                    .paint(icon, context);
+                super::app_icon::paint(image, icon, context);
             }
         }
     }

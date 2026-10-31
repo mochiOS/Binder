@@ -9,7 +9,6 @@ use crate::dock_preferences::DockPreferences;
 use crate::platform::{AppInfo, DesktopPlatform};
 use crate::window::DesktopWindows;
 use viewkit::{
-    draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
     prelude::*,
@@ -432,11 +431,7 @@ where
         if let Some(path) = app.icon.as_deref()
             && let CachedIcon::Image(image) = self.load_icon(path)
         {
-            Image::new(image)
-                .content_mode(ImageContentMode::Fit)
-                .sampling(ImageSampling::Bicubic)
-                .radius(CornerRadius::Custom(13.0))
-                .paint(bounds, context);
+            super::app_icon::paint(image, bounds, context);
             return;
         }
         paint_fallback_icon(bounds, context);
@@ -829,7 +824,9 @@ fn fallback_app_icon() -> Option<&'static SvgData> {
 
 pub(super) fn paint_fallback_icon(bounds: Rect, context: &mut PaintContext<'_>) {
     if let Some(icon) = fallback_app_icon() {
-        Svg::new(icon.clone()).paint(bounds, context);
+        Svg::new(icon.clone())
+            .radius(super::app_icon::radius(bounds))
+            .paint(bounds, context);
         return;
     }
 
@@ -837,7 +834,7 @@ pub(super) fn paint_fallback_icon(bounds: Rect, context: &mut PaintContext<'_>) 
         .color(RectangleColor::Custom(
             context.theme.colors.surface_muted,
         ))
-        .radius(CornerRadius::Custom(bounds.size.width * 0.22))
+        .radius(super::app_icon::radius(bounds))
         .border(BorderStyle::Standard { width: 1.0 })
         .paint(bounds, context);
 }

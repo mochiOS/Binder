@@ -69,7 +69,7 @@ not inherited specifications. No backdrop blur or gradient is added.
 
 App Library icon colours have their own tokens retaining the previous values,
 so reducing the Dock material does not accidentally wash out that icon. Icon
-assets, geometry, magnification and running indicators remain unchanged.
+assets, item dimensions, magnification and running indicators remain unchanged.
 All Dock-specific colours, icon materials and elevation belong to Binder's
 `ui/dock_material.rs`. The legacy Dock fields are removed from ViewKit's
 `ShellTokens`; ViewKit has no Dock component or Dock palette. Binder uses its
@@ -106,3 +106,17 @@ After this audit, the Applications search field's visual recipe uses standard
 ViewKit text-field colour, radius, stroke, horizontal padding and vertically
 centred typography. The launcher layout and its existing keyboard behaviour
 are preserved; this is not a replacement of the search controller.
+
+## Application icon corners
+
+Binder's `ui/app_icon.rs` owns the desktop presentation rule: the corner extent
+is 30% of the displayed icon's shorter side. This is an explicit refinement
+choice, replacing unrelated fixed 10/12/13px values in Dock, Applications and
+the app switcher. Magnification scales the mask along with the image.
+The App Library tile, its miniature application icons and fallback SVG follow
+the same rule. Original icon assets, image sizing and sampling are preserved.
+
+Image/Svg radius clipping already uses ViewKit's curvature-variation-minimizing
+Continuous Rounded Corner on native GPU, Linux preview and software paths.
+This revision uses that existing clipping, adding no circular-arc mask,
+Figma smoothing parameter, new shader or ViewKit application-specific API.

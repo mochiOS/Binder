@@ -6,7 +6,6 @@ use std::rc::Rc;
 use crate::platform::{AppInfo, DesktopPlatform, ProcessId};
 use crate::window::DesktopWindows;
 use viewkit::{
-    draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
     platform::{Key, PointerButton},
     prelude::*,
@@ -225,11 +224,7 @@ impl<C: View> AppSwitcherLayer<C> {
         if let Some(path) = app.icon.as_deref()
             && let CachedIcon::Image(image) = self.load_icon(path)
         {
-            Image::new(image)
-                .content_mode(ImageContentMode::Fit)
-                .sampling(ImageSampling::Bicubic)
-                .radius(CornerRadius::Custom(12.0))
-                .paint(bounds, context);
+            super::app_icon::paint(image, bounds, context);
         } else {
             super::app_library::paint_fallback_icon(bounds, context);
         }
