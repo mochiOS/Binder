@@ -37,6 +37,8 @@ pub(crate) struct StatusAreaInteraction {
     context_menu: RefCell<Option<Rc<ContextMenu>>>,
     context_part: Cell<usize>,
     backdrop: Cell<Option<(Instant, Rect, Color)>>,
+    native_controls: Cell<Option<(Instant, Rect, bool)>>,
+    over_window_controls: Cell<bool>,
 }
 
 pub(crate) struct StatusAreaLayer<C> {
@@ -140,6 +142,9 @@ impl<C: View> StatusAreaLayer<C> {
         overlap
     }
     fn should_show(&self, bounds: Rect, part: usize) -> bool {
+        if part == 1 && self.interaction.over_window_controls.get() {
+            return false;
+        }
         let open_menu = if part == 0 {
             self.menu_open.get()
         } else {
@@ -153,6 +158,49 @@ impl<C: View> StatusAreaLayer<C> {
             || !self.overlaps(bounds, part)
     }
     fn update_hover(&self, bounds: Rect, position: Option<Point>) {
+        self.interaction
+            .over_window_controls
+            .set(position.is_some_and(|point| {
+                let controls = Rect::new(
+                    bounds.origin.x
+                        + (bounds.size.width - super::window_decoration::CONTROLS_WIDTH).max(0.0),
+                    bounds.origin.y,
+                    bounds
+                        .size
+                        .width
+                        .min(super::window_decoration::CONTROLS_WIDTH),
+                    super::window_decoration::TITLE_BAR_HEIGHT,
+                );
+                if !controls.contains(point) {
+                    return false;
+                }
+                if self.windows.with(|desktop| {
+                    desktop
+                        .windows
+                        .iter()
+                        .rev()
+                        .find(|window| !window.minimized && super::window::contains(window, point))
+                        .is_some_and(|window| window.restore_frame.is_some())
+                }) {
+                    return true;
+                }
+                let now = Instant::now();
+                if let Some((at, area, blocked)) = self.interaction.native_controls.get()
+                    && area == controls
+                    && now.saturating_duration_since(at) < NATIVE_POLL
+                {
+                    return blocked;
+                }
+                let blocked = self
+                    .platform
+                    .borrow()
+                    .native_window_controls_overlap(controls)
+                    .unwrap_or(false);
+                self.interaction
+                    .native_controls
+                    .set(Some((now, controls, blocked)));
+                blocked
+            }));
         let regions = self.regions(bounds);
         for (part, region) in regions.into_iter().enumerate() {
             let hover = &self.interaction.areas[part].edge_hover;
@@ -163,6 +211,7 @@ impl<C: View> StatusAreaLayer<C> {
             };
             hover.set(
                 !self.moving_window()
+                    && !(part == 1 && self.interaction.over_window_controls.get())
                     && position.is_some_and(|point| {
                         point.x >= region.origin.x
                             && point.x < region.origin.x + region.size.width
@@ -294,6 +343,7 @@ impl<C: View> View for StatusAreaLayer<C> {
             .areas
             .each_ref()
             .map(|state| state.edge_hover.get());
+        let old_controls = self.interaction.over_window_controls.get();
         match event {
             ViewEvent::PointerMoved { position }
             | ViewEvent::PointerPressed { position, .. }
@@ -305,12 +355,13 @@ impl<C: View> View for StatusAreaLayer<C> {
             }
             _ => {}
         }
-        if old_hover
-            != self
-                .interaction
-                .areas
-                .each_ref()
-                .map(|state| state.edge_hover.get())
+        if old_controls != self.interaction.over_window_controls.get()
+            || old_hover
+                != self
+                    .interaction
+                    .areas
+                    .each_ref()
+                    .map(|state| state.edge_hover.get())
         {
             context.request_redraw_in(Self::damage(bounds));
         }
@@ -358,8 +409,12 @@ impl<C: View> View for StatusAreaLayer<C> {
                     }
                 }
             }
-            self.bar
-                .handle_part(part, Self::strip(bounds), &ViewEvent::PointerLeft, context);
+            // Focus broadcasts are not pointer exits. Cancelling here disarms
+            // a pressed button between press and release after the next paint.
+            if event.position().is_some() || !self.should_show(bounds, part) {
+                self.bar
+                    .handle_part(part, Self::strip(bounds), &ViewEvent::PointerLeft, context);
+            }
         }
         self.content.handle_event(bounds, event, context)
     }
@@ -433,6 +488,82 @@ mod tests {
             desktop.open_test(ProcessId(1), "Test".into(), 1280, 800, true);
             desktop.windows[0].frame.origin = Point::new(0.0, 0.0);
         });
+    }
+    #[test]
+    fn focus_broadcast_between_press_and_release_keeps_both_menu_buttons_armed() {
+        let layer = layer();
+        let bounds = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        let mut theme = Theme::current();
+        theme.motion = theme.motion.reduced();
+        let mut measurer = TextMeasurer::new();
+        let mut list = DisplayList::new();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
+        );
+        let pill = layer
+            .bar
+            .pill(StatusAreaLayer::<WindowProbe>::strip(bounds));
+        for (position, state) in [
+            (Point::new(27.0, 27.0), &layer.menu_open),
+            (
+                Point::new(pill.origin.x + pill.size.width - 8.0, 27.0),
+                &layer.controls_open,
+            ),
+        ] {
+            let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+            layer.handle_event(
+                bounds,
+                &ViewEvent::PointerPressed {
+                    position,
+                    button: PointerButton::Primary,
+                },
+                &mut context,
+            );
+            // The renderer broadcasts focus information after rebuilding the root.
+            layer.handle_event(
+                bounds,
+                &ViewEvent::FocusVisibilityChanged { visible: false },
+                &mut context,
+            );
+            layer.handle_event(
+                bounds,
+                &ViewEvent::PointerReleased {
+                    position,
+                    button: PointerButton::Primary,
+                },
+                &mut context,
+            );
+            assert!(state.get(), "menu must open after a complete click");
+            state.set(false);
+        }
+    }
+
+    #[test]
+    fn maximized_window_controls_take_priority_over_edge_reveal() {
+        let layer = layer();
+        let bounds = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        overlap(&layer);
+        layer.windows.update(|desktop| {
+            let id = desktop.windows[0].id;
+            desktop.toggle_maximize(id, bounds);
+        });
+        for point in [
+            Point::new(1279.0, 0.0),
+            Point::new(1279.0, 20.0),
+            Point::new(1160.0, 0.0),
+        ] {
+            layer.update_hover(bounds, Some(point));
+            assert!(!layer.should_show(bounds, 1));
+        }
+        layer.update_hover(bounds, Some(Point::new(1100.0, 0.0)));
+        assert!(
+            layer.should_show(bounds, 1),
+            "other top-edge space must still reveal the menu"
+        );
+        layer.preferences.borrow_mut().set_always_show_status(true);
+        layer.update_hover(bounds, Some(Point::new(1279.0, 0.0)));
+        assert!(!layer.should_show(bounds, 1));
     }
     #[test]
     fn right_edge_reveal_and_open_menus_do_not_reveal_the_opposite_side() {

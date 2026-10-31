@@ -548,6 +548,25 @@ impl DesktopPlatform for MochiOsPlatform {
         }
     }
 
+    fn native_window_controls_overlap(
+        &self,
+        area: viewkit::prelude::Rect,
+    ) -> Result<bool, PlatformError> {
+        #[cfg(target_os = "mochios")]
+        {
+            self.decoration_manager
+                .as_ref()
+                .ok_or(PlatformError::ServiceUnavailable)?
+                .window_controls_overlap(area)
+                .map_err(|_| PlatformError::TransportFailure)
+        }
+        #[cfg(not(target_os = "mochios"))]
+        {
+            let _ = area;
+            Ok(false)
+        }
+    }
+
     fn reload_appearance(&mut self) -> Result<bool, PlatformError> {
         #[cfg(target_os = "mochios")]
         {

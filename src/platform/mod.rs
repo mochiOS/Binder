@@ -232,6 +232,15 @@ pub trait DesktopPlatform {
         Ok(false)
     }
 
+    /// Returns whether maximized native window controls occupy this desktop region.
+    /// Shell edge reveal must leave these controls available to the application.
+    fn native_window_controls_overlap(
+        &self,
+        _area: viewkit::prelude::Rect,
+    ) -> Result<bool, PlatformError> {
+        Ok(false)
+    }
+
     fn open_system_settings(&self) -> Result<(), PlatformError>;
 
     fn set_output_volume(&mut self, _level: u8) -> Result<VolumeState, PlatformError> {

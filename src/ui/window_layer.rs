@@ -1132,6 +1132,23 @@ mod tests {
             desktop.toggle_maximize(id, WindowLayer::<StatusProbe>::desktop_work_area(bounds))
         });
         assert_eq!(layer.windows.get().windows[0].frame, bounds);
+        // The complete button cells meet the display edges; aiming at the
+        // symbol itself is unnecessary, including the very top-right pixel.
+        for (point, control) in [
+            (Point::new(1279.0, 0.0), WindowControl::Close),
+            (Point::new(1279.0, 20.0), WindowControl::Close),
+            (Point::new(1215.0, 0.0), WindowControl::Maximize),
+            (Point::new(1170.0, 0.0), WindowControl::Minimize),
+        ] {
+            assert_eq!(
+                WindowLayer::<StatusProbe>::control_at(bounds, point),
+                Some(control)
+            );
+            assert!(
+                WindowLayer::<StatusProbe>::topmost_resize_window_at(&layer.windows.get(), point)
+                    .is_none()
+            );
+        }
     }
 
     #[test]

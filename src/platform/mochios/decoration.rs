@@ -64,6 +64,14 @@ pub(super) struct DecorationManager {
 
 impl DecorationManager {
     pub(super) fn windows_overlap(&self, area: Rect) -> Result<bool, DecorationError> {
+        self.query_overlap(area, 4)
+    }
+
+    pub(super) fn window_controls_overlap(&self, area: Rect) -> Result<bool, DecorationError> {
+        self.query_overlap(area, 8)
+    }
+
+    fn query_overlap(&self, area: Rect, offset: usize) -> Result<bool, DecorationError> {
         let left = area.origin.x.floor();
         let top = area.origin.y.floor();
         let right = (area.origin.x + area.size.width).ceil();
@@ -83,7 +91,7 @@ impl DecorationManager {
         put_u32(&mut request, 12, (right - left) as u32)?;
         put_u32(&mut request, 16, (bottom - top) as u32)?;
         let reply = ipc_call(self.compositor, &request)?;
-        Ok(read_u32(&reply, 4) == Some(1))
+        Ok(read_u32(&reply, offset) == Some(1))
     }
 
     pub(super) fn background_color(&self, area: Rect) -> Result<Option<Color>, DecorationError> {
