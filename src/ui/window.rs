@@ -75,7 +75,7 @@ impl View for WindowView {
 
         Rectangle::new()
             .color(RectangleColor::Custom(
-                Theme::current().shell.window_background,
+                context.theme.shell.window_background,
             ))
             .paint(bounds, context);
 
@@ -91,7 +91,7 @@ impl View for WindowView {
                 .color(RectangleColor::Custom(Color::TRANSPARENT))
                 .radius(CornerRadius::Custom(self.radius))
                 .border(BorderStyle::custom(
-                    Theme::current().shell.window_border,
+                    context.theme.shell.window_border,
                     1.0,
                 ))
                 .paint(bounds, context);

@@ -42,21 +42,21 @@ impl WindowDecoration {
         context: &mut PaintContext<'_>,
     ) {
         let background = if close && pressed {
-            Theme::current().shell.close_pressed
+            context.theme.shell.close_pressed
         } else if close && hovered {
-            Theme::current().shell.close_hover
+            context.theme.shell.close_hover
         } else if pressed {
-            Theme::current().shell.title_bar_border
+            context.theme.shell.title_bar_border
         } else if hovered {
-            Theme::current().shell.control_hover
+            context.theme.shell.control_hover
         } else {
             Color::TRANSPARENT
         };
 
         let foreground = if close && (hovered || pressed) {
-            Theme::current().shell.inverse_text
+            context.theme.shell.inverse_text
         } else {
-            Theme::current().shell.control
+            context.theme.shell.control
         };
 
         Rectangle::new()
@@ -83,7 +83,7 @@ impl View for WindowDecoration {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         Rectangle::new()
             .color(RectangleColor::Custom(
-                Theme::current().shell.title_bar_background,
+                context.theme.shell.title_bar_background,
             ))
             .radius(CornerRadius::None)
             .paint(bounds, context);
@@ -96,26 +96,29 @@ impl View for WindowDecoration {
         );
 
         Rectangle::new()
-            .color(RectangleColor::Custom(
-                Theme::current().shell.title_bar_border,
-            ))
+            .color(RectangleColor::Custom(context.theme.shell.title_bar_border))
             .paint(border_bounds, context);
 
-        let title_line_height = context.typography.label.line_height;
-        let title_inset = CONTROLS_WIDTH + 12.0;
-        Text::styled(self.title.clone(), TextRole::Label)
-            .weight(650)
-            .alignment(TextAlignment::Center)
-            .color(Theme::current().shell.primary_text)
-            .paint(
-                Rect::new(
-                    bounds.origin.x + title_inset,
-                    bounds.origin.y + (TITLE_BAR_HEIGHT - title_line_height) / 2.0,
-                    (bounds.size.width - title_inset * 2.0).max(0.0),
-                    title_line_height,
-                ),
-                context,
-            );
+        let title = Text::styled(self.title.clone(), TextRole::Label)
+            .weight(context.typography.label.weight.0)
+            .center_visible_ink(true)
+            .color(context.theme.shell.primary_text);
+        let measured = title.measure(
+            Constraints::loose(Size::new(f32::INFINITY, TITLE_BAR_HEIGHT)),
+            &mut MeasureContext {
+                theme: context.theme,
+                typography: context.typography,
+                text_measurer: context.text_measurer,
+            },
+        );
+        let title_bounds = title_bounds(bounds, measured.width, context.theme.spacing.medium);
+        title
+            .alignment(if title_bounds.1 {
+                TextAlignment::Center
+            } else {
+                TextAlignment::Start
+            })
+            .paint(title_bounds.0, context);
 
         let minimize_hovered = self.interaction.hovered == Some(WindowControl::Minimize);
 
@@ -149,6 +152,33 @@ impl View for WindowDecoration {
             ControlIcon::Close,
             context,
         );
+    }
+}
+
+// Centre when the title fits symmetrically; narrow utility windows retain a
+// leading title instead of losing it to two fixed 144px reserved regions.
+fn title_bounds(bounds: Rect, width: f32, gap: f32) -> (Rect, bool) {
+    let symmetric_inset = CONTROLS_WIDTH + gap;
+    if width <= (bounds.size.width - symmetric_inset * 2.0).max(0.0) {
+        (
+            Rect::new(
+                bounds.origin.x + symmetric_inset,
+                bounds.origin.y,
+                (bounds.size.width - symmetric_inset * 2.0).max(0.0),
+                bounds.size.height,
+            ),
+            true,
+        )
+    } else {
+        (
+            Rect::new(
+                bounds.origin.x + gap,
+                bounds.origin.y,
+                (bounds.size.width - CONTROLS_WIDTH - gap * 2.0).max(0.0),
+                bounds.size.height,
+            ),
+            false,
+        )
     }
 }
 
@@ -214,4 +244,38 @@ pub(crate) fn maximize_bounds(frame: Rect) -> Rect {
 
 pub(crate) fn close_bounds(frame: Rect) -> Rect {
     WindowDecoration::control_bounds(frame, 2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use viewkit::{
+        draw_command::{DisplayList, DrawCommand},
+        typography::TextMeasurer,
+    };
+    #[test]
+    fn narrow_utility_titles_remain_visible_and_never_overlap_controls() {
+        for width in [240., 280., 360., 800.] {
+            let bounds = Rect::new(10., 20., width, TITLE_BAR_HEIGHT);
+            let (title, _) = title_bounds(bounds, 80., 12.);
+            assert!(title.size.width > 0.);
+            assert!(title.origin.x + title.size.width <= bounds.origin.x + width - CONTROLS_WIDTH);
+        }
+        let (title, centered) = title_bounds(Rect::new(0., 0., 800., 40.), 80., 12.);
+        assert!(centered);
+        assert_eq!(title.origin.x + title.size.width * 0.5, 400.);
+    }
+    #[test]
+    fn decoration_uses_context_material_and_native_label_weight() {
+        for theme in [Theme::LIGHT, Theme::DARK] {
+            let mut list = DisplayList::new();
+            let mut text = TextMeasurer::new();
+            WindowDecoration::new("Calculator", WindowInteraction::default()).paint(
+                Rect::new(0., 0., 280., 40.),
+                &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut text),
+            );
+            assert!(list.commands().iter().any(|cmd| matches!(cmd,DrawCommand::FillRect {color,..} if *color==theme.shell.title_bar_background)));
+            assert!(list.commands().iter().any(|cmd| matches!(cmd,DrawCommand::DrawText {command} if command.text=="Calculator" && command.bounds.size.width>0. && command.weight==theme.typography.label.weight.0 && command.color==theme.shell.primary_text)));
+        }
+    }
 }

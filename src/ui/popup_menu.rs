@@ -65,6 +65,7 @@ where
         open: State<bool>,
         interaction: Rc<PopupMenuInteraction>,
     ) -> Self {
+        let menu_height = menu.preferred_height(&Theme::current());
         Self {
             content,
             menu,
@@ -75,7 +76,7 @@ where
                 super::desktop_metrics::LOGO_INSET,
                 super::desktop_metrics::OS_MENU_TOP,
                 super::desktop_metrics::OS_MENU_WIDTH,
-                super::desktop_metrics::OS_MENU_HEIGHT,
+                menu_height,
             ),
 
             trigger_frame: Rect::new(5.0, 5.0, 44.0, 44.0),
@@ -92,19 +93,7 @@ where
     }
 
     fn redraw_frame(&self, bounds: Rect, theme: &viewkit::theme::Theme) -> Rect {
-        let margin = theme
-            .shadows
-            .card
-            .layers
-            .iter()
-            .flatten()
-            .map(|shadow| {
-                shadow.blur_radius
-                    + shadow.spread.max(0.0)
-                    + shadow.offset_x.abs().max(shadow.offset_y.abs())
-            })
-            .fold(0.0_f32, f32::max)
-            + 2.0;
+        let margin = theme.surface.shadow_outset(&theme.shadows) + 2.0;
         Self::absolute_frame(bounds, self.trigger_frame)
             .union(Self::absolute_frame(bounds, self.menu_frame).expanded(margin))
     }

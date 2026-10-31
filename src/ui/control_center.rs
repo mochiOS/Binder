@@ -244,13 +244,19 @@ impl<C: View> ControlCenterLayer<C> {
             + 40.0;
         Rect::new(
             bounds.origin.x
-                + (bounds.size.width - metrics::CONTROL_WIDTH - metrics::CHROME_RIGHT).max(0.0),
-            bounds.origin.y + metrics::CONTROL_TOP,
-            metrics::CONTROL_WIDTH.min(bounds.size.width),
+                + (bounds.size.width - metrics::CONTROL_WIDTH - metrics::CHROME_RIGHT - metrics::PANEL_PADDING).max(metrics::PANEL_PADDING),
+            bounds.origin.y + metrics::CONTROL_TOP + metrics::PANEL_PADDING,
+            metrics::CONTROL_WIDTH.min((bounds.size.width - 2.0 * metrics::PANEL_PADDING).max(0.0)),
             height,
         )
     }
 
+    fn surface_rect(panel: Rect, detail: bool) -> Rect {
+        if detail { panel } else { panel.expanded(metrics::PANEL_PADDING) }
+    }
+    fn contains_panel(&self, panel: Rect, position: Point) -> bool {
+        Self::surface_rect(panel, self.detail.get().is_some()).contains_rounded(metrics::PANEL_RADIUS, position)
+    }
     fn edit_rect(panel: Rect) -> Rect {
         Rect::new(
             panel.origin.x,
@@ -337,7 +343,7 @@ impl<C: View> ControlCenterLayer<C> {
     fn hit(&self, bounds: Rect, position: Point) -> Option<Hit> {
         let visible = self.ordered_items();
         let panel = self.panel(bounds, visible.len());
-        if !panel.contains_rounded(22.0, position) {
+        if !self.contains_panel(panel, position) {
             return None;
         }
         if self.detail.get().is_some() {
@@ -497,7 +503,7 @@ impl<C: View> ControlCenterLayer<C> {
             SymbolName::VolumeHigh
         })
         .size(22.0)
-        .color(Color::rgb(90, 90, 90))
+        .color(context.theme.shell.secondary_text)
         .accessibility_label("Volume")
         .paint(
             Rect::new(frame.origin.x + 17.0, frame.origin.y + 94.0, 26.0, 26.0),
@@ -522,19 +528,19 @@ impl<C: View> ControlCenterLayer<C> {
         context.record_accessibility(back_node);
         if self.interaction.borrow().hovered == Some(Hit::Back) {
             Rectangle::new()
-                .color(RectangleColor::Custom(Theme::current().shell.item_hover))
+                .color(RectangleColor::Custom(context.theme.shell.item_hover))
                 .radius(CornerRadius::Medium)
                 .paint(back, context);
         }
         Icon::new(SymbolName::ChevronLeft)
             .size(12.0)
-            .color(Theme::current().shell.primary_text)
+            .color(context.theme.shell.primary_text)
             .accessibility_label("Back")
             .paint(back, context);
         Text::styled("Network", TextRole::TitleSmall)
             .weight(700)
             .alignment(TextAlignment::Center)
-            .color(Theme::current().shell.primary_text)
+            .color(context.theme.shell.primary_text)
             .paint(
                 Rect::new(
                     panel.origin.x + 44.0,
@@ -552,15 +558,15 @@ impl<C: View> ControlCenterLayer<C> {
             62.0,
         );
         Rectangle::new()
-            .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+            .color(RectangleColor::Custom(context.theme.shell.item_enabled))
             .radius(CornerRadius::Large)
             .paint(summary, context);
         let icon = Rect::new(summary.origin.x + 10.0, summary.origin.y + 11.0, 40.0, 40.0);
         Rectangle::new()
             .color(RectangleColor::Custom(if state.enabled() {
-                Theme::current().colors.accent
+                context.theme.colors.accent
             } else {
-                Theme::current().shell.control_hover
+                context.theme.shell.control_hover
             }))
             .radius(CornerRadius::Medium)
             .paint(icon, context);
@@ -569,7 +575,7 @@ impl<C: View> ControlCenterLayer<C> {
             .color(if state.enabled() {
                 Color::WHITE
             } else {
-                Theme::current().shell.primary_text
+                context.theme.shell.primary_text
             })
             .paint(icon, context);
         let (status, network_name, interface, address) = match &state {
@@ -591,7 +597,7 @@ impl<C: View> ControlCenterLayer<C> {
         };
         Text::styled(status, TextRole::Label)
             .weight(650)
-            .color(Theme::current().shell.primary_text)
+            .color(context.theme.shell.primary_text)
             .paint(
                 Rect::new(
                     summary.origin.x + 60.0,
@@ -609,7 +615,7 @@ impl<C: View> ControlCenterLayer<C> {
             },
             TextRole::Caption,
         )
-        .color(Theme::current().shell.secondary_text)
+        .color(context.theme.shell.secondary_text)
         .paint(
             Rect::new(
                 summary.origin.x + 60.0,
@@ -635,19 +641,19 @@ impl<C: View> ControlCenterLayer<C> {
                 42.0,
             );
             Rectangle::new()
-                .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+                .color(RectangleColor::Custom(context.theme.shell.item_enabled))
                 .radius(CornerRadius::Medium)
                 .paint(row, context);
             Text::styled(label, TextRole::Caption)
                 .weight(650)
-                .color(Theme::current().shell.secondary_text)
+                .color(context.theme.shell.secondary_text)
                 .paint(
                     Rect::new(row.origin.x + 12.0, row.origin.y, 94.0, row.size.height),
                     context,
                 );
             Text::styled(value, TextRole::Label)
                 .alignment(TextAlignment::End)
-                .color(Theme::current().shell.primary_text)
+                .color(context.theme.shell.primary_text)
                 .paint(
                     Rect::new(
                         row.origin.x + 106.0,
@@ -773,19 +779,19 @@ impl<C: View> ControlCenterLayer<C> {
         context.record_accessibility(back_node);
         if self.interaction.borrow().hovered == Some(Hit::Back) {
             Rectangle::new()
-                .color(RectangleColor::Custom(Theme::current().shell.item_hover))
+                .color(RectangleColor::Custom(context.theme.shell.item_hover))
                 .radius(CornerRadius::Medium)
                 .paint(back, context);
         }
         Icon::new(SymbolName::ChevronLeft)
             .size(12.0)
-            .color(Theme::current().shell.primary_text)
+            .color(context.theme.shell.primary_text)
             .accessibility_label("Back")
             .paint(back, context);
         Text::styled(title, TextRole::TitleSmall)
             .weight(700)
             .alignment(TextAlignment::Center)
-            .color(Theme::current().shell.primary_text)
+            .color(context.theme.shell.primary_text)
             .paint(
                 Rect::new(
                     panel.origin.x + 44.0,
@@ -798,7 +804,7 @@ impl<C: View> ControlCenterLayer<C> {
 
         let Some(card) = card else {
             Rectangle::new()
-                .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+                .color(RectangleColor::Custom(context.theme.shell.item_enabled))
                 .radius(CornerRadius::Large)
                 .paint(
                     Rect::new(
@@ -812,7 +818,7 @@ impl<C: View> ControlCenterLayer<C> {
             Text::styled("Loading card…", TextRole::Label)
                 .weight(650)
                 .alignment(TextAlignment::Center)
-                .color(Theme::current().shell.primary_text)
+                .color(context.theme.shell.primary_text)
                 .paint(
                     Rect::new(
                         panel.origin.x + PANEL_PADDING + 12.0,
@@ -824,7 +830,7 @@ impl<C: View> ControlCenterLayer<C> {
                 );
             Text::styled("Waiting for the application provider", TextRole::Caption)
                 .alignment(TextAlignment::Center)
-                .color(Theme::current().shell.secondary_text)
+                .color(context.theme.shell.secondary_text)
                 .paint(
                     Rect::new(
                         panel.origin.x + PANEL_PADDING + 12.0,
@@ -845,12 +851,12 @@ impl<C: View> ControlCenterLayer<C> {
                 44.0,
             );
             Rectangle::new()
-                .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+                .color(RectangleColor::Custom(context.theme.shell.item_enabled))
                 .radius(CornerRadius::Medium)
                 .paint(bounds, context);
             Text::styled(row.label.clone(), TextRole::Caption)
                 .weight(650)
-                .color(Theme::current().shell.secondary_text)
+                .color(context.theme.shell.secondary_text)
                 .paint(
                     Rect::new(
                         bounds.origin.x + 12.0,
@@ -862,7 +868,7 @@ impl<C: View> ControlCenterLayer<C> {
                 );
             Text::styled(row.value.clone(), TextRole::Label)
                 .alignment(TextAlignment::End)
-                .color(Theme::current().shell.primary_text)
+                .color(context.theme.shell.primary_text)
                 .paint(
                     Rect::new(
                         bounds.origin.x + 112.0,
@@ -917,11 +923,11 @@ impl<C: View> ControlCenterLayer<C> {
         let focused = self.interaction.borrow().focused.as_ref() == Some(&hit);
         let pressed = self.interaction.borrow().pressed.as_ref() == Some(&hit);
         let color = if pressed {
-            Theme::current().shell.control_hover
+            context.theme.shell.control_hover
         } else if hovered || focused {
-            Theme::current().colors.surface
+            context.theme.colors.surface
         } else {
-            Theme::current().slider.level_track
+            context.theme.slider.level_track
         };
         Rectangle::new()
             .color(RectangleColor::Custom(color))
@@ -929,12 +935,12 @@ impl<C: View> ControlCenterLayer<C> {
             .paint(bounds, context);
         Icon::new(item.symbol)
             .size(24.0)
-            .color(Theme::current().colors.text_primary)
+            .color(context.theme.colors.text_primary)
             .accessibility_label(item.title.clone())
             .paint(bounds, context);
         if hovered {
             Text::caption(item.title.clone())
-                .color(Theme::current().shell.primary_text)
+                .color(context.theme.shell.primary_text)
                 .alignment(TextAlignment::End)
                 .paint(
                     Rect::new(
@@ -954,11 +960,9 @@ impl<C: View> ControlCenterLayer<C> {
         detail: Option<ControlCenterDetail>,
         context: &mut PaintContext<'_>,
     ) {
+        Surface::floating().radius(CornerRadius::Custom(metrics::PANEL_RADIUS))
+            .paint(Self::surface_rect(panel, detail.is_some()), context);
         if let Some(detail) = detail {
-            Rectangle::new()
-                .color(RectangleColor::Custom(Theme::current().card.background))
-                .radius(CornerRadius::Custom(22.0))
-                .paint(panel, context);
             match detail {
                 ControlCenterDetail::Network => self.paint_network_detail(panel, context),
                 ControlCenterDetail::Battery => self.paint_battery_detail(panel, context),
@@ -1004,23 +1008,11 @@ impl<C: View> View for ControlCenterLayer<C> {
             self.interaction.borrow().closing_detail.clone()
         };
         let panel = Self::panel_for_detail(bounds, visible.len(), detail.is_some());
-        let margin = context
-            .theme
-            .shadows
-            .floating
-            .layers
-            .iter()
-            .flatten()
-            .map(|shadow| {
-                shadow.blur_radius
-                    + shadow.spread.max(0.0)
-                    + shadow.offset_x.abs().max(shadow.offset_y.abs())
-            })
-            .fold(TILE_LABEL_WIDTH + TILE_LABEL_GAP, f32::max)
-            + 2.0;
+        let margin = context.theme.surface.shadow_outset(&context.theme.shadows)
+            .max(TILE_LABEL_WIDTH + TILE_LABEL_GAP) + 2.0;
         let grid_panel = Self::panel_for_detail(bounds, visible.len(), false);
         let detail_panel = Self::panel_for_detail(bounds, visible.len(), true);
-        let scope_bounds = grid_panel.union(detail_panel);
+        let scope_bounds = Self::surface_rect(grid_panel, false).union(Self::surface_rect(detail_panel, true));
         let current_damage = scope_bounds.expanded(margin);
         let now = Instant::now();
         let (navigation_amount, navigation_next, outgoing_detail) = {
@@ -1200,7 +1192,7 @@ impl<C: View> View for ControlCenterLayer<C> {
                     button: PointerButton::Primary,
                 } => {
                     let hit = self.hit(bounds, *position);
-                    if !panel.contains_rounded(22.0, *position) {
+                    if !self.contains_panel(panel, *position) {
                         self.detail.set(None);
                         self.open.set(false);
                     }
@@ -1222,7 +1214,7 @@ impl<C: View> View for ControlCenterLayer<C> {
             }
             return EventResult::Consumed;
         }
-        if matches!(event, ViewEvent::PointerPressed { position, button: PointerButton::Secondary } if panel.contains_rounded(22.0,*position))
+        if matches!(event, ViewEvent::PointerPressed { position, button: PointerButton::Secondary } if self.contains_panel(panel,*position))
         {
             self.open_customizer();
             context.request_redraw();
@@ -1290,7 +1282,7 @@ impl<C: View> View for ControlCenterLayer<C> {
                 button: PointerButton::Primary,
             } => {
                 let hit = self.hit(bounds, *position);
-                if !panel.contains_rounded(22.0, *position) {
+                if !self.contains_panel(panel, *position) {
                     self.open.set(false);
                     self.detail.set(None);
                 }
@@ -1371,6 +1363,25 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn grid_and_detail_use_one_floating_material_and_shared_visible_hit_shape() {
+        use viewkit::{draw_command::{DisplayList,DrawCommand},typography::TextMeasurer};
+        let layer=layer(); let bounds=Rect::new(0.,0.,1280.,800.);
+        for theme in [Theme::LIGHT,Theme::DARK] {
+            for detail in [None, Some(ControlCenterDetail::Battery)] {
+                layer.detail.set(detail.clone());
+                let panel=ControlCenterLayer::<Rectangle>::panel_for_detail(bounds,0,detail.is_some());
+                let surface=ControlCenterLayer::<Rectangle>::surface_rect(panel,detail.is_some());
+                assert!(!layer.contains_panel(panel,surface.origin));
+                assert!(layer.contains_panel(panel,Point::new(surface.origin.x+surface.size.width*0.5,surface.origin.y+surface.size.height*0.5)));
+                assert!(surface.origin.x + surface.size.width <= bounds.size.width - metrics::CHROME_RIGHT);
+                let mut list=DisplayList::new();let mut text=TextMeasurer::new();
+                layer.paint_panel(panel,&[],detail,&mut PaintContext::new(&mut list,&theme,&theme.typography,&mut text));
+                assert!(list.commands().iter().any(|cmd| matches!(cmd,DrawCommand::FillRoundedRect {rect,color,radius} if *rect==surface && *color==theme.surface.floating_background && *radius==metrics::PANEL_RADIUS)));
+            }
+        }
+    }
     #[test]
     fn parses_safe_application_registration() {
         let items = parse_app_items(

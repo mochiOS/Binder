@@ -173,18 +173,8 @@ impl<C: View> NotificationCenterLayer<C> {
     }
 
     fn floating_extent() -> f32 {
-        Theme::current()
-            .shadows
-            .floating
-            .layers
-            .iter()
-            .flatten()
-            .map(|shadow| {
-                shadow.blur_radius
-                    + shadow.spread.max(0.0)
-                    + shadow.offset_x.abs().max(shadow.offset_y.abs())
-            })
-            .fold(0.0, f32::max)
+        let theme = Theme::current();
+        theme.surface.shadow_outset(&theme.shadows)
     }
 
     fn banner_target_rect(bounds: Rect) -> Rect {

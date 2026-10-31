@@ -305,7 +305,7 @@ impl<C: View> View for SpotlightLayer<C> {
         Rectangle::new()
             .color(RectangleColor::Custom(theme.shell.scrim))
             .paint(bounds, context);
-        Card::new().compact().paint(panel, context);
+        Surface::floating().paint(panel, context);
 
         let search = Self::search_rect(panel, theme);
         self.search_field().paint(search, context);

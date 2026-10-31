@@ -722,10 +722,10 @@ where
     fn paint_app_library_icon(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         Rectangle::new()
             .color(RectangleColor::Custom(
-                Theme::current().shell.dock_background,
+                context.theme.shell.dock_background,
             ))
             .radius(CornerRadius::Custom(bounds.size.width * 0.3))
-            .border(BorderStyle::custom(Theme::current().shell.dock_border, 1.0))
+            .border(BorderStyle::custom(context.theme.shell.dock_border, 1.0))
             .paint(bounds, context);
 
         let cell_size = bounds.size.width * 0.3;
@@ -747,7 +747,7 @@ where
 
             Rectangle::new()
                 .color(RectangleColor::Custom(
-                    Theme::current().shell.dock_item_hover,
+                    context.theme.shell.dock_item_hover,
                 ))
                 .radius(CornerRadius::Custom(cell_size * 0.24))
                 .paint(cell, context);
@@ -793,15 +793,15 @@ where
 
         Rectangle::new()
             .color(RectangleColor::Custom(
-                Theme::current().shell.inverse_surface,
+                context.theme.shell.inverse_surface,
             ))
             .radius(CornerRadius::Custom(DOCK_TOOLTIP_RADIUS))
             .paint(tooltip, context);
 
-        let label_style = Theme::current().typography.style(TextRole::Label);
+        let label_style = context.theme.typography.style(TextRole::Label);
         Text::styled(app.name.clone(), TextRole::Label)
             .alignment(TextAlignment::Center)
-            .color(Theme::current().shell.inverse_text)
+            .color(context.theme.shell.inverse_text)
             .paint(
                 Rect::new(
                     tooltip.origin.x,
@@ -829,7 +829,7 @@ where
 
         Ellipse::new()
             .color(EllipseColor::Custom(
-                Theme::current().shell.running_indicator,
+                context.theme.shell.running_indicator,
             ))
             .paint(Rect::new(x, y, size, size), context);
     }
@@ -870,10 +870,11 @@ where
 
         Rectangle::new()
             .color(RectangleColor::Custom(
-                Theme::current().shell.dock_background,
+                context.theme.shell.dock_background,
             ))
             .radius(CornerRadius::Custom(DOCK_RADIUS))
-            .shadow(ShadowStyle::None)
+            .shadow(ShadowStyle::Custom(context.theme.shell.dock_shadow))
+            .border(BorderStyle::custom(context.theme.shell.dock_border, context.theme.surface.floating_stroke_width))
             .paint(dock, context);
 
         let apps = self.dock_apps();
@@ -895,7 +896,7 @@ where
 
                 Rectangle::new()
                     .color(RectangleColor::Custom(
-                        Theme::current()
+                        context.theme
                             .shell
                             .dock_item_hover
                             .with_alpha(opacity as u8),

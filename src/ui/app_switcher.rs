@@ -249,16 +249,7 @@ impl<C: View> View for AppSwitcherLayer<C> {
         }
         let range = Self::visible_range(&state);
         let panel = Self::panel(bounds, range.len());
-        Rectangle::new()
-            .color(RectangleColor::Custom(
-                Theme::current().shell.panel_background,
-            ))
-            .radius(CornerRadius::Custom(20.0))
-            .shadow(ShadowStyle::Card)
-            .border(BorderStyle::custom(
-                Theme::current().shell.panel_border,
-                1.0,
-            ))
+        Surface::floating().radius(CornerRadius::Custom(super::desktop_metrics::PANEL_RADIUS))
             .paint(panel, context);
         for (local, index) in range.enumerate() {
             let entry = &state.entries[index];
@@ -266,13 +257,13 @@ impl<C: View> View for AppSwitcherLayer<C> {
             if index == state.selected {
                 Rectangle::new()
                     .color(RectangleColor::Custom(
-                        Theme::current().shell.selection_soft,
+                        context.theme.shell.selection_soft,
                     ))
                     .radius(CornerRadius::Custom(14.0))
                     .paint(item, context);
             } else if self.hovered.get() == Some(index) {
                 Rectangle::new()
-                    .color(RectangleColor::Custom(Theme::current().shell.item_hover))
+                    .color(RectangleColor::Custom(context.theme.shell.item_hover))
                     .radius(CornerRadius::Custom(14.0))
                     .paint(item, context);
             }
@@ -286,7 +277,7 @@ impl<C: View> View for AppSwitcherLayer<C> {
             if entry.minimized {
                 Rectangle::new()
                     .color(RectangleColor::Custom(
-                        Theme::current().colors.text_secondary,
+                        context.theme.colors.text_secondary,
                     ))
                     .radius(CornerRadius::Custom(3.0))
                     .paint(

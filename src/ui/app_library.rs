@@ -460,7 +460,7 @@ where
         }
         self.ensure_open_session();
         Rectangle::new()
-            .color(RectangleColor::Custom(Theme::current().shell.scrim))
+            .color(RectangleColor::Custom(context.theme.shell.scrim))
             .paint(bounds, context);
         let apps = self.apps.get();
         let filtered = matching_app_indices(&apps, &self.query.borrow());
@@ -468,29 +468,20 @@ where
         let visible = self.visible_indices(&filtered);
         let page_count = self.page_count(&filtered);
         let panel = Self::panel_rect(bounds, visible.len(), page_count > 1);
-        Rectangle::new()
-            .color(RectangleColor::Custom(
-                Theme::current().shell.panel_background,
-            ))
-            .radius(CornerRadius::Custom(22.0))
-            .shadow(ShadowStyle::Custom(Theme::current().shell.panel_shadow))
-            .border(BorderStyle::custom(
-                Theme::current().shell.panel_border,
-                1.0,
-            ))
+        Surface::floating().radius(CornerRadius::Custom(super::desktop_metrics::PANEL_RADIUS))
             .paint(panel, context);
-        Text::styled("Applications", TextRole::TitleLarge).paint(
+        Text::styled("Applications", TextRole::TitleSmall).paint(
             Rect::new(panel.origin.x + 34.0, panel.origin.y + 24.0, 300.0, 36.0),
             context,
         );
         let search = Self::search_rect(panel);
         Rectangle::new()
             .color(RectangleColor::Custom(
-                Theme::current().shell.field_background,
+                context.theme.shell.field_background,
             ))
             .radius(CornerRadius::Custom(11.0))
             .border(BorderStyle::custom(
-                Theme::current().shell.field_border,
+                context.theme.shell.field_border,
                 1.0,
             ))
             .paint(search, context);
@@ -504,9 +495,9 @@ where
             TextRole::Label,
         )
         .color(if self.query.borrow().is_empty() {
-            Theme::current().shell.tertiary_text.with_alpha(150)
+            context.theme.shell.tertiary_text.with_alpha(150)
         } else {
-            Theme::current().shell.primary_text
+            context.theme.shell.primary_text
         })
         .paint(
             Rect::new(
@@ -527,10 +518,10 @@ where
                 let selected_hovered =
                     self.hovered.get() == Some(app_index) || self.pressed.get() == Some(app_index);
                 Rectangle::new()
-                    .color(RectangleColor::Custom(Theme::current().shell.item_enabled))
+                    .color(RectangleColor::Custom(context.theme.shell.item_enabled))
                     .radius(CornerRadius::Custom(14.0))
                     .border(if selected_hovered {
-                        BorderStyle::custom(Theme::current().shell.field_border, 1.0)
+                        BorderStyle::custom(context.theme.shell.field_border, 1.0)
                     } else {
                         BorderStyle::None
                     })
@@ -538,7 +529,7 @@ where
             } else if self.hovered.get() == Some(app_index) || self.pressed.get() == Some(app_index)
             {
                 Rectangle::new()
-                    .color(RectangleColor::Custom(Theme::current().shell.item_hover))
+                    .color(RectangleColor::Custom(context.theme.shell.item_hover))
                     .radius(CornerRadius::Custom(14.0))
                     .paint(item, context);
             }
@@ -565,7 +556,7 @@ where
         if filtered.is_empty() {
             Text::styled("No applications found", TextRole::Body)
                 .alignment(TextAlignment::Center)
-                .color(Theme::current().shell.tertiary_text)
+                .color(context.theme.shell.tertiary_text)
                 .paint(
                     Rect::new(
                         panel.origin.x + 80.0,
@@ -587,9 +578,9 @@ where
             ] {
                 Rectangle::new()
                     .color(RectangleColor::Custom(if enabled {
-                        Theme::current().shell.item_enabled
+                        context.theme.shell.item_enabled
                     } else {
-                        Theme::current().shell.item_disabled
+                        context.theme.shell.item_disabled
                     }))
                     .radius(CornerRadius::Custom(PAGE_BUTTON_SIZE / 2.0))
                     .paint(button, context);
@@ -597,9 +588,9 @@ where
                     .weight(700)
                     .alignment(TextAlignment::Center)
                     .color(if enabled {
-                        Theme::current().shell.primary_text
+                        context.theme.shell.primary_text
                     } else {
-                        Theme::current().shell.tertiary_text.with_alpha(70)
+                        context.theme.shell.tertiary_text.with_alpha(70)
                     })
                     .paint(
                         Rect::new(
@@ -613,7 +604,7 @@ where
             }
             Text::styled(format!("{} / {}", page + 1, page_count), TextRole::Caption)
                 .alignment(TextAlignment::Center)
-                .color(Theme::current().shell.tertiary_text)
+                .color(context.theme.shell.tertiary_text)
                 .paint(
                     Rect::new(
                         panel.origin.x + panel.size.width / 2.0 - 42.0,
@@ -845,7 +836,7 @@ pub(super) fn paint_fallback_icon(bounds: Rect, context: &mut PaintContext<'_>) 
 
     Rectangle::new()
         .color(RectangleColor::Custom(
-            Theme::current().colors.surface_muted,
+            context.theme.colors.surface_muted,
         ))
         .radius(CornerRadius::Custom(bounds.size.width * 0.22))
         .border(BorderStyle::Standard { width: 1.0 })

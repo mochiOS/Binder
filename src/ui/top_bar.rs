@@ -319,7 +319,7 @@ impl SystemBar {
             if cursor + width + metrics::STATUS_MENU_SPACE > maximum {
                 continue;
             }
-            entries.push((index, Rect::new(cursor, 0.0, width, 34.0)));
+            entries.push((index, Rect::new(cursor, 0.0, width, metrics::STATUS_HEIGHT)));
             cursor += width + 8.0;
         }
         let width = if entries.is_empty() {
@@ -331,7 +331,7 @@ impl SystemBar {
             bounds.origin.x + bounds.size.width - metrics::CHROME_RIGHT - width,
             bounds.origin.y + metrics::STATUS_GROUP_TOP,
             width,
-            34.0,
+            metrics::STATUS_HEIGHT,
         );
         for (_, frame) in &mut entries {
             frame.origin.x += pill.origin.x;
@@ -407,7 +407,8 @@ impl SystemBar {
                     .any(|(i, f)| hit_frame(&self.entries[*i].item, *f).contains(p))
         });
         let mut background_event = event.clone();
-        if reserved {
+        let outside_surface = event.position().is_some_and(|p| !layout.pill.contains_rounded(layout.pill.size.height * 0.5, p));
+        if reserved || outside_surface {
             let outside = Point::new(bounds.origin.x - 100.0, bounds.origin.y - 100.0);
             match &mut background_event {
                 ViewEvent::PointerMoved { position }
@@ -479,7 +480,7 @@ fn label(
     foreground: Color,
     context: &mut PaintContext<'_>,
 ) {
-    let height = 20.0 * context.text_measurer.font_scale();
+    let height = metrics::STATUS_LINE_HEIGHT * context.text_measurer.font_scale();
     let text_bounds = if center_visible_ink {
         bounds
     } else {
@@ -491,9 +492,9 @@ fn label(
         )
     };
     Text::styled(value, TextRole::Label)
-        .font_size(14.0)
-        .line_height(20.0)
-        .weight(400)
+        .font_size(metrics::STATUS_FONT_SIZE)
+        .line_height(metrics::STATUS_LINE_HEIGHT)
+        .weight(context.typography.label.weight.0)
         .alignment(alignment)
         .color(foreground)
         .center_visible_ink(center_visible_ink)
