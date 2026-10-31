@@ -460,7 +460,7 @@ where
         }
         self.ensure_open_session();
         Rectangle::new()
-            .color(RectangleColor::Custom(context.theme.shell.scrim))
+            .color(RectangleColor::Custom(context.theme.dialog.backdrop))
             .paint(bounds, context);
         let apps = self.apps.get();
         let filtered = matching_app_indices(&apps, &self.query.borrow());

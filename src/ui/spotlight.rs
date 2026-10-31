@@ -303,7 +303,7 @@ impl<C: View> View for SpotlightLayer<C> {
         let results = self.results();
         let panel = Self::panel(bounds, results.len(), theme);
         Rectangle::new()
-            .color(RectangleColor::Custom(theme.shell.scrim))
+            .color(RectangleColor::Custom(theme.dialog.backdrop))
             .paint(bounds, context);
         Surface::floating().paint(panel, context);
 
