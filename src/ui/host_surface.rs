@@ -115,6 +115,14 @@ impl View for HostSurface {
             ViewEvent::PointerPressed { button, .. }
             | ViewEvent::PointerReleased { button, .. } => {
                 let point = local_position.unwrap();
+                // Forward the current modifier state even when this click
+                // focuses a different window than the one receiving key events.
+                let _ = surface.connection.borrow_mut().send(Packet::Event {
+                    id: surface.local_id,
+                    event: PlatformEvent::ModifiersChanged {
+                        modifiers: context.modifiers(),
+                    },
+                });
                 // Button events carry no coordinates in PlatformEvent.
                 let _ = surface.connection.borrow_mut().send(Packet::Event {
                     id: surface.local_id,
@@ -139,6 +147,9 @@ impl View for HostSurface {
                 delta_y: *delta_y,
             },
             ViewEvent::PointerLeft => PlatformEvent::PointerLeft,
+            ViewEvent::ModifiersChanged { modifiers } => PlatformEvent::ModifiersChanged {
+                modifiers: *modifiers,
+            },
             ViewEvent::KeyPressed { key, modifiers } => PlatformEvent::KeyPressed {
                 key: *key,
                 modifiers: *modifiers,
