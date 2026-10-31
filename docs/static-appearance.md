@@ -13,7 +13,7 @@ not a reason to replace the continuous-corner model or the existing assets.
 | Floating UI | OS menus, Applications, search, task switching, notification surfaces and control centre use Surface::floating material. Preserve radii by role, including 22px launcher/control panels. |
 | Control centre | One material across grid/detail pages, inset the grid within a padded floating frame, match visible boundary and input, and use theme colours for secondary text. |
 | Window chrome | Keep 40px title bar and existing controls; use native label weight/ink centring and retain title space in narrow utility windows. Make shell backing opaque and soften the separator. |
-| Native window elevation | ViewKit and compositor read the same dependency-free window_elevation.rs data. Preserve the 20px damage budget and window corner radius. |
+| Native window elevation | ViewKit and compositor have self-contained, matching window_elevation.rs data checked by scripts/dev/check-ui-boundaries.py. Neither imports the other repository's source. Preserve the 20px damage budget and window corner radius. |
 | Dock | Preserve the mock geometry, icon assets, item layout and 10px bottom margin. Use a quiet translucent backing, restrained shadow and inside outline; see the material revision below. |
 | Status area | Preserve logo, assets, position, icon dimensions and background-dependent black/white foreground. Share text/row metrics and native label weight; reject clicks outside the visible rounded background. No permanent bar. |
 | OS-menu density | Use existing 13px control text and 24px small-control rows. Derive popup height from actual items/groups/padding instead of a fixed 144px frame. |
@@ -80,3 +80,29 @@ than an isolated inverse black label. Text width is measured with the current
 font metrics, horizontal padding is preserved, and redraw includes the floating
 shadow. The intended hierarchy is wallpaper as the environment, windows as work,
 and quiet shell controls as navigation; this is not a wholesale macOS reskin.
+
+## UI responsibility audit
+
+Dock composition, visibility and materials are owned by Binder. ViewKit owns
+generic controls, shape/rendering facilities and platform backends; AppCore owns
+application-facing registration and service APIs. Control Center/notification
+registration publishes data; Binder decides placement and renders that data.
+The Linux preview backend transports these requests along with real application
+windows; it does not implement the Control Center or notification centre UI.
+
+Generic runtime alerts now use the destructive semantic colour. File panels and
+desktop modal overlays use DialogTokens.backdrop. ShellTokens.scrim remains a
+compatibility alias using the same recipe, preserving existing application
+appearance. The remaining ShellTokens are a legacy palette, not implementations
+of desktop or application components.
+
+The architecture check rejects direct external Rust module/source imports and
+framework path dependencies into applications/services, checks the ViewKit to
+AppCore dependency direction, and compares elevation data. It runs before
+`mmake ui`, `mmake ui-check` and native compositor builds. Its negative-path
+tests deliberately introduce forbidden dependencies and source imports.
+
+After this audit, the Applications search field's visual recipe uses standard
+ViewKit text-field colour, radius, stroke, horizontal padding and vertically
+centred typography. The launcher layout and its existing keyboard behaviour
+are preserved; this is not a replacement of the search controller.

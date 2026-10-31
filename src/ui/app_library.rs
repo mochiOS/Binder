@@ -475,36 +475,35 @@ where
             context,
         );
         let search = Self::search_rect(panel);
+        let field = context.theme.text_field;
         Rectangle::new()
-            .color(RectangleColor::Custom(
-                context.theme.shell.field_background,
-            ))
-            .radius(CornerRadius::Custom(11.0))
-            .border(BorderStyle::custom(
-                context.theme.shell.field_border,
-                1.0,
-            ))
+            .color(RectangleColor::Custom(field.background))
+            .radius(field.radius)
+            .border(BorderStyle::custom(field.border, field.stroke_width))
             .paint(search, context);
         let query = self.query.borrow().clone();
+        let placeholder = query.is_empty();
+        let line_height = context.typography.label.line_height.min(search.size.height);
         Text::styled(
-            if query.is_empty() {
+            if placeholder {
                 String::from("Search applications")
             } else {
                 query
             },
             TextRole::Label,
         )
-        .color(if self.query.borrow().is_empty() {
-            context.theme.shell.tertiary_text.with_alpha(150)
+        .center_visible_ink(true)
+        .color(if placeholder {
+            field.placeholder_foreground
         } else {
-            context.theme.shell.primary_text
+            field.foreground
         })
         .paint(
             Rect::new(
-                search.origin.x + 14.0,
-                search.origin.y + 9.0,
-                search.size.width - 28.0,
-                22.0,
+                search.origin.x + field.horizontal_padding,
+                search.origin.y + (search.size.height - line_height) * 0.5 + field.text_offset_y,
+                (search.size.width - field.horizontal_padding * 2.0).max(0.0),
+                line_height,
             ),
             context,
         );
