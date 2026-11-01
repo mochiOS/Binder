@@ -222,6 +222,15 @@ impl SystemBar {
     pub(crate) fn pill(&self, bounds: Rect) -> Rect {
         self.resolved_frames(bounds).pill
     }
+    pub(crate) fn menu_click_region(&self, bounds: Rect) -> Rect {
+        let pill = self.pill(bounds);
+        Rect::new(
+            pill.origin.x,
+            bounds.origin.y,
+            bounds.origin.x + bounds.size.width - pill.origin.x,
+            pill.origin.y + pill.size.height - bounds.origin.y,
+        )
+    }
     pub(crate) fn set_presented_frame(&self, frame: Option<Rect>) {
         self.presented_frame.set(frame);
     }
@@ -407,13 +416,50 @@ impl SystemBar {
                     .any(|(i, f)| hit_frame(&self.entries[*i].item, *f).contains(p))
         });
         let mut background_event = event.clone();
-        let outside_surface = event.position().is_some_and(|p| !layout.pill.contains_rounded(layout.pill.size.height * 0.5, p));
+        let click = matches!(
+            event,
+            ViewEvent::PointerPressed {
+                button: viewkit::platform::PointerButton::Primary,
+                ..
+            } | ViewEvent::PointerReleased {
+                button: viewkit::platform::PointerButton::Primary,
+                ..
+            }
+        );
+        let inside_click_region = event
+            .position()
+            .is_some_and(|p| self.menu_click_region(bounds).contains(p));
+        let outside_surface = event.position().is_some_and(|p| {
+            if click {
+                !inside_click_region
+            } else {
+                !layout
+                    .pill
+                    .contains_rounded(layout.pill.size.height * 0.5, p)
+            }
+        });
         if reserved || outside_surface {
             let outside = Point::new(bounds.origin.x - 100.0, bounds.origin.y - 100.0);
             match &mut background_event {
                 ViewEvent::PointerMoved { position }
                 | ViewEvent::PointerPressed { position, .. }
                 | ViewEvent::PointerReleased { position, .. } => *position = outside,
+                _ => {}
+            }
+        }
+        if click && inside_click_region && !reserved {
+            // Preserve the original button's focus/paint bounds. Only the
+            // background receives this projection; individual icons keep priority.
+            let center = Point::new(
+                layout.pill.origin.x + layout.pill.size.width * 0.5,
+                layout.pill.origin.y + layout.pill.size.height * 0.5,
+            );
+            match &mut background_event {
+                ViewEvent::PointerPressed { position, .. } => {
+                    *position = center;
+                    context.request_keyboard_focus(layout.pill);
+                }
+                ViewEvent::PointerReleased { position, .. } => *position = center,
                 _ => {}
             }
         }
@@ -744,6 +790,37 @@ mod tests {
         );
         assert_eq!(count.get(), 3);
         click(&bar, bounds, layout.pill.origin, &mut context);
+        assert_eq!(count.get(), 4);
+    }
+    #[test]
+    fn menu_clicks_reach_top_and_right_display_edges_without_expanding_hover() {
+        let count = Rc::new(Cell::new(0));
+        let bar = bar(count.clone());
+        let bounds = Rect::new(20.0, 30.0, 1440.0, 54.0);
+        let pill = bar.pill(bounds);
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        for point in [
+            Point::new(1459.0, 30.0),
+            Point::new(1459.0, 57.0),
+            Point::new(pill.origin.x + 100.0, 30.0),
+        ] {
+            bar.handle_event(
+                bounds,
+                &ViewEvent::PointerMoved { position: point },
+                &mut context,
+            );
+            assert!(!bar.is_hovered());
+            click(&bar, bounds, point, &mut context);
+        }
+        assert_eq!(count.get(), 3);
+        for point in [
+            Point::new(pill.origin.x - 1.0, 30.0),
+            Point::new(1459.0, pill.origin.y + pill.size.height + 1.0),
+        ] {
+            click(&bar, bounds, point, &mut context);
+        }
         assert_eq!(count.get(), 3);
     }
     #[test]

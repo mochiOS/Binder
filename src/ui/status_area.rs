@@ -319,6 +319,14 @@ impl<C: View> View for StatusAreaLayer<C> {
                 context.with_presentation(transform, visible, |context| {
                     self.bar.paint_part(part, Self::strip(bounds), context)
                 });
+                if part == 1 && visible {
+                    if let Some(region) = transform
+                        .rect(self.bar.menu_click_region(Self::strip(bounds)))
+                        .intersection(bounds)
+                    {
+                        context.display_list.add_input_region(region);
+                    }
+                }
             } else {
                 state.presented.set(None);
                 if part == 1 {
@@ -407,6 +415,29 @@ impl<C: View> View for StatusAreaLayer<C> {
                             .handle_part(part, Self::strip(bounds), &logical, context)
                             .merge(EventResult::Consumed);
                     }
+                } else if part == 1
+                    && matches!(
+                        event,
+                        ViewEvent::PointerPressed {
+                            button: PointerButton::Primary,
+                            ..
+                        } | ViewEvent::PointerReleased {
+                            button: PointerButton::Primary,
+                            ..
+                        }
+                    )
+                    && event.position().is_some_and(|point| {
+                        self.bar
+                            .menu_click_region(Self::strip(bounds))
+                            .contains(point)
+                    })
+                {
+                    // A click at the reveal edge may arrive before the first
+                    // animation frame. Do not require waiting for that paint.
+                    return self
+                        .bar
+                        .handle_part(part, Self::strip(bounds), event, context)
+                        .merge(EventResult::Consumed);
                 }
             }
             // Focus broadcasts are not pointer exits. Cancelling here disarms
@@ -564,6 +595,29 @@ mod tests {
         layer.preferences.borrow_mut().set_always_show_status(true);
         layer.update_hover(bounds, Some(Point::new(1279.0, 0.0)));
         assert!(!layer.should_show(bounds, 1));
+    }
+    #[test]
+    fn clicking_the_reveal_edge_opens_the_menu_before_its_first_paint() {
+        let layer = layer();
+        let bounds = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        overlap(&layer);
+        let theme = Theme::current();
+        let mut measurer = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut measurer);
+        let position = Point::new(1279.0, 0.0);
+        for event in [
+            ViewEvent::PointerPressed {
+                position,
+                button: PointerButton::Primary,
+            },
+            ViewEvent::PointerReleased {
+                position,
+                button: PointerButton::Primary,
+            },
+        ] {
+            layer.handle_event(bounds, &event, &mut context);
+        }
+        assert!(layer.controls_open.get());
     }
     #[test]
     fn right_edge_reveal_and_open_menus_do_not_reveal_the_opposite_side() {
