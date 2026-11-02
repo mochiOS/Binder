@@ -380,6 +380,41 @@ impl<C: View> View for StatusAreaLayer<C> {
                 .handle_event(bounds, event, context)
                 .merge(EventResult::Consumed);
         }
+        // Application keyboard input belongs to the focused window. The shell
+        // can retain a control focus while a preview window owns keyboard input.
+        // Never let that stale focus activate a status button before the app.
+        let application_input = matches!(
+            event,
+            ViewEvent::KeyPressed { .. }
+                | ViewEvent::KeyReleased { .. }
+                | ViewEvent::TextInput { .. }
+                | ViewEvent::Backspace
+                | ViewEvent::Delete
+                | ViewEvent::ArrowLeft
+                | ViewEvent::ArrowRight
+                | ViewEvent::Home
+                | ViewEvent::End
+                | ViewEvent::SelectLeft
+                | ViewEvent::SelectRight
+                | ViewEvent::SelectHome
+                | ViewEvent::SelectEnd
+                | ViewEvent::SelectAll
+        );
+        if application_input
+            && self.windows.with(|desktop| {
+                desktop.focused.is_some_and(|id| {
+                    desktop
+                        .windows
+                        .iter()
+                        .any(|window| window.id == id && !window.minimized)
+                })
+            })
+        {
+            return self
+                .content
+                .handle_event(bounds, event, context)
+                .merge(EventResult::Consumed);
+        }
         if self.moving_window() {
             return self.content.handle_event(bounds, event, context);
         }
@@ -519,6 +554,87 @@ mod tests {
             desktop.open_test(ProcessId(1), "Test".into(), 1280, 800, true);
             desktop.windows[0].frame.origin = Point::new(0.0, 0.0);
         });
+    }
+    fn focus_logo(layer: &StatusAreaLayer<WindowProbe>, bounds: Rect, theme: &Theme) {
+        let mut text = TextMeasurer::new();
+        let mut list = DisplayList::new();
+        let mut nodes = vec![];
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, theme, &theme.typography, &mut text)
+                .with_accessibility_nodes(&mut nodes),
+        );
+        let logo = nodes
+            .iter()
+            .find(|node| node.label.as_deref() == Some("mochiOS menu"))
+            .expect("OS menu trigger is visible")
+            .bounds;
+        let mut c = EventContext::new(theme, &theme.typography, &mut text);
+        layer.bar.handle_part(
+            0,
+            StatusAreaLayer::<WindowProbe>::strip(bounds),
+            &ViewEvent::KeyboardFocusRequested { bounds: Some(logo) },
+            &mut c,
+        );
+    }
+    #[test]
+    fn typing_ls_then_enter_reaches_the_app_without_opening_a_stale_focused_os_menu() {
+        let layer = layer();
+        let bounds = Rect::new(0., 0., 1280., 800.);
+        let mut theme = Theme::LIGHT;
+        theme.motion = theme.motion.reduced();
+        layer.windows.update(|desktop| {
+            desktop.open_test(ProcessId(1), "Terminal".into(), 1280, 800, true);
+            desktop.windows[0].frame.origin = Point::new(100., 200.);
+        });
+        focus_logo(&layer, bounds, &theme);
+        let mut text = TextMeasurer::new();
+        let mut c = EventContext::new(&theme, &theme.typography, &mut text);
+        for e in [
+            ViewEvent::TextInput { text: "ls".into() },
+            ViewEvent::KeyPressed {
+                key: Key::Enter,
+                modifiers: KeyModifiers::default(),
+            },
+            ViewEvent::KeyReleased {
+                key: Key::Enter,
+                modifiers: KeyModifiers::default(),
+            },
+            ViewEvent::KeyPressed {
+                key: Key::Space,
+                modifiers: KeyModifiers::default(),
+            },
+        ] {
+            assert!(layer.handle_event(bounds, &e, &mut c).is_consumed());
+            assert!(!layer.menu_open.get());
+            assert!(!layer.controls_open.get());
+            assert!(!layer.notifications_open.get());
+        }
+        assert_eq!(
+            layer.content.0.get(),
+            4,
+            "input must be delivered exactly once to the application branch"
+        );
+    }
+    #[test]
+    fn desktop_keyboard_focus_can_still_open_the_os_menu_without_an_active_app() {
+        let layer = layer();
+        let bounds = Rect::new(0., 0., 1280., 800.);
+        let mut theme = Theme::LIGHT;
+        theme.motion = theme.motion.reduced();
+        focus_logo(&layer, bounds, &theme);
+        let mut text = TextMeasurer::new();
+        let mut c = EventContext::new(&theme, &theme.typography, &mut text);
+        layer.handle_event(
+            bounds,
+            &ViewEvent::KeyPressed {
+                key: Key::Enter,
+                modifiers: KeyModifiers::default(),
+            },
+            &mut c,
+        );
+        assert!(layer.menu_open.get());
+        assert_eq!(layer.content.0.get(), 0);
     }
     #[test]
     fn focus_broadcast_between_press_and_release_keeps_both_menu_buttons_armed() {
