@@ -11,7 +11,7 @@ pub(crate) const DOCK_BOTTOM: f32 = 10.0;
 pub(crate) const DOCK_PADDING: f32 = 12.5;
 pub(crate) const DOCK_ICON: f32 = 64.0;
 pub(crate) const DOCK_GAP: f32 = 10.0;
-pub(crate) const DOCK_RADIUS: f32 = 26.5;
+pub(crate) const DOCK_RADIUS: f32 = viewkit::theme::Theme::LIGHT.shell.desktop_corner_radius;
 pub(crate) const DOCK_SEPARATOR_SPACE: f32 = 11.0;
 pub(crate) const DOCK_SEPARATOR_HEIGHT: f32 = 48.0;
 

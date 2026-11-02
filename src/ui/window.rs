@@ -12,7 +12,7 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
-pub(crate) const WINDOW_CORNER_RADIUS: f32 = 14.0;
+pub(crate) const WINDOW_CORNER_RADIUS: f32 = Theme::LIGHT.shell.desktop_corner_radius;
 struct WindowView {
     decoration: window_decoration::WindowDecoration,
     content: Box<dyn View + 'static>,
@@ -90,10 +90,7 @@ impl View for WindowView {
             Rectangle::new()
                 .color(RectangleColor::Custom(Color::TRANSPARENT))
                 .radius(CornerRadius::Custom(self.radius))
-                .border(BorderStyle::custom(
-                    context.theme.shell.window_border,
-                    1.0,
-                ))
+                .border(BorderStyle::custom(context.theme.shell.window_border, 1.0))
                 .paint(bounds, context);
         }
     }
@@ -242,6 +239,33 @@ mod tests {
                 &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut measurer),
             );
             assert!(list.commands().iter().any(|command| matches!(command, DrawCommand::PushRoundedClip { rect, radius: actual } if *rect == window.frame && *actual == radius)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod dock_corner_tests {
+    use super::*;
+    #[test]
+    fn window_and_dock_share_the_exact_fractional_continuous_corner() {
+        assert_eq!(
+            WINDOW_CORNER_RADIUS,
+            super::super::desktop_metrics::DOCK_RADIUS
+        );
+        assert_eq!(WINDOW_CORNER_RADIUS, 26.5);
+        let rect = Rect::new(0., 0., 200., 100.);
+        let shared = viewkit::continuous_corner::shape(
+            rect,
+            [super::super::desktop_metrics::DOCK_RADIUS; 4],
+        );
+        for y in 0..28 {
+            for x in 0..28 {
+                let p = Point::new(x as f32 + 0.5, y as f32 + 0.5);
+                assert_eq!(
+                    rect.contains_rounded(WINDOW_CORNER_RADIUS, p),
+                    shared.contains((p.x, p.y))
+                );
+            }
         }
     }
 }
