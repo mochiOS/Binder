@@ -16,6 +16,7 @@ develop = []
 mochios = []
 
 [dependencies]
+serde_json = "1"
 appcore = { package = "mochios-appcore", path = "../../tools/devkit/crates/appcore", default-features = false }
 viewkit = "2.0.0"
 binder_client = { git = "https://github.com/mochiOS/Binder", package = "binder_client" }

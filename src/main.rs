@@ -5,6 +5,7 @@ mod dock_preferences;
 mod ipc;
 mod platform;
 mod session;
+mod startup;
 mod ui;
 mod window;
 

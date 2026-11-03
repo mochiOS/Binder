@@ -124,6 +124,7 @@ dependencies = [
  "mochios-linux-gui-protocol",
  "mochios-posix-client",
  "mochios-posix-protocol",
+ "serde_json",
  "viewkit",
 ]
 

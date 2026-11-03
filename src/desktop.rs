@@ -79,6 +79,10 @@ impl App for BinderApp {
         let platform = platform::current(context_menu.clone());
         let system_bar = platform.borrow().system_bar_state().unwrap_or_default();
         let apps = platform.borrow().get_apps();
+        let mut startup = crate::ui::app_library::PendingAppActivation::default();
+        if let Some(app) = crate::startup::application(&apps) {
+            startup.queue(app);
+        }
         Self {
             #[cfg(target_os = "mochios")]
             ready_target: mochi_user_platform::service_ready::take_bootstrap_target(),
@@ -116,9 +120,7 @@ impl App for BinderApp {
                 crate::ui::app_switcher::AppSwitcherState::default(),
             )),
             spotlight: Rc::new(RefCell::new(crate::ui::spotlight::SpotlightState::default())),
-            pending_app_activation: Rc::new(RefCell::new(
-                crate::ui::app_library::PendingAppActivation::default(),
-            )),
+            pending_app_activation: Rc::new(RefCell::new(startup)),
             fast_poll_until: Rc::new(Cell::new(None)),
             cursor_pointer: Rc::new(Cell::new(None)),
             cursor_initialized: Rc::new(Cell::new(false)),
