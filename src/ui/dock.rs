@@ -862,6 +862,8 @@ where
             return;
         };
 
+        context.display_list.add_input_region(dock);
+
         let material = DockMaterial::for_theme(context.theme);
         Rectangle::new()
             .color(RectangleColor::Custom(

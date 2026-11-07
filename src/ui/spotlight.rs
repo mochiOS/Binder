@@ -299,6 +299,7 @@ impl<C: View> View for SpotlightLayer<C> {
         if !self.state.borrow().open {
             return;
         }
+        context.display_list.add_input_region(bounds);
         let theme = context.theme;
         let results = self.results();
         let panel = Self::panel(bounds, results.len(), theme);
