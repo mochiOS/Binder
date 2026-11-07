@@ -107,7 +107,8 @@ impl<C: View> SpotlightLayer<C> {
         }
     }
 
-    fn open(&self) {
+    fn open(&self, context: &mut EventContext<'_>) {
+        context.set_keyboard_capture(true);
         self.menu_open.set(false);
         self.control_center_open.set(false);
         self.notification_center_open.set(false);
@@ -126,8 +127,12 @@ impl<C: View> SpotlightLayer<C> {
         self.pressed.set(None);
     }
 
-    fn close(&self) {
+    fn close(&self, context: &mut EventContext<'_>) {
         let mut state = self.state.borrow_mut();
+        if !state.open {
+            return;
+        }
+        context.set_keyboard_capture(false);
         state.open = false;
         state.search.set_value("");
         state.search.set_focused(false);
@@ -256,7 +261,7 @@ impl<C: View> SpotlightLayer<C> {
         match result.action {
             SearchAction::Application(app) => {
                 self.pending_activation.borrow_mut().queue(app);
-                self.close();
+                self.close(context);
             }
             SearchAction::Settings => {
                 if let Some(app) = self
@@ -267,17 +272,17 @@ impl<C: View> SpotlightLayer<C> {
                 {
                     self.pending_activation.borrow_mut().queue(app);
                 }
-                self.close();
+                self.close(context);
             }
             SearchAction::File(path) => {
                 open_file(&path);
-                self.close();
+                self.close(context);
             }
             SearchAction::System(action) => {
                 if let Err(error) = self.platform.borrow().perform_system_action(action) {
                     eprintln!("Spotlight system action failed: {error:?}");
                 }
-                self.close();
+                self.close(context);
             }
             SearchAction::Calculation(value) => {
                 let mut state = self.state.borrow_mut();
@@ -381,6 +386,16 @@ impl<C: View> View for SpotlightLayer<C> {
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
+        if matches!(
+            event,
+            ViewEvent::FocusChanged { focused: false } | ViewEvent::KeyboardCaptureDenied
+        )
+            && self.state.borrow().open
+        {
+            self.close(context);
+            context.request_redraw();
+            return self.content.handle_event(bounds, event, context);
+        }
         if let ViewEvent::KeyPressed {
             key: Key::Space,
             modifiers,
@@ -388,9 +403,9 @@ impl<C: View> View for SpotlightLayer<C> {
             && modifiers.alt()
         {
             if self.state.borrow().open {
-                self.close();
+                self.close(context);
             } else {
-                self.open();
+                self.open(context);
             }
             context.request_redraw();
             return EventResult::Consumed;
@@ -407,7 +422,7 @@ impl<C: View> View for SpotlightLayer<C> {
         match event {
             ViewEvent::KeyPressed {
                 key: Key::Escape, ..
-            } => self.close(),
+            } => self.close(context),
             ViewEvent::KeyPressed {
                 key: Key::ArrowUp, ..
             } => {
@@ -476,7 +491,7 @@ impl<C: View> View for SpotlightLayer<C> {
                     ),
                     *position,
                 ) {
-                    self.close();
+                    self.close(context);
                 } else if search.contains(*position) {
                     forward_to_search = true;
                 } else {
@@ -842,6 +857,79 @@ impl<'a> Calculator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::{PlatformError, SystemBarState};
+    use viewkit::platform::KeyModifiers;
+    use viewkit::typography::TextMeasurer;
+
+    struct Platform;
+    impl DesktopPlatform for Platform {
+        fn system_bar_state(&self) -> Result<SystemBarState, PlatformError> {
+            Ok(SystemBarState::default())
+        }
+        fn refresh(&mut self) -> Result<bool, PlatformError> {
+            Ok(false)
+        }
+        fn open_system_settings(&self) -> Result<(), PlatformError> {
+            Ok(())
+        }
+        fn perform_system_action(&self, _: SystemAction) -> Result<(), PlatformError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn launcher_search_closes_and_clears_on_escape_focus_loss_and_capture_denial() {
+        let state = Rc::new(RefCell::new(SpotlightState {
+            files_indexed: true,
+            ..SpotlightState::default()
+        }));
+        let layer = SpotlightLayer::new(
+            Rectangle::new(),
+            state.clone(),
+            Rc::new(RefCell::new(Platform)),
+            State::new(Vec::new()),
+            Rc::new(RefCell::new(
+                super::super::app_library::PendingAppActivation::default(),
+            )),
+            State::new(false),
+            State::new(false),
+            State::new(false),
+            State::new(false),
+        );
+        let theme = Theme::LIGHT;
+        let mut text = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut text);
+        let bounds = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        for close in [
+            ViewEvent::KeyPressed {
+                key: Key::Escape,
+                modifiers: KeyModifiers::default(),
+            },
+            ViewEvent::FocusChanged { focused: false },
+            ViewEvent::KeyboardCaptureDenied,
+        ] {
+            layer.handle_event(
+                bounds,
+                &ViewEvent::KeyPressed {
+                    key: Key::Space,
+                    modifiers: KeyModifiers::from_bits(KeyModifiers::ALT),
+                },
+                &mut context,
+            );
+            assert!(state.borrow().open);
+            layer.handle_event(
+                bounds,
+                &ViewEvent::TextInput {
+                    text: "Edit".into(),
+                },
+                &mut context,
+            );
+            assert_eq!(state.borrow().search.value(), "Edit");
+            layer.handle_event(bounds, &close, &mut context);
+            assert!(!state.borrow().open);
+            assert!(state.borrow().search.value().is_empty());
+        }
+    }
 
     #[test]
     fn calculator_respects_precedence_and_parentheses() {
