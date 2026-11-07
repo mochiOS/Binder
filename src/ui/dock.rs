@@ -840,6 +840,14 @@ where
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.content.paint(bounds, context);
 
+        let reveal_height = DOCK_REVEAL_EDGE.min(bounds.size.height);
+        context.display_list.add_input_region(Rect::new(
+            bounds.origin.x,
+            bounds.origin.y + bounds.size.height - reveal_height,
+            bounds.size.width,
+            reveal_height,
+        ));
+
         self.update_edge_hover(bounds, self.cursor_position.get());
         let now = Instant::now();
         let should_show = self.should_show(bounds);
@@ -862,7 +870,9 @@ where
             return;
         };
 
-        context.display_list.add_input_region(dock);
+        if let Some(region) = Self::dock_interaction_rect(dock).intersection(bounds) {
+            context.display_list.add_input_region(region);
+        }
 
         let material = DockMaterial::for_theme(context.theme);
         Rectangle::new()
