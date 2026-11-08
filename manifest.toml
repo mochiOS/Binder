@@ -37,5 +37,6 @@ requires = [
     "window.create",
     "window.overlay",
     "control-center.read",
+    "notification.manage",
     "file-association.read",
 ]
