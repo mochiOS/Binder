@@ -86,11 +86,18 @@ impl View for WindowView {
 
         context.display_list.push(DrawCommand::PopClip);
 
-        if self.focused {
+        {
             Rectangle::new()
                 .color(RectangleColor::Custom(Color::TRANSPARENT))
                 .radius(CornerRadius::Custom(self.radius))
-                .border(BorderStyle::custom(context.theme.shell.window_border, 1.0))
+                .border(BorderStyle::custom(
+                    if self.focused {
+                        context.theme.shell.window_border
+                    } else {
+                        context.theme.shell.inactive_window_border
+                    },
+                    1.0,
+                ))
                 .paint(bounds, context);
         }
     }
@@ -146,7 +153,8 @@ pub(crate) fn view(
         decoration: window_decoration::WindowDecoration::new(
             window.title.clone(),
             window.interaction,
-        ),
+        )
+        .active(focused),
 
         content,
 

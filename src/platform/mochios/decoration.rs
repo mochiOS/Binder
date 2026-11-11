@@ -32,7 +32,8 @@ const DECOR_EVENT_POINTER_MOTION: u32 = 0x544f_4d50;
 const DECOR_EVENT_POINTER_LEAVE: u32 = 0x5641_454c;
 const PIXEL_FORMAT_XRGB8888: u32 = 1;
 const TITLE_BAR_HEIGHT: u32 = VIEW_TITLE_BAR_HEIGHT as u32;
-const CONTROL_WIDTH: u32 = 44;
+const EVENT_FOCUS_GAINED: u32 = 8;
+const EVENT_FOCUS_LOST: u32 = 9;
 const MAX_WINDOW_DIMENSION: u32 = 4096;
 const POINTER_FLAG_PRESS: u32 = 1;
 const POINTER_FLAG_RELEASE: u32 = 2;
@@ -54,6 +55,7 @@ struct Decoration {
     buffer: TitleBarBuffer,
     title: String,
     interaction: WindowInteraction,
+    active: bool,
 }
 
 pub(super) struct DecorationManager {
@@ -151,6 +153,7 @@ impl DecorationManager {
                                 width,
                                 title.clone(),
                                 decoration.interaction,
+                                decoration.active,
                             )?;
                             token_request(self.compositor, OP_DAMAGE, decoration.surface)?;
                             token_request(self.compositor, OP_COMMIT, decoration.surface)?;
@@ -170,6 +173,19 @@ impl DecorationManager {
                     }
                 }
                 Ok(true)
+            }
+            Some(kind @ (EVENT_FOCUS_GAINED | EVENT_FOCUS_LOST)) => {
+                let surface = read_u64(event, 16).ok_or(DecorationError(5))?;
+                if let Some(decoration) = self.decorations.iter_mut().find(|d| d.surface == surface)
+                {
+                    let active = kind == EVENT_FOCUS_GAINED;
+                    if decoration.active != active {
+                        decoration.active = active;
+                        redraw_title_bar(self.compositor, decoration)?;
+                    }
+                    return Ok(true);
+                }
+                Ok(false)
             }
             Some(DECOR_EVENT_POINTER_BUTTON) => {
                 let window = read_u64(event, 16).ok_or(DecorationError(5))?;
@@ -265,7 +281,14 @@ fn create_decoration(
     let reply = ipc_call(compositor, &create)?;
     let surface = read_u64(&reply, 4).ok_or(DecorationError(5))?;
     let interaction = WindowInteraction::default();
-    let buffer = attach_title_bar_buffer(compositor, surface, width, title.clone(), interaction)?;
+    let buffer = attach_title_bar_buffer(
+        compositor,
+        surface,
+        width,
+        title.clone(),
+        interaction,
+        false,
+    )?;
     token_request(compositor, OP_DAMAGE, surface)?;
 
     let mut attach = [0u8; 36];
@@ -282,6 +305,7 @@ fn create_decoration(
         buffer,
         title,
         interaction,
+        active: false,
     })
 }
 
@@ -291,11 +315,12 @@ fn attach_title_bar_buffer(
     width: u32,
     title: String,
     interaction: WindowInteraction,
+    active: bool,
 ) -> Result<TitleBarBuffer, DecorationError> {
     let pixel_count = (width as usize)
         .checked_mul(TITLE_BAR_HEIGHT as usize)
         .ok_or(DecorationError(22))?;
-    let rendered = render_title_bar(title, width, interaction)?;
+    let rendered = render_title_bar(title, width, interaction, active)?;
     if rendered.len() != pixel_count {
         return Err(DecorationError(5));
     }
@@ -318,8 +343,9 @@ fn render_title_bar(
     title: String,
     width: u32,
     interaction: WindowInteraction,
+    active: bool,
 ) -> Result<Vec<u32>, DecorationError> {
-    let decoration = WindowDecoration::new(title, interaction);
+    let decoration = WindowDecoration::new(title, interaction).active(active);
     let mut display_list = DisplayList::new();
     let mut text_measurer = TextMeasurer::new();
     let mut context = PaintContext::new(
@@ -341,6 +367,7 @@ fn redraw_title_bar(compositor: u64, decoration: &mut Decoration) -> Result<(), 
         decoration.title.clone(),
         decoration.width,
         decoration.interaction,
+        decoration.active,
     )?;
     let pixel_count = (decoration.width as usize)
         .checked_mul(TITLE_BAR_HEIGHT as usize)
@@ -354,19 +381,10 @@ fn redraw_title_bar(compositor: u64, decoration: &mut Decoration) -> Result<(), 
 }
 
 fn control_at(decoration: &Decoration, x: i32, y: i32) -> Option<WindowControl> {
-    if x < 0 || y < 0 || y >= TITLE_BAR_HEIGHT as i32 || x >= decoration.width as i32 {
-        return None;
-    }
-    let x = x as u32;
-    if x >= decoration.width.saturating_sub(CONTROL_WIDTH) {
-        Some(WindowControl::Close)
-    } else if x >= decoration.width.saturating_sub(CONTROL_WIDTH * 2) {
-        Some(WindowControl::Maximize)
-    } else if x >= decoration.width.saturating_sub(CONTROL_WIDTH * 3) {
-        Some(WindowControl::Minimize)
-    } else {
-        None
-    }
+    crate::ui::window_decoration::control_at(
+        Rect::new(0.0, 0.0, decoration.width as f32, TITLE_BAR_HEIGHT as f32),
+        Point::new(x as f32, y as f32),
+    )
 }
 
 fn handle_decoration_motion(

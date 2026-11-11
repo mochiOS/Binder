@@ -7,13 +7,17 @@ use viewkit::{
 };
 
 pub(crate) const TITLE_BAR_HEIGHT: f32 = 40.0;
-pub(crate) const CONTROL_WIDTH: f32 = 44.0;
+pub(crate) const CONTROL_WIDTH: f32 = 34.0;
+pub(crate) const CONTROL_GAP: f32 = 2.0;
+pub(crate) const CONTROL_INSET: f32 = 6.0;
 pub(crate) const CONTROL_COUNT: f32 = 3.0;
-pub(crate) const CONTROLS_WIDTH: f32 = CONTROL_WIDTH * CONTROL_COUNT;
+pub(crate) const CONTROLS_WIDTH: f32 =
+    CONTROL_WIDTH * CONTROL_COUNT + CONTROL_GAP * (CONTROL_COUNT - 1.0) + CONTROL_INSET;
 
 pub(crate) struct WindowDecoration {
     title: String,
     interaction: WindowInteraction,
+    active: bool,
 }
 
 impl WindowDecoration {
@@ -21,15 +25,22 @@ impl WindowDecoration {
         Self {
             title: title.into(),
             interaction,
+            active: true,
         }
+    }
+
+    pub(crate) fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
     }
 
     fn control_bounds(bounds: Rect, index: usize) -> Rect {
         Rect::new(
-            bounds.origin.x + bounds.size.width - CONTROLS_WIDTH + CONTROL_WIDTH * index as f32,
-            bounds.origin.y,
+            bounds.origin.x + bounds.size.width - CONTROLS_WIDTH
+                + (CONTROL_WIDTH + CONTROL_GAP) * index as f32,
+            bounds.origin.y + (TITLE_BAR_HEIGHT - CONTROL_WIDTH) / 2.0,
             CONTROL_WIDTH,
-            TITLE_BAR_HEIGHT,
+            CONTROL_WIDTH,
         )
     }
 
@@ -38,30 +49,28 @@ impl WindowDecoration {
         hovered: bool,
         pressed: bool,
         close: bool,
+        active: bool,
         icon: ControlIcon,
         context: &mut PaintContext<'_>,
     ) {
-        let background = if close && pressed {
-            context.theme.shell.close_pressed
-        } else if close && hovered {
-            context.theme.shell.close_hover
-        } else if pressed {
+        let background = if pressed && hovered {
             context.theme.shell.title_bar_border
         } else if hovered {
             context.theme.shell.control_hover
         } else {
             Color::TRANSPARENT
         };
-
-        let foreground = if close && (hovered || pressed) {
-            context.theme.shell.inverse_text
-        } else {
+        let foreground = if close && hovered {
+            context.theme.shell.alert
+        } else if active || hovered {
             context.theme.shell.control
+        } else {
+            context.theme.shell.inactive_control
         };
 
         Rectangle::new()
             .color(RectangleColor::Custom(background))
-            .radius(CornerRadius::None)
+            .radius(CornerRadius::Small)
             .paint(bounds, context);
 
         let icon_bounds = Rect::new(
@@ -102,7 +111,11 @@ impl View for WindowDecoration {
         let title = Text::styled(self.title.clone(), TextRole::Label)
             .weight(context.typography.label.weight.0)
             .center_visible_ink(true)
-            .color(context.theme.shell.primary_text);
+            .color(if self.active {
+                context.theme.shell.primary_text
+            } else {
+                context.theme.shell.inactive_title
+            });
         let measured = title.measure(
             Constraints::loose(Size::new(f32::INFINITY, TITLE_BAR_HEIGHT)),
             &mut MeasureContext {
@@ -131,6 +144,7 @@ impl View for WindowDecoration {
             minimize_hovered,
             minimize_hovered && self.interaction.pressed == Some(WindowControl::Minimize),
             false,
+            self.active,
             ControlIcon::Minimize,
             context,
         );
@@ -140,6 +154,7 @@ impl View for WindowDecoration {
             maximize_hovered,
             maximize_hovered && self.interaction.pressed == Some(WindowControl::Maximize),
             false,
+            self.active,
             ControlIcon::Maximize,
             context,
         );
@@ -149,6 +164,7 @@ impl View for WindowDecoration {
             close_hovered,
             close_hovered && self.interaction.pressed == Some(WindowControl::Close),
             true,
+            self.active,
             ControlIcon::Close,
             context,
         );
@@ -246,6 +262,16 @@ pub(crate) fn close_bounds(frame: Rect) -> Rect {
     WindowDecoration::control_bounds(frame, 2)
 }
 
+pub(crate) fn control_at(frame: Rect, point: Point) -> Option<WindowControl> {
+    [
+        (minimize_bounds(frame), WindowControl::Minimize),
+        (maximize_bounds(frame), WindowControl::Maximize),
+        (close_bounds(frame), WindowControl::Close),
+    ]
+    .into_iter()
+    .find_map(|(bounds, control)| bounds.contains(point).then_some(control))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +279,62 @@ mod tests {
         draw_command::{DisplayList, DrawCommand},
         typography::TextMeasurer,
     };
+    #[test]
+    fn controls_share_hit_and_paint_geometry_with_small_fixed_icons() {
+        for width in [240., 800., 1920.] {
+            let frame = Rect::new(10., 20., width, TITLE_BAR_HEIGHT);
+            let buttons = [
+                minimize_bounds(frame),
+                maximize_bounds(frame),
+                close_bounds(frame),
+            ];
+            for (index, bounds) in buttons.iter().enumerate() {
+                assert_eq!(bounds.size, Size::new(34., 34.));
+                assert_eq!(bounds.origin.y + bounds.size.height / 2., 40.);
+                assert!(
+                    control_at(
+                        frame,
+                        Point::new(bounds.origin.x + 1., bounds.origin.y + 1.)
+                    )
+                    .is_some()
+                );
+                if index > 0 {
+                    assert_eq!(
+                        bounds.origin.x - (buttons[index - 1].origin.x + 34.),
+                        CONTROL_GAP
+                    );
+                }
+            }
+            assert_eq!(
+                frame.origin.x + width - (buttons[2].origin.x + 34.),
+                CONTROL_INSET
+            );
+            assert_eq!(
+                control_at(frame, Point::new(buttons[0].origin.x + 35., 40.)),
+                None
+            );
+            assert_eq!(control_at(frame, Point::new(11., 21.)), None);
+        }
+    }
+
+    #[test]
+    fn inactive_titles_are_quieter_and_resting_controls_have_no_background() {
+        for theme in [Theme::LIGHT, Theme::DARK] {
+            let mut list = DisplayList::new();
+            let mut text = TextMeasurer::new();
+            WindowDecoration::new("Inactive", WindowInteraction::default())
+                .active(false)
+                .paint(
+                    Rect::new(0., 0., 400., TITLE_BAR_HEIGHT),
+                    &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut text),
+                );
+            assert!(list.commands().iter().any(|cmd| matches!(cmd,
+                DrawCommand::DrawText { command } if command.text == "Inactive" && command.color == theme.shell.inactive_title)));
+            assert!(!list.commands().iter().any(|cmd| matches!(cmd,
+                DrawCommand::FillRoundedRect { color, .. } if *color != Color::TRANSPARENT)));
+        }
+    }
+
     #[test]
     fn narrow_utility_titles_remain_visible_and_never_overlap_controls() {
         for width in [240., 280., 360., 800.] {
