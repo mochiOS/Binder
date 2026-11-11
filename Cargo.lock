@@ -3489,11 +3489,7 @@ dependencies = [
 ]
 
 [[patch.unused]]
-name = "mnu"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-mdriver-protocol"
+name = "bootui"
 version = "0.1.0"
 
 [[patch.unused]]
@@ -3521,5 +3517,5 @@ name = "mochios-virtio-gpu-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "bootui"
+name = "mnu"
 version = "0.1.0"

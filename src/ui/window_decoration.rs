@@ -48,7 +48,6 @@ impl WindowDecoration {
         bounds: Rect,
         hovered: bool,
         pressed: bool,
-        close: bool,
         active: bool,
         icon: ControlIcon,
         context: &mut PaintContext<'_>,
@@ -60,9 +59,7 @@ impl WindowDecoration {
         } else {
             Color::TRANSPARENT
         };
-        let foreground = if close && hovered {
-            context.theme.shell.alert
-        } else if active || hovered {
+        let foreground = if active || hovered {
             context.theme.shell.control
         } else {
             context.theme.shell.inactive_control
@@ -70,7 +67,7 @@ impl WindowDecoration {
 
         Rectangle::new()
             .color(RectangleColor::Custom(background))
-            .radius(CornerRadius::Small)
+            .radius(CornerRadius::Full)
             .paint(bounds, context);
 
         let icon_bounds = Rect::new(
@@ -143,7 +140,6 @@ impl View for WindowDecoration {
             Self::control_bounds(bounds, 0),
             minimize_hovered,
             minimize_hovered && self.interaction.pressed == Some(WindowControl::Minimize),
-            false,
             self.active,
             ControlIcon::Minimize,
             context,
@@ -153,7 +149,6 @@ impl View for WindowDecoration {
             Self::control_bounds(bounds, 1),
             maximize_hovered,
             maximize_hovered && self.interaction.pressed == Some(WindowControl::Maximize),
-            false,
             self.active,
             ControlIcon::Maximize,
             context,
@@ -163,7 +158,6 @@ impl View for WindowDecoration {
             Self::control_bounds(bounds, 2),
             close_hovered,
             close_hovered && self.interaction.pressed == Some(WindowControl::Close),
-            true,
             self.active,
             ControlIcon::Close,
             context,
