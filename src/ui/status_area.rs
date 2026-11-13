@@ -700,7 +700,13 @@ mod tests {
         for point in [
             Point::new(1279.0, 0.0),
             Point::new(1279.0, 20.0),
-            Point::new(1160.0, 0.0),
+            Point::new(
+                bounds.origin.x + bounds.size.width
+                    - super::super::window_decoration::CONTROLS_WIDTH
+                    - OVERLAP_MARGIN
+                    + 1.0,
+                0.0,
+            ),
         ] {
             layer.update_hover(bounds, Some(point));
             assert!(!layer.should_show(bounds, 1));

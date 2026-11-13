@@ -1123,11 +1123,21 @@ mod tests {
         assert_eq!(layer.windows.get().windows[0].frame, bounds);
         // The complete button cells meet the display edges; aiming at the
         // symbol itself is unnecessary, including the very top-right pixel.
+        let start = bounds.origin.x + bounds.size.width - window_decoration::CONTROLS_WIDTH;
         for (point, control) in [
             (Point::new(1279.0, 0.0), WindowControl::Close),
             (Point::new(1279.0, 20.0), WindowControl::Close),
-            (Point::new(1215.0, 0.0), WindowControl::Maximize),
-            (Point::new(1170.0, 0.0), WindowControl::Minimize),
+            (
+                Point::new(
+                    start + window_decoration::CONTROL_WIDTH * 1.5 + window_decoration::CONTROL_GAP,
+                    0.0,
+                ),
+                WindowControl::Maximize,
+            ),
+            (
+                Point::new(start + window_decoration::CONTROL_WIDTH * 0.5, 0.0),
+                WindowControl::Minimize,
+            ),
         ] {
             assert_eq!(
                 WindowLayer::<StatusProbe>::control_at(bounds, point),
