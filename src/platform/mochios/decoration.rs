@@ -5,6 +5,7 @@ use mochi_user_syscall as syscall;
 #[path = "decoration_buffer.rs"]
 mod buffer;
 use buffer::TitleBarBuffer;
+use viewkit::decoration::metrics;
 use viewkit::draw_command::DisplayList;
 use viewkit::prelude::*;
 use viewkit::typography::{TextMeasurer, Typography};
@@ -281,12 +282,21 @@ fn parse_window_event(event: &[u8]) -> Option<(u64, u32, String, DecorationStyle
     } else {
         read_u32(event, 12)?
     };
+    // Older metadata did not carry a scale; its protected strip was 112 logical pixels.
+    // New metadata carries the scale explicitly, preserving fractional-DPI rounding.
+    let scale = match read_u32(event, 132) {
+        Some(scale) if (metrics::MIN_SCALE..=metrics::MAX_SCALE).contains(&scale) => {
+            scale as f32 / metrics::SCALE_UNIT as f32
+        }
+        Some(_) => return None,
+        None => (read_u32(event, 120).unwrap_or(112) as f32 / 112.0).max(0.25),
+    };
     let style = DecorationStyle {
         integrated,
         height: read_u32(event, 116).unwrap_or(TITLE_BAR_HEIGHT),
         background: read_u32(event, 124).unwrap_or(0),
         separator: read_u32(event, 128).unwrap_or(1) != 0,
-        scale: (read_u32(event, 120).unwrap_or(112) as f32 / 112.0).max(0.25),
+        scale,
     };
     let height = read_u32(event, 16)?;
     let title_length = read_u32(event, 44)? as usize;

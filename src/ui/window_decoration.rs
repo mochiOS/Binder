@@ -6,13 +6,13 @@ use viewkit::{
     view::{Constraints, MeasureContext, PaintContext},
 };
 
-pub(crate) const TITLE_BAR_HEIGHT: f32 = 40.0;
-pub(crate) const CONTROL_WIDTH: f32 = 34.0;
-pub(crate) const CONTROL_GAP: f32 = 2.0;
-pub(crate) const CONTROL_INSET: f32 = 6.0;
-pub(crate) const CONTROL_COUNT: f32 = 3.0;
-pub(crate) const CONTROLS_WIDTH: f32 =
-    CONTROL_WIDTH * CONTROL_COUNT + CONTROL_GAP * (CONTROL_COUNT - 1.0) + CONTROL_INSET;
+use viewkit::decoration::metrics;
+
+pub(crate) const TITLE_BAR_HEIGHT: f32 = metrics::TITLE_BAR_HEIGHT as f32;
+pub(crate) const CONTROL_WIDTH: f32 = metrics::CONTROL_SIZE as f32;
+pub(crate) const CONTROL_GAP: f32 = metrics::CONTROL_GAP as f32;
+pub(crate) const CONTROL_INSET: f32 = metrics::CONTROL_INSET as f32;
+pub(crate) const CONTROLS_WIDTH: f32 = metrics::CONTROLS_WIDTH as f32;
 
 pub(crate) struct WindowDecoration {
     title: String,
@@ -87,11 +87,12 @@ impl WindowDecoration {
             .radius(CornerRadius::Full)
             .paint(bounds, context);
 
+        let icon_size = metrics::CONTROL_ICON_SIZE as f32;
         let icon_bounds = Rect::new(
-            bounds.origin.x + (bounds.size.width - 14.0) / 2.0,
-            bounds.origin.y + (bounds.size.height - 14.0) / 2.0,
-            14.0,
-            14.0,
+            bounds.origin.x + (bounds.size.width - icon_size) / 2.0,
+            bounds.origin.y + (bounds.size.height - icon_size) / 2.0,
+            icon_size,
+            icon_size,
         );
 
         control_icon(icon, foreground).paint(icon_bounds, context);
@@ -323,8 +324,8 @@ mod tests {
                 close_bounds(frame),
             ];
             for (index, bounds) in buttons.iter().enumerate() {
-                assert_eq!(bounds.size, Size::new(34., 34.));
-                assert_eq!(bounds.origin.y + bounds.size.height / 2., 40.);
+                assert_eq!(bounds.size, Size::new(28., 28.));
+                assert_eq!(bounds.origin.y + bounds.size.height / 2., 36.);
                 assert!(
                     control_at(
                         frame,
@@ -334,17 +335,17 @@ mod tests {
                 );
                 if index > 0 {
                     assert_eq!(
-                        bounds.origin.x - (buttons[index - 1].origin.x + 34.),
+                        bounds.origin.x - (buttons[index - 1].origin.x + 28.),
                         CONTROL_GAP
                     );
                 }
             }
             assert_eq!(
-                frame.origin.x + width - (buttons[2].origin.x + 34.),
+                frame.origin.x + width - (buttons[2].origin.x + 28.),
                 CONTROL_INSET
             );
             assert_eq!(
-                control_at(frame, Point::new(buttons[0].origin.x + 35., 40.)),
+                control_at(frame, Point::new(buttons[0].origin.x + 29., 36.)),
                 None
             );
             assert_eq!(control_at(frame, Point::new(11., 21.)), None);

@@ -90,8 +90,8 @@ impl View for WindowView {
         self.content.paint(self.content_bounds(bounds), context);
         let mut bar = self.title_bar_bounds(bounds);
         if self.integrated {
-            bar.origin.x += (bar.size.width - 112.0).max(0.0);
-            bar.size.width = bar.size.width.min(112.0);
+            bar.origin.x += (bar.size.width - window_decoration::CONTROLS_WIDTH).max(0.0);
+            bar.size.width = bar.size.width.min(window_decoration::CONTROLS_WIDTH);
         }
         self.decoration.paint(bar, context);
 

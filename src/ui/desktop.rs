@@ -17,6 +17,7 @@ use crate::platform::{AppInfo, DesktopPlatform, ProcessId, RemoteWindowId, Syste
 use crate::window::{DesktopWindows, WindowDrag, WindowId};
 
 use crate::apps;
+use viewkit::decoration::metrics as decoration_metrics;
 use viewkit::{
     event::{EventContext, EventResult, ViewEvent},
     prelude::*,
@@ -606,13 +607,24 @@ impl View for PlatformRefreshView {
                                     config.mode == viewkit::decoration::DecorationMode::Integrated;
                                 if was != integrated {
                                     window.frame.size.height = (window.frame.size.height
-                                        + if integrated { -40.0 } else { 40.0 })
+                                        + if integrated {
+                                            -(decoration_metrics::TITLE_BAR_HEIGHT as f32)
+                                        } else {
+                                            decoration_metrics::TITLE_BAR_HEIGHT as f32
+                                        })
                                     .max(1.0);
                                 }
                                 if integrated {
-                                    window.frame.size.width = window.frame.size.width.max(112.0);
-                                    window.frame.size.height =
-                                        window.frame.size.height.max(config.height.max(40.0));
+                                    window.frame.size.width = window
+                                        .frame
+                                        .size
+                                        .width
+                                        .max(decoration_metrics::CONTROLS_WIDTH as f32);
+                                    window.frame.size.height = window.frame.size.height.max(
+                                        config
+                                            .height
+                                            .max(decoration_metrics::TITLE_BAR_HEIGHT as f32),
+                                    );
                                 }
                                 window.resizable = config.resizable;
                                 window.decoration = Some(config);
@@ -638,7 +650,11 @@ impl View for PlatformRefreshView {
                                     } else {
                                         0.0
                                     },
-                                    controls_width: if integrated { 112.0 } else { 0.0 },
+                                    controls_width: if integrated {
+                                        decoration_metrics::CONTROLS_WIDTH as f32
+                                    } else {
+                                        0.0
+                                    },
                                     state: if w.minimized {
                                         viewkit::decoration::WindowState::Minimized
                                     } else if w.restore_frame.is_some() {
@@ -672,7 +688,11 @@ impl View for PlatformRefreshView {
                             window.frame.origin.x + point.x,
                             window.frame.origin.y
                                 + point.y
-                                + if window.integrated() { 0.0 } else { 40.0 },
+                                + if window.integrated() {
+                                    0.0
+                                } else {
+                                    decoration_metrics::TITLE_BAR_HEIGHT as f32
+                                },
                         );
                         if edge == 0 {
                             self.window_drag.set(Some(crate::window::WindowDrag {

@@ -5,6 +5,7 @@ use crate::platform::{
 use std::collections::{HashMap, HashSet};
 
 use crate::apps;
+use viewkit::decoration::metrics;
 use viewkit::prelude::{Point, Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -35,7 +36,9 @@ impl DesktopWindow {
         let h = self
             .decoration
             .filter(|_| self.integrated())
-            .map_or(40.0, |c| c.height.max(40.0));
+            .map_or(metrics::TITLE_BAR_HEIGHT as f32, |c| {
+                c.height.max(metrics::TITLE_BAR_HEIGHT as f32)
+            });
         Rect::new(
             self.frame.origin.x,
             self.frame.origin.y,
@@ -47,9 +50,9 @@ impl DesktopWindow {
         let b = self.titlebar_bounds();
         if self.integrated() {
             Rect::new(
-                (b.origin.x + b.size.width - 112.0).max(b.origin.x),
+                (b.origin.x + b.size.width - metrics::CONTROLS_WIDTH as f32).max(b.origin.x),
                 b.origin.y,
-                b.size.width.min(112.0),
+                b.size.width.min(metrics::CONTROLS_WIDTH as f32),
                 b.size.height,
             )
         } else {

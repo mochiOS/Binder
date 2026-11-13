@@ -21,7 +21,7 @@ use viewkit::{
 };
 
 const REVEAL_EDGE: f32 = 9.0;
-const OVERLAP_MARGIN: f32 = 8.0;
+const OVERLAP_MARGIN: f32 = viewkit::decoration::metrics::CONTROL_REVEAL_MARGIN as f32;
 const NATIVE_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Default)]
