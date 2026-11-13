@@ -22,8 +22,68 @@ use viewkit::platform::{CursorIcon, PlatformEvent};
 pub(crate) struct Surface {
     pub list: DisplayList,
     pub cursor: CursorIcon,
-    pub connection: Rc<RefCell<Connection>>,
-    pub local_id: u64,
+    connection: Rc<RefCell<Connection>>,
+    local_id: u64,
+    process_id: ProcessId,
+    input: Rc<RefCell<InputAuthorization>>,
+}
+
+/// Shared by native host surfaces and platform-generated focus/resize events.
+/// Every actual press must pass here before a child may request a gesture.
+#[derive(Default)]
+struct InputAuthorization {
+    presses: HashMap<(ProcessId, u64), (u64, viewkit::geometry::Point, bool)>,
+    pointers: HashMap<(ProcessId, u64), viewkit::geometry::Point>,
+    next_serial: u64,
+}
+impl InputAuthorization {
+    fn packet(&mut self, pid: ProcessId, id: u64, event: PlatformEvent) -> Packet {
+        let mut serial = 0;
+        let key = (pid, id);
+        match &event {
+            PlatformEvent::PointerMoved { x, y } => {
+                self.pointers
+                    .insert(key, viewkit::geometry::Point::new(*x, *y));
+            }
+            PlatformEvent::PointerButton {
+                button: viewkit::platform::PointerButton::Primary,
+                state: viewkit::platform::ButtonState::Pressed,
+            } => {
+                self.next_serial = self.next_serial.wrapping_add(1).max(1);
+                serial = self.next_serial;
+                self.presses.insert(
+                    key,
+                    (
+                        serial,
+                        self.pointers.get(&key).copied().unwrap_or_default(),
+                        false,
+                    ),
+                );
+            }
+            PlatformEvent::PointerButton {
+                button: viewkit::platform::PointerButton::Primary,
+                state: viewkit::platform::ButtonState::Released,
+            }
+            | PlatformEvent::Focused(false) => {
+                self.presses.remove(&key);
+            }
+            _ => {}
+        }
+        if serial != 0 {
+            Packet::Input { id, serial, event }
+        } else {
+            Packet::Event { id, event }
+        }
+    }
+}
+impl Surface {
+    pub(crate) fn send_event(&self, event: PlatformEvent) -> io::Result<()> {
+        let packet = self
+            .input
+            .borrow_mut()
+            .packet(self.process_id, self.local_id, event);
+        self.connection.borrow_mut().send(packet)
+    }
 }
 
 thread_local! {
@@ -64,9 +124,7 @@ pub(super) struct PreviewDesktop {
     pub titles: Vec<(ProcessId, RemoteWindowId, String)>,
     decorations: HashMap<(ProcessId, u64), viewkit::decoration::DecorationConfig>,
     pending_decorations: HashMap<(ProcessId, u64), viewkit::decoration::DecorationConfig>,
-    presses: HashMap<(ProcessId, u64), (u64, viewkit::geometry::Point, bool)>,
-    pointers: HashMap<(ProcessId, u64), viewkit::geometry::Point>,
-    next_serial: u64,
+    input: Rc<RefCell<InputAuthorization>>,
     layouts: HashMap<(ProcessId, u64), viewkit::decoration::DecorationLayout>,
     gestures: Vec<(ProcessId, u64, u64, viewkit::geometry::Point, u32)>,
     pub posted_notifications: Vec<crate::platform::UserNotification>,
@@ -98,9 +156,7 @@ impl PreviewDesktop {
             titles: Vec::new(),
             decorations: HashMap::new(),
             pending_decorations: HashMap::new(),
-            presses: HashMap::new(),
-            pointers: HashMap::new(),
-            next_serial: 0,
+            input: Rc::new(RefCell::new(InputAuthorization::default())),
             layouts: HashMap::new(),
             gestures: Vec::new(),
             posted_notifications: Vec::new(),
@@ -218,46 +274,12 @@ impl PreviewDesktop {
             .windows
             .get(&remote)
             .ok_or(PlatformError::PermissionDenied)?;
-        let mut serial = 0;
-        let key = (pid, id);
-        match &event {
-            PlatformEvent::PointerMoved { x, y } => {
-                self.pointers
-                    .insert(key, viewkit::geometry::Point::new(*x, *y));
-            }
-            PlatformEvent::PointerButton {
-                button: viewkit::platform::PointerButton::Primary,
-                state: viewkit::platform::ButtonState::Pressed,
-            } => {
-                self.next_serial = self.next_serial.wrapping_add(1).max(1);
-                serial = self.next_serial;
-                self.presses.insert(
-                    key,
-                    (
-                        serial,
-                        self.pointers.get(&key).copied().unwrap_or_default(),
-                        false,
-                    ),
-                );
-            }
-            PlatformEvent::PointerButton {
-                button: viewkit::platform::PointerButton::Primary,
-                state: viewkit::platform::ButtonState::Released,
-            }
-            | PlatformEvent::Focused(false) => {
-                self.presses.remove(&key);
-            }
-            _ => {}
-        }
+        let packet = self.input.borrow_mut().packet(pid, id, event);
         app.connection
             .as_ref()
             .ok_or(PlatformError::ServiceUnavailable)?
             .borrow_mut()
-            .send(if serial != 0 {
-                Packet::Input { id, serial, event }
-            } else {
-                Packet::Event { id, event }
-            })
+            .send(packet)
             .map_err(|_| PlatformError::TransportFailure)
     }
 
@@ -299,6 +321,8 @@ impl PreviewDesktop {
         let mut ready = Vec::new();
         for (pid, id, serial, point, edge) in self.gestures.drain(..) {
             if self
+                .input
+                .borrow()
                 .presses
                 .get(&(pid, id))
                 .is_some_and(|(active, _, used)| *active == serial && *used)
@@ -469,10 +493,11 @@ impl PreviewDesktop {
                                     if app.local_windows.contains(&id)
                                         && matches!(edge, 0 | 1 | 2 | 4 | 8 | 5 | 6 | 9 | 10) =>
                                 {
-                                    if self.presses.get(&(pid, id)).is_some_and(|(s, _, used)| {
+                                    let mut input = self.input.borrow_mut();
+                                    if input.presses.get(&(pid, id)).is_some_and(|(s, _, used)| {
                                         *s == serial && serial != 0 && !*used
                                     }) {
-                                        let press = self.presses.get_mut(&(pid, id)).unwrap();
+                                        let press = input.presses.get_mut(&(pid, id)).unwrap();
                                         press.2 = true;
                                         let point = press.1;
                                         if let Some(remote) = app
@@ -505,6 +530,8 @@ impl PreviewDesktop {
                                                 cursor: CursorIcon::Default,
                                                 connection: Rc::clone(connection),
                                                 local_id: id,
+                                                process_id: pid,
+                                                input: Rc::clone(&self.input),
                                             })),
                                         );
                                     });
@@ -537,8 +564,8 @@ impl PreviewDesktop {
                                 Packet::Close { id } if app.local_windows.remove(&id) => {
                                     self.decorations.remove(&(pid, id));
                                     self.pending_decorations.remove(&(pid, id));
-                                    self.presses.remove(&(pid, id));
-                                    self.pointers.remove(&(pid, id));
+                                    self.input.borrow_mut().presses.remove(&(pid, id));
+                                    self.input.borrow_mut().pointers.remove(&(pid, id));
                                     self.layouts.remove(&(pid, id));
                                     self.gestures
                                         .retain(|(p, i, _, _, _)| (*p, *i) != (pid, id));
@@ -731,8 +758,14 @@ impl PreviewDesktop {
     fn terminate(&mut self, pid: ProcessId) {
         self.decorations.retain(|(p, _), _| *p != pid);
         self.pending_decorations.retain(|(p, _), _| *p != pid);
-        self.presses.retain(|(p, _), _| *p != pid);
-        self.pointers.retain(|(p, _), _| *p != pid);
+        self.input
+            .borrow_mut()
+            .presses
+            .retain(|(p, _), _| *p != pid);
+        self.input
+            .borrow_mut()
+            .pointers
+            .retain(|(p, _), _| *p != pid);
         self.layouts.retain(|(p, _), _| *p != pid);
         self.gestures.retain(|(p, _, _, _, _)| *p != pid);
         if let Some(mut app) = self.children.remove(&pid) {
@@ -1013,10 +1046,142 @@ mod decoration_admission_tests {
         (desktop, pid, Connection::new(client).unwrap())
     }
     #[test]
+    fn host_surface_input_issues_authorization_used_by_real_gesture_admission() {
+        use viewkit::{
+            event::{EventContext, ViewEvent},
+            geometry::{Point, Rect},
+            platform::PointerButton,
+            theme::Theme,
+            typography::TextMeasurer,
+            view::View,
+        };
+        let (mut desktop, pid, mut client) = window();
+        let connection = desktop.children[&pid].connection.as_ref().unwrap().clone();
+        let key = renderer(pid, 1);
+        SURFACES.with(|surfaces| {
+            surfaces.borrow_mut().insert(
+                key.clone(),
+                Rc::new(RefCell::new(Surface {
+                    list: DisplayList::new(),
+                    cursor: CursorIcon::Default,
+                    connection,
+                    local_id: 1,
+                    process_id: pid,
+                    input: desktop.input.clone(),
+                })),
+            )
+        });
+        let host = crate::ui::host_surface::HostSurface::for_renderer(&key).unwrap();
+        let bounds = Rect::new(100.0, 200.0, 800.0, 600.0);
+        let point = Point::new(160.0, 220.0);
+        let theme = Theme::LIGHT;
+        let mut text = TextMeasurer::new();
+        let mut context = EventContext::new(&theme, &theme.typography, &mut text);
+        host.handle_event(
+            bounds,
+            &ViewEvent::PointerPressed {
+                position: point,
+                button: PointerButton::Primary,
+            },
+            &mut context,
+        );
+        let serial = client
+            .poll()
+            .unwrap()
+            .into_iter()
+            .find_map(|packet| match packet {
+                Packet::Input {
+                    id: 1,
+                    serial,
+                    event:
+                        PlatformEvent::PointerButton {
+                            button: PointerButton::Primary,
+                            state: viewkit::platform::ButtonState::Pressed,
+                        },
+                } => Some(serial),
+                _ => None,
+            })
+            .expect("the real HostSurface path must issue an authenticated Input packet");
+        assert_ne!(serial, 0);
+        client
+            .send(Packet::WindowInteraction {
+                id: 1,
+                serial,
+                edge: 0,
+            })
+            .unwrap();
+        desktop.poll().unwrap();
+        let gestures = desktop.take_gestures();
+        assert_eq!(
+            gestures,
+            vec![(pid, RemoteWindowId(7), Point::new(60.0, 20.0), 0)]
+        );
+        client
+            .send(Packet::WindowInteraction {
+                id: 1,
+                serial,
+                edge: 0,
+            })
+            .unwrap();
+        desktop.poll().unwrap();
+        assert!(
+            desktop.take_gestures().is_empty(),
+            "a consumed press cannot be replayed"
+        );
+        host.handle_event(
+            bounds,
+            &ViewEvent::PointerReleased {
+                position: point,
+                button: PointerButton::Primary,
+            },
+            &mut context,
+        );
+        client.poll().unwrap();
+        host.handle_event(
+            bounds,
+            &ViewEvent::PointerPressed {
+                position: point,
+                button: PointerButton::Primary,
+            },
+            &mut context,
+        );
+        let serial = client
+            .poll()
+            .unwrap()
+            .into_iter()
+            .find_map(|packet| match packet {
+                Packet::Input { serial, .. } => Some(serial),
+                _ => None,
+            })
+            .unwrap();
+        host.handle_event(
+            bounds,
+            &ViewEvent::FocusChanged { focused: false },
+            &mut context,
+        );
+        client
+            .send(Packet::WindowInteraction {
+                id: 1,
+                serial,
+                edge: 0,
+            })
+            .unwrap();
+        desktop.poll().unwrap();
+        assert!(
+            desktop.take_gestures().is_empty(),
+            "host focus loss revokes the same authorization"
+        );
+    }
+
+    #[test]
     fn release_invalidates_even_an_already_queued_gesture_and_replays_are_denied() {
         let (mut desktop, pid, mut client) = window();
         let point = viewkit::geometry::Point::new(10.0, 20.0);
-        desktop.presses.insert((pid, 1), (73, point, false));
+        desktop
+            .input
+            .borrow_mut()
+            .presses
+            .insert((pid, 1), (73, point, false));
         client
             .send(Packet::WindowInteraction {
                 id: 1,
@@ -1035,7 +1200,11 @@ mod decoration_admission_tests {
             .unwrap();
         desktop.poll().unwrap();
         assert!(desktop.take_gestures().is_empty());
-        desktop.presses.insert((pid, 1), (74, point, false));
+        desktop
+            .input
+            .borrow_mut()
+            .presses
+            .insert((pid, 1), (74, point, false));
         client
             .send(Packet::WindowInteraction {
                 id: 1,

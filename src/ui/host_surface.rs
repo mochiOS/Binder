@@ -5,7 +5,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use viewkit::draw_command::DrawCommand;
 use viewkit::event::{EventContext, EventResult, ViewEvent};
-use viewkit::platform::linux::preview::Packet;
 use viewkit::platform::{ButtonState, PlatformEvent};
 use viewkit::prelude::*;
 use viewkit::view::{Constraints, MeasureContext, PaintContext};
@@ -92,10 +91,7 @@ impl View for HostSurface {
         if let Some(position) = event.position() {
             if !bounds.contains(position) && !matches!(event, ViewEvent::PointerReleased { .. }) {
                 if matches!(event, ViewEvent::PointerMoved { .. }) {
-                    let _ = surface.connection.borrow_mut().send(Packet::Event {
-                        id: surface.local_id,
-                        event: PlatformEvent::PointerLeft,
-                    });
+                    let _ = surface.send_event(PlatformEvent::PointerLeft);
                 }
                 return EventResult::Ignored;
             }
@@ -117,19 +113,13 @@ impl View for HostSurface {
                 let point = local_position.unwrap();
                 // Forward the current modifier state even when this click
                 // focuses a different window than the one receiving key events.
-                let _ = surface.connection.borrow_mut().send(Packet::Event {
-                    id: surface.local_id,
-                    event: PlatformEvent::ModifiersChanged {
-                        modifiers: context.modifiers(),
-                    },
+                let _ = surface.send_event(PlatformEvent::ModifiersChanged {
+                    modifiers: context.modifiers(),
                 });
                 // Button events carry no coordinates in PlatformEvent.
-                let _ = surface.connection.borrow_mut().send(Packet::Event {
-                    id: surface.local_id,
-                    event: PlatformEvent::PointerMoved {
-                        x: point.x,
-                        y: point.y,
-                    },
+                let _ = surface.send_event(PlatformEvent::PointerMoved {
+                    x: point.x,
+                    y: point.y,
                 });
                 PlatformEvent::PointerButton {
                     button: *button,
@@ -187,10 +177,7 @@ impl View for HostSurface {
             }
             _ => return EventResult::Ignored,
         };
-        if let Err(error) = surface.connection.borrow_mut().send(Packet::Event {
-            id: surface.local_id,
-            event,
-        }) {
+        if let Err(error) = surface.send_event(event) {
             eprintln!("failed to deliver preview input: {error}");
         }
         context.request_redraw();
