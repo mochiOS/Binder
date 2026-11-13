@@ -18,6 +18,9 @@ pub(crate) struct WindowDecoration {
     title: String,
     interaction: WindowInteraction,
     active: bool,
+    controls_only: bool,
+    background: Option<Color>,
+    separator: bool,
 }
 
 impl WindowDecoration {
@@ -26,6 +29,9 @@ impl WindowDecoration {
             title: title.into(),
             interaction,
             active: true,
+            controls_only: false,
+            background: None,
+            separator: true,
         }
     }
 
@@ -34,11 +40,22 @@ impl WindowDecoration {
         self
     }
 
+    pub(crate) fn integrated(mut self, background: Color, separator: bool) -> Self {
+        self.controls_only = true;
+        self.background = Some(background.with_alpha(255));
+        self.separator = separator;
+        self
+    }
+
     fn control_bounds(bounds: Rect, index: usize) -> Rect {
+        Self::control_bounds_with_height(bounds, index, TITLE_BAR_HEIGHT)
+    }
+
+    fn control_bounds_with_height(bounds: Rect, index: usize, height: f32) -> Rect {
         Rect::new(
             bounds.origin.x + bounds.size.width - CONTROLS_WIDTH
                 + (CONTROL_WIDTH + CONTROL_GAP) * index as f32,
-            bounds.origin.y + (TITLE_BAR_HEIGHT - CONTROL_WIDTH) / 2.0,
+            bounds.origin.y + (height - CONTROL_WIDTH) / 2.0,
             CONTROL_WIDTH,
             CONTROL_WIDTH,
         )
@@ -89,7 +106,8 @@ impl View for WindowDecoration {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         Rectangle::new()
             .color(RectangleColor::Custom(
-                context.theme.shell.title_bar_background,
+                self.background
+                    .unwrap_or(context.theme.shell.title_bar_background),
             ))
             .radius(CornerRadius::None)
             .paint(bounds, context);
@@ -101,34 +119,38 @@ impl View for WindowDecoration {
             1.0,
         );
 
-        Rectangle::new()
-            .color(RectangleColor::Custom(context.theme.shell.title_bar_border))
-            .paint(border_bounds, context);
+        if self.separator {
+            Rectangle::new()
+                .color(RectangleColor::Custom(context.theme.shell.title_bar_border))
+                .paint(border_bounds, context);
+        }
 
-        let title = Text::styled(self.title.clone(), TextRole::Label)
-            .weight(context.typography.label.weight.0)
-            .center_visible_ink(true)
-            .color(if self.active {
-                context.theme.shell.primary_text
-            } else {
-                context.theme.shell.inactive_title
-            });
-        let measured = title.measure(
-            Constraints::loose(Size::new(f32::INFINITY, TITLE_BAR_HEIGHT)),
-            &mut MeasureContext {
-                theme: context.theme,
-                typography: context.typography,
-                text_measurer: context.text_measurer,
-            },
-        );
-        let title_bounds = title_bounds(bounds, measured.width, context.theme.spacing.medium);
-        title
-            .alignment(if title_bounds.1 {
-                TextAlignment::Center
-            } else {
-                TextAlignment::Start
-            })
-            .paint(title_bounds.0, context);
+        if !self.controls_only {
+            let title = Text::styled(self.title.clone(), TextRole::Label)
+                .weight(context.typography.label.weight.0)
+                .center_visible_ink(true)
+                .color(if self.active {
+                    context.theme.shell.primary_text
+                } else {
+                    context.theme.shell.inactive_title
+                });
+            let measured = title.measure(
+                Constraints::loose(Size::new(f32::INFINITY, TITLE_BAR_HEIGHT)),
+                &mut MeasureContext {
+                    theme: context.theme,
+                    typography: context.typography,
+                    text_measurer: context.text_measurer,
+                },
+            );
+            let title_bounds = title_bounds(bounds, measured.width, context.theme.spacing.medium);
+            title
+                .alignment(if title_bounds.1 {
+                    TextAlignment::Center
+                } else {
+                    TextAlignment::Start
+                })
+                .paint(title_bounds.0, context);
+        }
 
         let minimize_hovered = self.interaction.hovered == Some(WindowControl::Minimize);
 
@@ -137,7 +159,7 @@ impl View for WindowDecoration {
         let close_hovered = self.interaction.hovered == Some(WindowControl::Close);
 
         Self::paint_control(
-            Self::control_bounds(bounds, 0),
+            Self::control_bounds_with_height(bounds, 0, bounds.size.height),
             minimize_hovered,
             minimize_hovered && self.interaction.pressed == Some(WindowControl::Minimize),
             self.active,
@@ -146,7 +168,7 @@ impl View for WindowDecoration {
         );
 
         Self::paint_control(
-            Self::control_bounds(bounds, 1),
+            Self::control_bounds_with_height(bounds, 1, bounds.size.height),
             maximize_hovered,
             maximize_hovered && self.interaction.pressed == Some(WindowControl::Maximize),
             self.active,
@@ -155,7 +177,7 @@ impl View for WindowDecoration {
         );
 
         Self::paint_control(
-            Self::control_bounds(bounds, 2),
+            Self::control_bounds_with_height(bounds, 2, bounds.size.height),
             close_hovered,
             close_hovered && self.interaction.pressed == Some(WindowControl::Close),
             self.active,
@@ -264,6 +286,24 @@ pub(crate) fn control_at(frame: Rect, point: Point) -> Option<WindowControl> {
     ]
     .into_iter()
     .find_map(|(bounds, control)| bounds.contains(point).then_some(control))
+}
+
+pub(crate) fn control_at_titlebar(bounds: Rect, point: Point) -> Option<WindowControl> {
+    // The cells include the gaps and outside padding. Symbols and hover
+    // shapes keep their original size; screen-edge clicks need no precision.
+    if !bounds.contains(point) {
+        return None;
+    }
+    let start = (bounds.origin.x + bounds.size.width - CONTROLS_WIDTH).max(bounds.origin.x);
+    if point.x < start {
+        return None;
+    }
+    let index = ((point.x - start) / (CONTROL_WIDTH + CONTROL_GAP)).floor() as usize;
+    Some(match index {
+        0 => WindowControl::Minimize,
+        1 => WindowControl::Maximize,
+        _ => WindowControl::Close,
+    })
 }
 
 #[cfg(test)]

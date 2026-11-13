@@ -210,25 +210,14 @@ where
     }
 
     fn control_at(frame: Rect, position: Point) -> Option<WindowControl> {
-        if window_decoration::close_bounds(frame).contains(position) {
-            return Some(WindowControl::Close);
-        }
-
-        if window_decoration::maximize_bounds(frame).contains(position) {
-            return Some(WindowControl::Maximize);
-        }
-
-        if window_decoration::minimize_bounds(frame).contains(position) {
-            return Some(WindowControl::Minimize);
-        }
-
-        None
+        window_decoration::control_at_titlebar(window_decoration::title_bar_bounds(frame), position)
     }
 
     fn update_hovered_control(&self, position: Point) -> Option<Rect> {
         let (target, damage) = self.windows.with(|desktop| {
             let target = Self::topmost_window_at(desktop, position).and_then(|window| {
-                Self::control_at(window.frame, position).map(|control| (window.id, control))
+                window_decoration::control_at_titlebar(window.controls_bounds(), position)
+                    .map(|control| (window.id, control))
             });
             let damage = desktop
                 .windows
@@ -836,7 +825,8 @@ where
                     return self.content.handle_event(bounds, event, context);
                 };
 
-                let control = Self::control_at(hit_window.frame, *position);
+                let control =
+                    window_decoration::control_at_titlebar(hit_window.controls_bounds(), *position);
                 let before = self.visible_windows_damage();
 
                 self.windows.update(|desktop| {
@@ -849,8 +839,7 @@ where
                     }
                 });
 
-                let in_title_bar =
-                    window_decoration::title_bar_bounds(hit_window.frame).contains(*position);
+                let in_title_bar = hit_window.controls_bounds().contains(*position);
 
                 if control.is_none() && in_title_bar && hit_window.restore_frame.is_none() {
                     self.drag.set(Some(WindowDrag {
@@ -882,13 +871,13 @@ where
                         window
                             .interaction
                             .pressed
-                            .map(|control| (window.id, control, window.frame))
+                            .map(|control| (window.id, control, window.controls_bounds()))
                     })
                 });
 
                 if let Some((window_id, pressed_control, frame)) = pressed {
                     let before = self.visible_windows_damage();
-                    let released_control = Self::control_at(frame, *position);
+                    let released_control = window_decoration::control_at_titlebar(frame, *position);
 
                     let activate = released_control == Some(pressed_control);
 

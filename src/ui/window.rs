@@ -19,42 +19,50 @@ struct WindowView {
     shadow: ShadowStyle,
     focused: bool,
     radius: f32,
+    integrated: bool,
+    titlebar_height: f32,
 }
 
 impl WindowView {
-    fn title_bar_bounds(bounds: Rect) -> Rect {
+    fn title_bar_bounds(&self, bounds: Rect) -> Rect {
         Rect::new(
             bounds.origin.x,
             bounds.origin.y,
             bounds.size.width,
-            window_decoration::TITLE_BAR_HEIGHT,
+            self.titlebar_height,
         )
     }
 
-    fn content_bounds(bounds: Rect) -> Rect {
+    fn content_bounds(&self, bounds: Rect) -> Rect {
+        let inset = if self.integrated {
+            0.0
+        } else {
+            self.titlebar_height
+        };
         Rect::new(
             bounds.origin.x,
-            bounds.origin.y + window_decoration::TITLE_BAR_HEIGHT,
+            bounds.origin.y + inset,
             bounds.size.width,
-            (bounds.size.height - window_decoration::TITLE_BAR_HEIGHT).max(0.0),
+            (bounds.size.height - inset).max(0.0),
         )
     }
 }
 
 impl View for WindowView {
     fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
-        let maximum_content_height =
-            (constraints.maximum.height - window_decoration::TITLE_BAR_HEIGHT).max(0.0);
+        let inset = if self.integrated {
+            0.0
+        } else {
+            self.titlebar_height
+        };
+        let maximum_content_height = (constraints.maximum.height - inset).max(0.0);
 
         let content_size = self.content.measure(
             Constraints::loose(Size::new(constraints.maximum.width, maximum_content_height)),
             context,
         );
 
-        constraints.constrain(Size::new(
-            content_size.width,
-            content_size.height + window_decoration::TITLE_BAR_HEIGHT,
-        ))
+        constraints.constrain(Size::new(content_size.width, content_size.height + inset))
     }
 
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
@@ -79,10 +87,13 @@ impl View for WindowView {
             ))
             .paint(bounds, context);
 
-        self.decoration
-            .paint(Self::title_bar_bounds(bounds), context);
-
-        self.content.paint(Self::content_bounds(bounds), context);
+        self.content.paint(self.content_bounds(bounds), context);
+        let mut bar = self.title_bar_bounds(bounds);
+        if self.integrated {
+            bar.origin.x += (bar.size.width - 112.0).max(0.0);
+            bar.size.width = bar.size.width.min(112.0);
+        }
+        self.decoration.paint(bar, context);
 
         context.display_list.push(DrawCommand::PopClip);
 
@@ -111,11 +122,11 @@ impl View for WindowView {
     ) -> EventResult {
         let decoration_result =
             self.decoration
-                .handle_event(Self::title_bar_bounds(bounds), event, context);
+                .handle_event(self.title_bar_bounds(bounds), event, context);
 
-        let content_result =
-            self.content
-                .handle_event(Self::content_bounds(bounds), event, context);
+        let content_result = self
+            .content
+            .handle_event(self.content_bounds(bounds), event, context);
 
         decoration_result.merge(content_result)
     }
@@ -149,12 +160,16 @@ pub(crate) fn view(
         _ => remote_content_view(&window.renderer),
     };
 
+    let mut decoration =
+        window_decoration::WindowDecoration::new(window.title.clone(), window.interaction)
+            .active(focused);
+    if let Some(config) = window.decoration.filter(|_| window.integrated()) {
+        decoration = decoration.integrated(config.background, config.separator);
+    }
     WindowView {
-        decoration: window_decoration::WindowDecoration::new(
-            window.title.clone(),
-            window.interaction,
-        )
-        .active(focused),
+        integrated: window.integrated(),
+        titlebar_height: window.titlebar_bounds().size.height,
+        decoration,
 
         content,
 
@@ -233,6 +248,8 @@ mod tests {
                 maximized
             );
             let view = WindowView {
+                integrated: false,
+                titlebar_height: 40.0,
                 decoration: window_decoration::WindowDecoration::new("Test", window.interaction),
                 content: Box::new(Rectangle::new()),
                 shadow: ShadowStyle::None,

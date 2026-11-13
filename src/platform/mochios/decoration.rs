@@ -47,6 +47,26 @@ impl fmt::Display for DecorationError {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DecorationStyle {
+    height: u32,
+    background: u32,
+    integrated: bool,
+    separator: bool,
+    scale: f32,
+}
+impl Default for DecorationStyle {
+    fn default() -> Self {
+        Self {
+            height: TITLE_BAR_HEIGHT,
+            background: 0,
+            integrated: false,
+            separator: true,
+            scale: 1.0,
+        }
+    }
+}
+
 struct Decoration {
     window: u64,
     endpoint: u64,
@@ -56,6 +76,7 @@ struct Decoration {
     title: String,
     interaction: WindowInteraction,
     active: bool,
+    style: DecorationStyle,
 }
 
 pub(super) struct DecorationManager {
@@ -140,13 +161,13 @@ impl DecorationManager {
     pub(super) fn handle_message(&mut self, event: &[u8]) -> Result<bool, DecorationError> {
         match read_u32(event, 0) {
             Some(DECOR_EVENT_WINDOW) => {
-                if let Some((window, width, title)) = parse_window_event(event) {
+                if let Some((window, width, title, style)) = parse_window_event(event) {
                     if let Some(decoration) = self
                         .decorations
                         .iter_mut()
                         .find(|decoration| decoration.window == window)
                     {
-                        if decoration.width != width {
+                        if decoration.width != width || decoration.style != style {
                             decoration.buffer = attach_title_bar_buffer(
                                 self.compositor,
                                 decoration.surface,
@@ -154,10 +175,12 @@ impl DecorationManager {
                                 title.clone(),
                                 decoration.interaction,
                                 decoration.active,
+                                style,
                             )?;
                             token_request(self.compositor, OP_DAMAGE, decoration.surface)?;
                             token_request(self.compositor, OP_COMMIT, decoration.surface)?;
                             decoration.width = width;
+                            decoration.style = style;
                             decoration.title = title;
                         } else if decoration.title != title {
                             decoration.title = title;
@@ -169,6 +192,7 @@ impl DecorationManager {
                             window,
                             width,
                             title,
+                            style,
                         )?);
                     }
                 }
@@ -246,12 +270,24 @@ fn ipc_create() -> Result<u64, DecorationError> {
         .ok_or(DecorationError(5))
 }
 
-fn parse_window_event(event: &[u8]) -> Option<(u64, u32, String)> {
+fn parse_window_event(event: &[u8]) -> Option<(u64, u32, String, DecorationStyle)> {
     if read_u32(event, 0)? != DECOR_EVENT_WINDOW {
         return None;
     }
     let window = read_u64(event, 4)?;
-    let width = read_u32(event, 12)?;
+    let integrated = read_u32(event, 112) == Some(1);
+    let width = if integrated {
+        read_u32(event, 120)?
+    } else {
+        read_u32(event, 12)?
+    };
+    let style = DecorationStyle {
+        integrated,
+        height: read_u32(event, 116).unwrap_or(TITLE_BAR_HEIGHT),
+        background: read_u32(event, 124).unwrap_or(0),
+        separator: read_u32(event, 128).unwrap_or(1) != 0,
+        scale: (read_u32(event, 120).unwrap_or(112) as f32 / 112.0).max(0.25),
+    };
     let height = read_u32(event, 16)?;
     let title_length = read_u32(event, 44)? as usize;
     let title = std::str::from_utf8(event.get(48..48 + title_length)?)
@@ -262,7 +298,7 @@ fn parse_window_event(event: &[u8]) -> Option<(u64, u32, String)> {
         && height != 0
         && width <= MAX_WINDOW_DIMENSION
         && height <= MAX_WINDOW_DIMENSION)
-        .then_some((window, width, title))
+        .then_some((window, width, title, style))
 }
 
 fn create_decoration(
@@ -270,13 +306,14 @@ fn create_decoration(
     window: u64,
     width: u32,
     title: String,
+    style: DecorationStyle,
 ) -> Result<Decoration, DecorationError> {
     let endpoint = ipc_create()?;
     let mut create = [0u8; 28];
     put_u32(&mut create, 0, OP_DECOR_CREATE_SURFACE)?;
     put_u64(&mut create, 4, window)?;
     put_u32(&mut create, 12, width)?;
-    put_u32(&mut create, 16, TITLE_BAR_HEIGHT)?;
+    put_u32(&mut create, 16, style.height)?;
     put_u64(&mut create, 20, endpoint)?;
     let reply = ipc_call(compositor, &create)?;
     let surface = read_u64(&reply, 4).ok_or(DecorationError(5))?;
@@ -288,6 +325,7 @@ fn create_decoration(
         title.clone(),
         interaction,
         false,
+        style,
     )?;
     token_request(compositor, OP_DAMAGE, surface)?;
 
@@ -295,7 +333,11 @@ fn create_decoration(
     put_u32(&mut attach, 0, OP_DECOR_ATTACH)?;
     put_u64(&mut attach, 4, window)?;
     put_u64(&mut attach, 12, surface)?;
-    put_u32(&mut attach, 24, TITLE_BAR_HEIGHT)?;
+    put_u32(
+        &mut attach,
+        24,
+        if style.integrated { 0 } else { style.height },
+    )?;
     ipc_call_status(compositor, &attach)?;
     Ok(Decoration {
         window,
@@ -306,6 +348,7 @@ fn create_decoration(
         title,
         interaction,
         active: false,
+        style,
     })
 }
 
@@ -316,11 +359,12 @@ fn attach_title_bar_buffer(
     title: String,
     interaction: WindowInteraction,
     active: bool,
+    style: DecorationStyle,
 ) -> Result<TitleBarBuffer, DecorationError> {
     let pixel_count = (width as usize)
-        .checked_mul(TITLE_BAR_HEIGHT as usize)
+        .checked_mul(style.height as usize)
         .ok_or(DecorationError(22))?;
-    let rendered = render_title_bar(title, width, interaction, active)?;
+    let rendered = render_title_bar(title, width, interaction, active, style)?;
     if rendered.len() != pixel_count {
         return Err(DecorationError(5));
     }
@@ -331,7 +375,7 @@ fn attach_title_bar_buffer(
     put_u32(&mut attach, 0, OP_ATTACH_BUFFER)?;
     put_u64(&mut attach, 4, surface)?;
     put_u32(&mut attach, 12, width)?;
-    put_u32(&mut attach, 16, TITLE_BAR_HEIGHT)?;
+    put_u32(&mut attach, 16, style.height)?;
     put_u32(&mut attach, 20, width)?;
     put_u32(&mut attach, 24, PIXEL_FORMAT_XRGB8888)?;
     ipc_call_status(compositor, &attach)?;
@@ -344,21 +388,60 @@ fn render_title_bar(
     width: u32,
     interaction: WindowInteraction,
     active: bool,
+    style: DecorationStyle,
 ) -> Result<Vec<u32>, DecorationError> {
-    let decoration = WindowDecoration::new(title, interaction).active(active);
+    let mut decoration = WindowDecoration::new(title, interaction).active(active);
+    if style.integrated {
+        decoration = decoration.integrated(Color::from_rgba_hex(style.background), style.separator);
+    }
     let mut display_list = DisplayList::new();
     let mut text_measurer = TextMeasurer::new();
+    let mut theme = Theme::current();
+    if style.integrated {
+        let c = Color::from_rgba_hex(style.background);
+        let linear = |v: u8| {
+            let s = f32::from(v) / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let luminance = 0.2126 * linear(c.red) + 0.7152 * linear(c.green) + 0.0722 * linear(c.blue);
+        theme = if luminance > 0.179 {
+            Theme::LIGHT
+        } else {
+            Theme::DARK
+        };
+    }
     let mut context = PaintContext::new(
         &mut display_list,
-        &Theme::DEFAULT,
-        &Typography::DEFAULT,
+        &theme,
+        &theme.typography,
         &mut text_measurer,
     );
-    decoration.paint(
-        Rect::new(0.0, 0.0, width as f32, TITLE_BAR_HEIGHT as f32),
-        &mut context,
+    context.with_presentation(
+        viewkit::draw_command::PaintTransform {
+            anchor: Point::new(0.0, 0.0),
+            scale: style.scale,
+            offset: Point::new(0.0, 0.0),
+            opacity: 1.0,
+        },
+        true,
+        |context| {
+            decoration.paint(
+                Rect::new(
+                    0.0,
+                    0.0,
+                    width as f32 / style.scale,
+                    style.height as f32 / style.scale,
+                ),
+                context,
+            )
+        },
     );
-    viewkit::platform::mochios::render_offscreen_xrgb(&display_list, width, TITLE_BAR_HEIGHT)
+    drop(context);
+    viewkit::platform::mochios::render_offscreen_xrgb(&display_list, width, style.height)
         .map_err(|_| DecorationError(5))
 }
 
@@ -368,9 +451,10 @@ fn redraw_title_bar(compositor: u64, decoration: &mut Decoration) -> Result<(), 
         decoration.width,
         decoration.interaction,
         decoration.active,
+        decoration.style,
     )?;
     let pixel_count = (decoration.width as usize)
-        .checked_mul(TITLE_BAR_HEIGHT as usize)
+        .checked_mul(decoration.style.height as usize)
         .ok_or(DecorationError(22))?;
     if rendered.len() != pixel_count {
         return Err(DecorationError(5));
@@ -381,9 +465,17 @@ fn redraw_title_bar(compositor: u64, decoration: &mut Decoration) -> Result<(), 
 }
 
 fn control_at(decoration: &Decoration, x: i32, y: i32) -> Option<WindowControl> {
-    crate::ui::window_decoration::control_at(
-        Rect::new(0.0, 0.0, decoration.width as f32, TITLE_BAR_HEIGHT as f32),
-        Point::new(x as f32, y as f32),
+    crate::ui::window_decoration::control_at_titlebar(
+        Rect::new(
+            0.0,
+            0.0,
+            decoration.width as f32 / decoration.style.scale,
+            decoration.style.height as f32 / decoration.style.scale,
+        ),
+        Point::new(
+            x as f32 / decoration.style.scale,
+            y as f32 / decoration.style.scale,
+        ),
     )
 }
 
@@ -411,6 +503,10 @@ fn handle_decoration_button(
         return Ok(());
     }
     let detail = read_u32(event, 12).ok_or(DecorationError(5))?;
+    if detail & 0xffff != 1 {
+        return Ok(());
+    }
+
     let flags = detail >> 16;
     let x = read_i32(event, 4).ok_or(DecorationError(5))?;
     let y = read_i32(event, 8).ok_or(DecorationError(5))?;

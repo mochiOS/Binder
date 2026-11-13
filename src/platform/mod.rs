@@ -361,6 +361,28 @@ pub trait DesktopPlatform {
     fn take_content_changed(&mut self) -> bool {
         false
     }
+    fn notify_decoration_state(
+        &mut self,
+        _pid: ProcessId,
+        _remote: RemoteWindowId,
+        _layout: viewkit::decoration::DecorationLayout,
+    ) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn take_window_decorations(
+        &mut self,
+    ) -> Vec<(
+        ProcessId,
+        RemoteWindowId,
+        viewkit::decoration::DecorationConfig,
+    )> {
+        Vec::new()
+    }
+    fn take_window_gestures(
+        &mut self,
+    ) -> Vec<(ProcessId, RemoteWindowId, viewkit::geometry::Point, u32)> {
+        Vec::new()
+    }
     fn take_window_titles(&mut self) -> Vec<(ProcessId, RemoteWindowId, String)> {
         Vec::new()
     }

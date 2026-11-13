@@ -531,9 +531,18 @@ impl DesktopPlatform for LinuxPlatform {
         notification: WindowResizedNotification,
     ) -> Result<(), PlatformError> {
         if self.preview.borrow().contains(notification.process_id) {
+            let integrated = self
+                .preview
+                .borrow()
+                .decoration(notification.process_id, notification.window)
+                .is_some_and(|c| c.mode == viewkit::decoration::DecorationMode::Integrated);
             let height = notification
                 .height
-                .saturating_sub(crate::ui::window_decoration::TITLE_BAR_HEIGHT as u32)
+                .saturating_sub(if integrated {
+                    0
+                } else {
+                    crate::ui::window_decoration::TITLE_BAR_HEIGHT as u32
+                })
                 .max(1);
             return self.preview.borrow_mut().event(
                 notification.process_id,
@@ -709,6 +718,28 @@ impl DesktopPlatform for LinuxPlatform {
     }
     fn take_content_changed(&mut self) -> bool {
         std::mem::take(&mut self.preview.borrow_mut().dirty)
+    }
+    fn notify_decoration_state(
+        &mut self,
+        pid: ProcessId,
+        remote: RemoteWindowId,
+        layout: viewkit::decoration::DecorationLayout,
+    ) -> Result<(), PlatformError> {
+        self.preview.borrow_mut().layout(pid, remote, layout)
+    }
+    fn take_window_decorations(
+        &mut self,
+    ) -> Vec<(
+        ProcessId,
+        RemoteWindowId,
+        viewkit::decoration::DecorationConfig,
+    )> {
+        self.preview.borrow_mut().take_decorations()
+    }
+    fn take_window_gestures(
+        &mut self,
+    ) -> Vec<(ProcessId, RemoteWindowId, viewkit::geometry::Point, u32)> {
+        self.preview.borrow_mut().take_gestures()
     }
     fn take_window_titles(&mut self) -> Vec<(ProcessId, RemoteWindowId, String)> {
         std::mem::take(&mut self.preview.borrow_mut().titles)

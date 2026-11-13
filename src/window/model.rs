@@ -23,6 +23,39 @@ pub struct DesktopWindow {
     pub remote_window: Option<RemoteWindowId>,
     pub interaction: WindowInteraction,
     pub restore_frame: Option<Rect>,
+    pub decoration: Option<viewkit::decoration::DecorationConfig>,
+}
+
+impl DesktopWindow {
+    pub fn integrated(&self) -> bool {
+        self.decoration
+            .is_some_and(|c| c.mode == viewkit::decoration::DecorationMode::Integrated)
+    }
+    pub fn titlebar_bounds(&self) -> Rect {
+        let h = self
+            .decoration
+            .filter(|_| self.integrated())
+            .map_or(40.0, |c| c.height.max(40.0));
+        Rect::new(
+            self.frame.origin.x,
+            self.frame.origin.y,
+            self.frame.size.width,
+            h.min(self.frame.size.height),
+        )
+    }
+    pub fn controls_bounds(&self) -> Rect {
+        let b = self.titlebar_bounds();
+        if self.integrated() {
+            Rect::new(
+                (b.origin.x + b.size.width - 112.0).max(b.origin.x),
+                b.origin.y,
+                b.size.width.min(112.0),
+                b.size.height,
+            )
+        } else {
+            b
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +208,7 @@ impl DesktopWindows {
             remote_window: None,
             interaction: WindowInteraction::default(),
             restore_frame: None,
+            decoration: None,
         });
         self.focused = Some(id);
         id
@@ -204,6 +238,7 @@ impl DesktopWindows {
             remote_window: None,
             interaction: WindowInteraction::default(),
             restore_frame: None,
+            decoration: None,
         });
         self.focused = Some(id);
         id
@@ -260,6 +295,7 @@ impl DesktopWindows {
             interaction: WindowInteraction::default(),
 
             restore_frame: None,
+            decoration: None,
         });
 
         self.focused = Some(id);
@@ -681,6 +717,7 @@ impl DesktopWindows {
             remote_window: Some(remote_window),
             interaction: WindowInteraction::default(),
             restore_frame: None,
+            decoration: None,
         });
 
         self.focused = Some(id);
@@ -712,6 +749,7 @@ impl DesktopWindows {
             remote_window: Some(remote_window),
             interaction: WindowInteraction::default(),
             restore_frame: None,
+            decoration: None,
         });
 
         self.focused = Some(id);

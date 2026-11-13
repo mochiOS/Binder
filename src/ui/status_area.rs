@@ -163,12 +163,14 @@ impl<C: View> StatusAreaLayer<C> {
             .set(position.is_some_and(|point| {
                 let controls = Rect::new(
                     bounds.origin.x
-                        + (bounds.size.width - super::window_decoration::CONTROLS_WIDTH).max(0.0),
+                        + (bounds.size.width
+                            - (super::window_decoration::CONTROLS_WIDTH + OVERLAP_MARGIN))
+                            .max(0.0),
                     bounds.origin.y,
                     bounds
                         .size
                         .width
-                        .min(super::window_decoration::CONTROLS_WIDTH),
+                        .min((super::window_decoration::CONTROLS_WIDTH + OVERLAP_MARGIN)),
                     super::window_decoration::TITLE_BAR_HEIGHT,
                 );
                 if !controls.contains(point) {

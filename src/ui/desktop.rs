@@ -72,6 +72,8 @@ pub(crate) fn view(
         Rc::clone(&platform),
         system_bar.clone(),
         windows.clone(),
+        window_drag.clone(),
+        resize.clone(),
         apps.clone(),
         dock_running_apps.clone(),
         Rc::clone(&fast_poll_until),
@@ -408,6 +410,8 @@ struct PlatformRefreshView {
     system_bar: State<SystemBarState>,
 
     windows: State<DesktopWindows>,
+    window_drag: State<Option<WindowDrag>>,
+    resize: State<Option<WindowResize>>,
 
     apps: State<Vec<AppInfo>>,
 
@@ -423,6 +427,8 @@ impl PlatformRefreshView {
         system_bar: State<SystemBarState>,
 
         windows: State<DesktopWindows>,
+        window_drag: State<Option<WindowDrag>>,
+        resize: State<Option<WindowResize>>,
 
         apps: State<Vec<AppInfo>>,
 
@@ -433,6 +439,8 @@ impl PlatformRefreshView {
             platform,
             system_bar,
             windows,
+            window_drag,
+            resize,
             apps,
             dock_running_apps,
             fast_poll_until,
@@ -543,97 +551,207 @@ impl View for PlatformRefreshView {
             failed_close_requests,
             running_apps,
             discovered_apps,
-        ) = {
-            let mut platform = self.platform.borrow_mut();
+        ) =
+            {
+                let mut platform = self.platform.borrow_mut();
 
-            let mut failed_close_requests = Vec::new();
+                let mut failed_close_requests = Vec::new();
 
-            for request in pending_close_requests {
-                if let Err(error) =
-                    platform.request_window_close(request.process_id, request.window)
-                {
-                    eprintln!("failed to request window close: {error:?}",);
+                for request in pending_close_requests {
+                    if let Err(error) =
+                        platform.request_window_close(request.process_id, request.window)
+                    {
+                        eprintln!("failed to request window close: {error:?}",);
 
-                    failed_close_requests.push(request);
+                        failed_close_requests.push(request);
+                    }
                 }
-            }
 
-            for notification in resized_notifications {
-                if let Err(error) = platform.notify_window_resized(notification) {
-                    eprintln!("failed to notify window resize: {error:?}",);
+                for notification in resized_notifications {
+                    if let Err(error) = platform.notify_window_resized(notification) {
+                        eprintln!("failed to notify window resize: {error:?}",);
+                    }
                 }
-            }
 
-            for notification in focus_notifications {
-                if let Err(error) = platform.notify_window_focus_changed(notification) {
-                    eprintln!("failed to notify window focus: {error:?}",);
+                for notification in focus_notifications {
+                    if let Err(error) = platform.notify_window_focus_changed(notification) {
+                        eprintln!("failed to notify window focus: {error:?}",);
+                    }
                 }
-            }
 
-            if let Err(error) = platform.synchronize_applications(&active_processes) {
-                eprintln!("failed to synchronize applications: {error:?}",);
-            }
-
-            let system_bar_changed = platform.refresh().unwrap_or_else(|error| {
-                eprintln!("failed to refresh platform: {error:?}",);
-
-                false
-            });
-
-            if platform.take_content_changed() {
-                if let Some(dirty) = self.visible_windows_damage() {
-                    context.request_redraw_in_at(dirty, Instant::now());
+                if let Err(error) = platform.synchronize_applications(&active_processes) {
+                    eprintln!("failed to synchronize applications: {error:?}",);
                 }
-            }
-            let titles = platform.take_window_titles();
-            if !titles.is_empty() {
-                self.windows.update(|desktop| {
-                    for (process, remote, title) in titles {
-                        if let Some(window) = desktop.windows.iter_mut().find(|window| {
-                            window.process_id == Some(process)
-                                && window.remote_window == Some(remote)
-                        }) {
-                            window.title = title;
+
+                let system_bar_changed = platform.refresh().unwrap_or_else(|error| {
+                    eprintln!("failed to refresh platform: {error:?}",);
+
+                    false
+                });
+
+                if platform.take_content_changed() {
+                    if let Some(dirty) = self.visible_windows_damage() {
+                        context.request_redraw_in_at(dirty, Instant::now());
+                    }
+                }
+                let decorations = platform.take_window_decorations();
+                if !decorations.is_empty() {
+                    self.windows.update(|desktop| {
+                        for (pid, remote, config) in decorations {
+                            if let Some(window) = desktop.windows.iter_mut().find(|w| {
+                                w.process_id == Some(pid) && w.remote_window == Some(remote)
+                            }) {
+                                let was = window.integrated();
+                                let integrated =
+                                    config.mode == viewkit::decoration::DecorationMode::Integrated;
+                                if was != integrated {
+                                    window.frame.size.height = (window.frame.size.height
+                                        + if integrated { -40.0 } else { 40.0 })
+                                    .max(1.0);
+                                }
+                                if integrated {
+                                    window.frame.size.width = window.frame.size.width.max(112.0);
+                                    window.frame.size.height =
+                                        window.frame.size.height.max(config.height.max(40.0));
+                                }
+                                window.resizable = config.resizable;
+                                window.decoration = Some(config);
+                            }
+                        }
+                    });
+                    context.request_redraw_at(Instant::now());
+                }
+                let states = self.windows.with(|desktop| {
+                    desktop
+                        .windows
+                        .iter()
+                        .filter_map(|w| {
+                            let pid = w.process_id?;
+                            let remote = w.remote_window?;
+                            let integrated = w.integrated();
+                            Some((
+                                pid,
+                                remote,
+                                viewkit::decoration::DecorationLayout {
+                                    height: if integrated {
+                                        w.titlebar_bounds().size.height
+                                    } else {
+                                        0.0
+                                    },
+                                    controls_width: if integrated { 112.0 } else { 0.0 },
+                                    state: if w.minimized {
+                                        viewkit::decoration::WindowState::Minimized
+                                    } else if w.restore_frame.is_some() {
+                                        viewkit::decoration::WindowState::Maximized
+                                    } else {
+                                        viewkit::decoration::WindowState::Normal
+                                    },
+                                },
+                            ))
+                        })
+                        .collect::<Vec<_>>()
+                });
+                for (pid, remote, layout) in states {
+                    let _ = platform.notify_decoration_state(pid, remote, layout);
+                }
+                for (pid, remote, point, edge) in platform.take_window_gestures() {
+                    if let Some(window) = self.windows.with(|d| {
+                        d.windows
+                            .iter()
+                            .find(|w| {
+                                w.process_id == Some(pid)
+                                    && w.remote_window == Some(remote)
+                                    && !w.minimized
+                            })
+                            .cloned()
+                    }) {
+                        if window.restore_frame.is_some() {
+                            continue;
+                        }
+                        let origin = Point::new(
+                            window.frame.origin.x + point.x,
+                            window.frame.origin.y
+                                + point.y
+                                + if window.integrated() { 0.0 } else { 40.0 },
+                        );
+                        if edge == 0 {
+                            self.window_drag.set(Some(crate::window::WindowDrag {
+                                window: window.id,
+                                pointer_origin: origin,
+                                window_origin: window.frame.origin,
+                            }));
+                            self.resize.set(None);
+                        } else if window.resizable {
+                            let edge = match edge {
+                                1 => crate::desktop::ResizeEdge::Left,
+                                2 => crate::desktop::ResizeEdge::Right,
+                                4 => crate::desktop::ResizeEdge::Top,
+                                8 => crate::desktop::ResizeEdge::Bottom,
+                                5 => crate::desktop::ResizeEdge::TopLeft,
+                                6 => crate::desktop::ResizeEdge::TopRight,
+                                9 => crate::desktop::ResizeEdge::BottomLeft,
+                                _ => crate::desktop::ResizeEdge::BottomRight,
+                            };
+                            self.resize.set(Some(crate::desktop::WindowResize {
+                                window: window.id,
+                                edge,
+                                pointer_origin: origin,
+                                frame_origin: window.frame.origin,
+                                frame_size: window.frame.size,
+                            }));
+                            self.window_drag.set(None);
                         }
                     }
-                });
-            }
-
-            failed_close_requests.extend(platform.take_cancelled_closes());
-            let activations = platform.take_activation_requests();
-            if !activations.is_empty() {
-                let before = self.visible_windows_damage();
-                self.windows.update(|desktop| {
-                    for process in activations {
-                        desktop.activate_process(process);
-                    }
-                });
-                if let Some(dirty) =
-                    Self::window_change_damage(before, self.visible_windows_damage())
-                {
-                    context.request_redraw_in_at(dirty, Instant::now());
                 }
-            }
-            let running_apps = platform.running_app_bundle_ids();
+                let titles = platform.take_window_titles();
+                if !titles.is_empty() {
+                    self.windows.update(|desktop| {
+                        for (process, remote, title) in titles {
+                            if let Some(window) = desktop.windows.iter_mut().find(|window| {
+                                window.process_id == Some(process)
+                                    && window.remote_window == Some(remote)
+                            }) {
+                                window.title = title;
+                            }
+                        }
+                    });
+                }
 
-            let discovered_apps = platform.get_apps();
+                failed_close_requests.extend(platform.take_cancelled_closes());
+                let activations = platform.take_activation_requests();
+                if !activations.is_empty() {
+                    let before = self.visible_windows_damage();
+                    self.windows.update(|desktop| {
+                        for process in activations {
+                            desktop.activate_process(process);
+                        }
+                    });
+                    if let Some(dirty) =
+                        Self::window_change_damage(before, self.visible_windows_damage())
+                    {
+                        context.request_redraw_in_at(dirty, Instant::now());
+                    }
+                }
+                let running_apps = platform.running_app_bundle_ids();
 
-            let create_requests = platform.take_create_window_requests();
+                let discovered_apps = platform.get_apps();
 
-            let close_requests = platform.take_close_window_requests();
+                let create_requests = platform.take_create_window_requests();
 
-            let exited_processes = platform.take_exited_processes();
+                let close_requests = platform.take_close_window_requests();
 
-            (
-                system_bar_changed,
-                create_requests,
-                close_requests,
-                exited_processes,
-                failed_close_requests,
-                running_apps,
-                discovered_apps,
-            )
-        };
+                let exited_processes = platform.take_exited_processes();
+
+                (
+                    system_bar_changed,
+                    create_requests,
+                    close_requests,
+                    exited_processes,
+                    failed_close_requests,
+                    running_apps,
+                    discovered_apps,
+                )
+            };
 
         if self.apps.with(|apps| apps != &discovered_apps) {
             self.apps.set(discovered_apps);

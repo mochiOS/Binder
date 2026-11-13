@@ -62,6 +62,13 @@ pub(super) struct PreviewDesktop {
     pub activations: Vec<ProcessId>,
     pub cancelled: Vec<CloseWindowRequest>,
     pub titles: Vec<(ProcessId, RemoteWindowId, String)>,
+    decorations: HashMap<(ProcessId, u64), viewkit::decoration::DecorationConfig>,
+    pending_decorations: HashMap<(ProcessId, u64), viewkit::decoration::DecorationConfig>,
+    presses: HashMap<(ProcessId, u64), (u64, viewkit::geometry::Point, bool)>,
+    pointers: HashMap<(ProcessId, u64), viewkit::geometry::Point>,
+    next_serial: u64,
+    layouts: HashMap<(ProcessId, u64), viewkit::decoration::DecorationLayout>,
+    gestures: Vec<(ProcessId, u64, u64, viewkit::geometry::Point, u32)>,
     pub posted_notifications: Vec<crate::platform::UserNotification>,
 }
 
@@ -89,6 +96,13 @@ impl PreviewDesktop {
             dirty: false,
             activations: Vec::new(),
             titles: Vec::new(),
+            decorations: HashMap::new(),
+            pending_decorations: HashMap::new(),
+            presses: HashMap::new(),
+            pointers: HashMap::new(),
+            next_serial: 0,
+            layouts: HashMap::new(),
+            gestures: Vec::new(),
             posted_notifications: Vec::new(),
         })
     }
@@ -204,12 +218,125 @@ impl PreviewDesktop {
             .windows
             .get(&remote)
             .ok_or(PlatformError::PermissionDenied)?;
+        let mut serial = 0;
+        let key = (pid, id);
+        match &event {
+            PlatformEvent::PointerMoved { x, y } => {
+                self.pointers
+                    .insert(key, viewkit::geometry::Point::new(*x, *y));
+            }
+            PlatformEvent::PointerButton {
+                button: viewkit::platform::PointerButton::Primary,
+                state: viewkit::platform::ButtonState::Pressed,
+            } => {
+                self.next_serial = self.next_serial.wrapping_add(1).max(1);
+                serial = self.next_serial;
+                self.presses.insert(
+                    key,
+                    (
+                        serial,
+                        self.pointers.get(&key).copied().unwrap_or_default(),
+                        false,
+                    ),
+                );
+            }
+            PlatformEvent::PointerButton {
+                button: viewkit::platform::PointerButton::Primary,
+                state: viewkit::platform::ButtonState::Released,
+            }
+            | PlatformEvent::Focused(false) => {
+                self.presses.remove(&key);
+            }
+            _ => {}
+        }
         app.connection
             .as_ref()
             .ok_or(PlatformError::ServiceUnavailable)?
             .borrow_mut()
-            .send(Packet::Event { id, event })
+            .send(if serial != 0 {
+                Packet::Input { id, serial, event }
+            } else {
+                Packet::Event { id, event }
+            })
             .map_err(|_| PlatformError::TransportFailure)
+    }
+
+    pub fn layout(
+        &mut self,
+        pid: ProcessId,
+        remote: RemoteWindowId,
+        layout: viewkit::decoration::DecorationLayout,
+    ) -> Result<(), PlatformError> {
+        let Some(app) = self.children.get(&pid) else {
+            return Ok(());
+        };
+        let Some(&id) = app.windows.get(&remote) else {
+            return Ok(());
+        };
+        if self.layouts.get(&(pid, id)) == Some(&layout) {
+            return Ok(());
+        }
+        app.connection
+            .as_ref()
+            .ok_or(PlatformError::ServiceUnavailable)?
+            .borrow_mut()
+            .send(Packet::DecorationLayout { id, layout })
+            .map_err(|_| PlatformError::TransportFailure)?;
+        self.layouts.insert((pid, id), layout);
+        Ok(())
+    }
+    pub fn decoration(
+        &self,
+        pid: ProcessId,
+        remote: RemoteWindowId,
+    ) -> Option<viewkit::decoration::DecorationConfig> {
+        let local = *self.children.get(&pid)?.windows.get(&remote)?;
+        self.decorations.get(&(pid, local)).copied()
+    }
+    pub fn take_gestures(
+        &mut self,
+    ) -> Vec<(ProcessId, RemoteWindowId, viewkit::geometry::Point, u32)> {
+        let mut ready = Vec::new();
+        for (pid, id, serial, point, edge) in self.gestures.drain(..) {
+            if self
+                .presses
+                .get(&(pid, id))
+                .is_some_and(|(active, _, used)| *active == serial && *used)
+            {
+                if let Some(remote) = self.children.get(&pid).and_then(|app| {
+                    app.windows
+                        .iter()
+                        .find_map(|(r, l)| (*l == id).then_some(*r))
+                }) {
+                    ready.push((pid, remote, point, edge));
+                }
+            }
+        }
+        ready
+    }
+    pub fn take_decorations(
+        &mut self,
+    ) -> Vec<(
+        ProcessId,
+        RemoteWindowId,
+        viewkit::decoration::DecorationConfig,
+    )> {
+        let mut ready = Vec::new();
+        let mut pending = HashMap::new();
+        for ((pid, id), config) in self.pending_decorations.drain() {
+            let remote = self.children.get(&pid).and_then(|app| {
+                app.windows
+                    .iter()
+                    .find_map(|(r, l)| (*l == id).then_some(*r))
+            });
+            if let Some(remote) = remote {
+                ready.push((pid, remote, config));
+            } else {
+                pending.insert((pid, id), config);
+            }
+        }
+        self.pending_decorations = pending;
+        ready
     }
 
     pub fn poll(&mut self) -> io::Result<()> {
@@ -329,6 +456,35 @@ impl PreviewDesktop {
                                     );
                                     self.dirty = true;
                                 }
+                                Packet::Decoration { id, config }
+                                    if app.local_windows.contains(&id)
+                                        && config.height.is_finite()
+                                        && (1.0..=4096.0).contains(&config.height) =>
+                                {
+                                    self.decorations.insert((pid, id), config);
+                                    self.pending_decorations.insert((pid, id), config);
+                                    self.dirty = true;
+                                }
+                                Packet::WindowInteraction { id, serial, edge }
+                                    if app.local_windows.contains(&id)
+                                        && matches!(edge, 0 | 1 | 2 | 4 | 8 | 5 | 6 | 9 | 10) =>
+                                {
+                                    if self.presses.get(&(pid, id)).is_some_and(|(s, _, used)| {
+                                        *s == serial && serial != 0 && !*used
+                                    }) {
+                                        let press = self.presses.get_mut(&(pid, id)).unwrap();
+                                        press.2 = true;
+                                        let point = press.1;
+                                        if let Some(remote) = app
+                                            .windows
+                                            .iter()
+                                            .find_map(|(r, l)| (*l == id).then_some(*r))
+                                        {
+                                            self.gestures.push((pid, id, serial, point, edge));
+                                            self.dirty = true;
+                                        }
+                                    }
+                                }
                                 Packet::Open { id, config }
                                     if id != 0
                                         && app.local_windows.len() < 64
@@ -379,6 +535,14 @@ impl PreviewDesktop {
                                     }
                                 }
                                 Packet::Close { id } if app.local_windows.remove(&id) => {
+                                    self.decorations.remove(&(pid, id));
+                                    self.pending_decorations.remove(&(pid, id));
+                                    self.presses.remove(&(pid, id));
+                                    self.pointers.remove(&(pid, id));
+                                    self.layouts.remove(&(pid, id));
+                                    self.gestures
+                                        .retain(|(p, i, _, _, _)| (*p, *i) != (pid, id));
+
                                     SURFACES.with(|surfaces| {
                                         surfaces.borrow_mut().remove(&renderer(pid, id));
                                     });
@@ -565,6 +729,12 @@ impl PreviewDesktop {
     }
 
     fn terminate(&mut self, pid: ProcessId) {
+        self.decorations.retain(|(p, _), _| *p != pid);
+        self.pending_decorations.retain(|(p, _), _| *p != pid);
+        self.presses.retain(|(p, _), _| *p != pid);
+        self.pointers.retain(|(p, _), _| *p != pid);
+        self.layouts.retain(|(p, _), _| *p != pid);
+        self.gestures.retain(|(p, _, _, _, _)| *p != pid);
         if let Some(mut app) = self.children.remove(&pid) {
             let _ = app.child.kill();
             let _ = app.child.wait();
@@ -811,5 +981,113 @@ mod document_open_tests {
             .parse::<u32>()
             .unwrap();
         assert!(desktop.children.contains_key(&ProcessId(pid)));
+    }
+}
+
+#[cfg(test)]
+mod decoration_admission_tests {
+    use super::*;
+    fn window() -> (PreviewDesktop, ProcessId, Connection) {
+        let mut desktop = PreviewDesktop::new().unwrap();
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = ProcessId(child.id());
+        let (server, client) = std::os::unix::net::UnixStream::pair().unwrap();
+        desktop.children.insert(
+            pid,
+            Application {
+                child,
+                bundle_id: "test.decoration".into(),
+                started: Instant::now(),
+                connection: Some(Rc::new(RefCell::new(Connection::new(server).unwrap()))),
+                pending: VecDeque::new(),
+                windows: HashMap::from([(RemoteWindowId(7), 1)]),
+                local_windows: HashSet::from([1]),
+                cards: HashMap::new(),
+            },
+        );
+        (desktop, pid, Connection::new(client).unwrap())
+    }
+    #[test]
+    fn release_invalidates_even_an_already_queued_gesture_and_replays_are_denied() {
+        let (mut desktop, pid, mut client) = window();
+        let point = viewkit::geometry::Point::new(10.0, 20.0);
+        desktop.presses.insert((pid, 1), (73, point, false));
+        client
+            .send(Packet::WindowInteraction {
+                id: 1,
+                serial: 73,
+                edge: 0,
+            })
+            .unwrap();
+        desktop.poll().unwrap();
+        assert_eq!(desktop.take_gestures().len(), 1);
+        client
+            .send(Packet::WindowInteraction {
+                id: 1,
+                serial: 73,
+                edge: 0,
+            })
+            .unwrap();
+        desktop.poll().unwrap();
+        assert!(desktop.take_gestures().is_empty());
+        desktop.presses.insert((pid, 1), (74, point, false));
+        client
+            .send(Packet::WindowInteraction {
+                id: 1,
+                serial: 74,
+                edge: 0,
+            })
+            .unwrap();
+        desktop.poll().unwrap();
+        desktop
+            .event(
+                pid,
+                RemoteWindowId(7),
+                PlatformEvent::PointerButton {
+                    button: viewkit::platform::PointerButton::Primary,
+                    state: viewkit::platform::ButtonState::Released,
+                },
+            )
+            .unwrap();
+        assert!(desktop.take_gestures().is_empty());
+    }
+    #[test]
+    fn pending_decoration_configuration_is_coalesced_per_window() {
+        let (mut desktop, _pid, mut client) = window();
+        for height in 40..1000 {
+            client
+                .send(Packet::Decoration {
+                    id: 1,
+                    config: viewkit::decoration::DecorationConfig {
+                        mode: viewkit::decoration::DecorationMode::Integrated,
+                        height: height as f32,
+                        background: viewkit::theme::Color::BLACK,
+                        separator: true,
+                        resizable: true,
+                    },
+                })
+                .unwrap();
+        }
+        // Nonblocking writes may span several poll budgets. Drain the real
+        // transport before asserting that its latest configuration won.
+        for _ in 0..100 {
+            client.poll().unwrap();
+            desktop.poll().unwrap();
+            if desktop
+                .decorations
+                .values()
+                .any(|config| config.height == 999.0)
+            {
+                break;
+            }
+        }
+        let configurations = desktop.take_decorations();
+        assert_eq!(configurations.len(), 1);
+        assert_eq!(configurations[0].2.height, 999.0);
     }
 }
