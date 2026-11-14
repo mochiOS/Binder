@@ -49,7 +49,13 @@ pub(super) enum Action {
         velocity: f32,
         finished: bool,
     },
-    Home,
+    FinishNavigation {
+        delta: f32,
+        velocity: f32,
+        delta_x: f32,
+        velocity_x: f32,
+        home: bool,
+    },
     RevealNavigation,
     Navigate {
         delta: f32,
@@ -258,7 +264,19 @@ impl Gestures {
             Kind::Horizontal if contact.origin == Origin::Edge && dx.abs() >= 36.0 => {
                 Some(Action::QuickSwitch(if dx < 0.0 { 1 } else { -1 }))
             }
-            Kind::Vertical if contact.origin == Origin::Edge && dy < -32.0 => Some(Action::Home),
+            Kind::Vertical if contact.origin == Origin::Edge => {
+                // Respect a reversal and a short deliberate upward flick. A
+                // distance threshold alone closes apps even while pulling back.
+                let projected = dy + contact.velocity.y * 0.18;
+                let home = dy < -SLOP && projected < -72.0 && contact.velocity.y < 120.0;
+                Some(Action::FinishNavigation {
+                    delta: dy,
+                    velocity: contact.velocity.y,
+                    delta_x: dx,
+                    velocity_x: contact.velocity.x,
+                    home,
+                })
+            }
             _ => match action {
                 Some(Action::Pan {
                     delta, velocity, ..
@@ -302,6 +320,47 @@ impl Gestures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn upward_flick_uses_the_release_position_and_velocity() {
+        let now = Instant::now();
+        let mut gestures = Gestures::default();
+        gestures.begin(1, Origin::Edge, Point::new(200., 790.), false, now);
+        gestures.update(1, Point::new(200., 775.), now + Duration::from_millis(20));
+        let release = gestures.end(1, Point::new(220., 750.), now + Duration::from_millis(40));
+        assert!(matches!(release, Some(Action::FinishNavigation {
+            delta: -40.0, delta_x: 20.0, velocity, velocity_x, home: true,
+        }) if velocity < -1000.0 && velocity_x > 900.0));
+    }
+
+    #[test]
+    fn reversing_an_upward_drag_restores_the_application() {
+        let now = Instant::now();
+        let mut gestures = Gestures::default();
+        gestures.begin(1, Origin::Edge, Point::new(200., 790.), false, now);
+        gestures.update(1, Point::new(200., 550.), now + Duration::from_millis(90));
+        let release = gestures.end(1, Point::new(200., 680.), now + Duration::from_millis(160));
+        assert!(
+            matches!(release, Some(Action::FinishNavigation { home: false, velocity, .. }) if velocity > 0.0)
+        );
+    }
+
+    #[test]
+    fn short_slow_pull_does_not_leave_the_application() {
+        let now = Instant::now();
+        let mut gestures = Gestures::default();
+        gestures.begin(1, Origin::Edge, Point::new(200., 790.), false, now);
+        gestures.update(1, Point::new(200., 770.), now + Duration::from_millis(50));
+        let release = gestures.end(1, Point::new(200., 770.), now + Duration::from_millis(180));
+        assert!(matches!(
+            release,
+            Some(Action::FinishNavigation {
+                home: false,
+                velocity: 0.0,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn upper_corner_drag_retains_control_center_ownership_across_the_screen() {
         let now = Instant::now();

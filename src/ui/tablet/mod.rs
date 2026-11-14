@@ -72,6 +72,17 @@ impl Motion {
             motion.duration,
         ));
     }
+    fn animate_application(&mut self, target: f32, now: Instant) {
+        self.sample(now);
+        self.target = target;
+        self.transition = Some(SpringAnimation::new(
+            self.value,
+            target,
+            self.velocity,
+            now,
+            Theme::current().motion.slow.duration,
+        ));
+    }
     fn settle(&mut self, target: f32, now: Instant) {
         self.sample(now);
         self.target = target;
@@ -110,6 +121,7 @@ pub(crate) struct TabletState {
     app_initial_progress: Option<f32>,
     app_x: Motion,
     app_y: Motion,
+    navigation_start: Option<(f32, Point)>,
     navigation_bar: Motion,
     navigation_hide_at: Option<Instant>,
     switch_origin: Option<(ProcessId, Rect)>,
@@ -153,6 +165,7 @@ impl Default for TabletState {
             app_initial_progress: None,
             app_x: Motion::default(),
             app_y: Motion::default(),
+            navigation_start: None,
             navigation_bar: Motion::default(),
             navigation_hide_at: None,
             switch_origin: None,
@@ -320,9 +333,18 @@ impl TabletShell {
         self.flush_window_state();
         self.state.borrow_mut().editing = false;
         self.state.borrow_mut().last_focused = None;
-        self.state.borrow_mut().app_motion.animate(0.0, now);
-        self.state.borrow_mut().app_x.animate(destination.x, now);
-        self.state.borrow_mut().app_y.animate(destination.y, now);
+        self.state
+            .borrow_mut()
+            .app_motion
+            .animate_application(0.0, now);
+        self.state
+            .borrow_mut()
+            .app_x
+            .animate_application(destination.x, now);
+        self.state
+            .borrow_mut()
+            .app_y
+            .animate_application(destination.y, now);
         self.show(Surface::Home, now);
     }
 
@@ -444,10 +466,15 @@ impl TabletShell {
                 state.dragged = None;
             }
             if focused.is_some() && focused != state.last_focused {
+                let returning = state.presented == focused
+                    && state.app_motion.target == 0.0
+                    && state.app_motion.value > 0.0;
                 state.presented = focused;
                 let progress = state.app_initial_progress.take().unwrap_or(0.0);
-                state.app_motion.set(progress);
-                state.app_motion.animate(1.0, now);
+                if !returning {
+                    state.app_motion.set(progress);
+                }
+                state.app_motion.animate_application(1.0, now);
                 state.navigation_bar.set(0.0);
                 state.navigation_hide_at = None;
                 let center = Point::new(
@@ -455,10 +482,12 @@ impl TabletShell {
                     geometry.application.origin.y + geometry.application.size.height * 0.5,
                 );
                 let anchor = state.app_anchor.take().unwrap_or(center);
-                state.app_x.set(anchor.x);
-                state.app_y.set(anchor.y);
-                state.app_x.animate(center.x, now);
-                state.app_y.animate(center.y, now);
+                if !returning {
+                    state.app_x.set(anchor.x);
+                    state.app_y.set(anchor.y);
+                }
+                state.app_x.animate_application(center.x, now);
+                state.app_y.animate_application(center.y, now);
                 state.surface = Surface::Application;
                 state.previous = Surface::Application;
                 state.sheet.set(0.0);
@@ -569,7 +598,32 @@ impl TabletShell {
 
     fn apply(&self, action: Action, geometry: &Geometry, now: Instant) {
         match action {
-            Action::Home => self.home(now, geometry),
+            Action::FinishNavigation {
+                delta,
+                velocity,
+                delta_x,
+                velocity_x,
+                home,
+            } => {
+                // The last input sample must reach presentation even if no
+                // paint occurred between the last move and the release.
+                self.apply(
+                    Action::Navigate {
+                        delta,
+                        velocity,
+                        delta_x,
+                        velocity_x,
+                    },
+                    geometry,
+                    now,
+                );
+                self.state.borrow_mut().navigation_start = None;
+                if home {
+                    self.home(now, geometry);
+                } else {
+                    self.apply(Action::Cancel, geometry, now);
+                }
+            }
             Action::Switcher => {
                 let origin = self.foreground().and_then(|window| {
                     window
@@ -593,22 +647,27 @@ impl TabletShell {
                         state.navigation_bar.animate(1.0, now);
                     }
                     state.navigation_hide_at = Some(now + std::time::Duration::from_millis(1200));
-                    let progress = (-delta / (geometry.bounds.size.height * 0.65)).clamp(0.0, 1.0);
-                    state.app_x.follow(
-                        geometry.application.origin.x
-                            + geometry.application.size.width * 0.5
-                            + delta_x * 0.35,
-                        velocity_x * 0.35,
-                    );
-                    state.app_y.follow(
-                        geometry.application.origin.y
-                            + geometry.application.size.height * 0.5
-                            + delta * 0.35,
-                        velocity * 0.35,
-                    );
+                    let (start_progress, center) = state.navigation_start.unwrap_or((
+                        1.0,
+                        Point::new(
+                            geometry.application.origin.x + geometry.application.size.width * 0.5,
+                            geometry.application.origin.y + geometry.application.size.height * 0.5,
+                        ),
+                    ));
+                    let minimum = start_progress.min(0.35);
+                    let progress =
+                        (start_progress + delta / geometry.bounds.size.height).clamp(minimum, 1.0);
+                    state
+                        .app_x
+                        .follow(center.x + delta_x * 0.35, velocity_x * 0.35);
+                    state.app_y.follow(center.y + delta * 0.35, velocity * 0.35);
                     state.app_motion.follow(
-                        1.0 - progress * 0.65,
-                        velocity / geometry.bounds.size.height,
+                        progress,
+                        if progress > minimum && progress < 1.0 {
+                            velocity / geometry.bounds.size.height
+                        } else {
+                            0.0
+                        },
                     );
                 }
             }
@@ -814,6 +873,7 @@ impl TabletShell {
                 let maximum = self.maximum_scroll(geometry);
                 let mut state = self.state.borrow_mut();
                 state.dragged = None;
+                state.navigation_start = None;
                 let target =
                     model::snap(state.scroll.value, 0.0, geometry.canvas.size.width, maximum);
                 state.scroll.settle(target, now);
@@ -825,12 +885,12 @@ impl TabletShell {
                     state.sheet.animate(target, now);
                 }
                 if state.surface == Surface::Application {
-                    state.app_motion.animate(1.0, now);
-                    state.app_x.animate(
+                    state.app_motion.animate_application(1.0, now);
+                    state.app_x.animate_application(
                         geometry.application.origin.x + geometry.application.size.width * 0.5,
                         now,
                     );
-                    state.app_y.animate(
+                    state.app_y.animate_application(
                         geometry.application.origin.y + geometry.application.size.height * 0.5,
                         now,
                     );
@@ -854,7 +914,8 @@ impl TabletShell {
                     .find(|app| app.bundle_id == bundle)
                     .cloned()
                 {
-                    self.state.borrow_mut().app_anchor = Some(point);
+                    let anchor = self.launch_anchor(&bundle, point, geometry);
+                    self.state.borrow_mut().app_anchor = Some(anchor);
                     if self.state.borrow().surface == Surface::Switcher {
                         if let Some(index) = self
                             .entries()
@@ -868,8 +929,10 @@ impl TabletShell {
                                 card.origin.y + card.size.height * 0.5,
                             ));
                             state.app_initial_progress = Some(
-                                ((card.size.width / geometry.application.size.width - 0.08) / 0.92)
-                                    .clamp(0.0, 1.0),
+                                ((card.size.width / geometry.application.size.width
+                                    - geometry.application_icon_scale())
+                                    / (1.0 - geometry.application_icon_scale()).max(0.01))
+                                .clamp(0.0, 1.0),
                             );
                         }
                     }
@@ -998,6 +1061,18 @@ impl TabletShell {
             let editing = state.editing;
             let primary = state.gestures.begin(id, origin, position, editing, now);
             if primary {
+                state.navigation_start =
+                    if origin == Origin::Edge && surface == Surface::Application {
+                        state.app_motion.sample(now);
+                        state.app_x.sample(now);
+                        state.app_y.sample(now);
+                        Some((
+                            state.app_motion.value,
+                            Point::new(state.app_x.value, state.app_y.value),
+                        ))
+                    } else {
+                        None
+                    };
                 state.pan_start = if surface == Surface::Switcher {
                     state.switch_scroll.value
                 } else {
@@ -1414,5 +1489,41 @@ impl TabletShell {
             }
             _ => EventResult::Ignored,
         }
+    }
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn reversing_application_motion_preserves_sampled_position_and_velocity() {
+        let start = Instant::now();
+        let mut motion = Motion::default();
+        motion.set(720.0);
+        motion.animate_application(100.0, start);
+        let interrupt = start + Duration::from_millis(55);
+        motion.sample(interrupt);
+        let (position, velocity) = (motion.value, motion.velocity);
+        assert!(position > 100.0 && position < 720.0);
+        assert!(velocity < 0.0);
+        motion.animate_application(720.0, interrupt);
+        motion.sample(interrupt);
+        assert!((motion.value - position).abs() < 0.001);
+        assert!((motion.velocity - velocity).abs() < 0.001);
+        motion.sample(interrupt + Duration::from_secs(2));
+        assert!((motion.value - 720.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn releasing_a_drag_preserves_its_velocity_at_the_handoff() {
+        let now = Instant::now();
+        let mut motion = Motion::default();
+        motion.follow(0.65, -1.25);
+        motion.animate_application(0.0, now);
+        motion.sample(now);
+        assert!((motion.value - 0.65).abs() < 0.00001);
+        assert!((motion.velocity + 1.25).abs() < 0.00001);
     }
 }

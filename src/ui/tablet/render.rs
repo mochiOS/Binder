@@ -83,6 +83,9 @@ impl Geometry {
             dock_pitch,
         }
     }
+    pub fn application_icon_scale(&self) -> f32 {
+        (self.icon / self.application.size.width.max(1.0)).clamp(0.01, 1.0)
+    }
     pub fn home_cell(&self, slot: Slot, scroll: f32) -> Rect {
         Rect::new(
             self.canvas.origin.x + slot.column as f32 * self.pitch - scroll,
@@ -214,10 +217,75 @@ impl TabletShell {
         );
         PaintTransform {
             anchor: center,
-            scale: 0.08 + 0.92 * progress,
+            scale: geometry.application_icon_scale()
+                + (1.0 - geometry.application_icon_scale()) * progress,
             offset: Point::new(state.app_x.value - center.x, state.app_y.value - center.y),
             opacity: (progress * 2.0).min(1.0),
         }
+    }
+
+    pub(super) fn launch_anchor(&self, bundle: &str, point: Point, geometry: &Geometry) -> Point {
+        let state = self.state.borrow();
+        let icon = match state.surface {
+            Surface::Home if geometry.dock.contains(point) => {
+                let index = ((point.y - geometry.dock.origin.y - geometry.gap * 0.5
+                    + state.dock_scroll)
+                    / geometry.dock_pitch)
+                    .floor();
+                let size = geometry.dock.size.width - geometry.gap;
+                Rect::new(
+                    geometry.dock.origin.x + geometry.gap * 0.5,
+                    geometry.dock.origin.y + geometry.gap * 0.5 + index * geometry.dock_pitch
+                        - state.dock_scroll,
+                    size,
+                    size,
+                )
+            }
+            Surface::Home => geometry.icon_rect(
+                geometry.home_cell(geometry.slot(point, state.scroll.value), state.scroll.value),
+            ),
+            Surface::Library => {
+                let apps = self.resources.apps.get();
+                let filtered =
+                    super::super::app_library::matching_app_indices(&apps, &state.search.value());
+                let Some(index) = filtered
+                    .iter()
+                    .position(|index| apps[*index].bundle_id == bundle)
+                else {
+                    return point;
+                };
+                let cell = geometry.drawer_cell(index, state.app_scroll);
+                Rect::new(
+                    cell.origin.x + (cell.size.width - geometry.icon) * 0.5,
+                    cell.origin.y + 8.0,
+                    geometry.icon,
+                    geometry.icon,
+                )
+            }
+            Surface::Folder(id) => {
+                let scroll = state.folder_scroll;
+                drop(state);
+                let Some(index) = self
+                    .folder_applications(id)
+                    .iter()
+                    .position(|id| id == bundle)
+                else {
+                    return point;
+                };
+                let cell = geometry.folder_cell(index, scroll);
+                Rect::new(
+                    cell.origin.x + (cell.size.width - geometry.icon) * 0.5,
+                    cell.origin.y + 8.0,
+                    geometry.icon,
+                    geometry.icon,
+                )
+            }
+            _ => return point,
+        };
+        Point::new(
+            icon.origin.x + icon.size.width * 0.5,
+            icon.origin.y + icon.size.height * 0.5,
+        )
     }
 
     pub(super) fn home_destination(&self, geometry: &Geometry) -> Point {
@@ -1195,6 +1263,15 @@ impl TabletShell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn application_starts_at_the_home_icon_width_in_each_orientation() {
+        for (width, height) in [(1280., 800.), (800., 1280.), (640., 480.)] {
+            let geometry = Geometry::new(Rect::new(0., 0., width, height), &Theme::LIGHT, 7);
+            let width = geometry.application.size.width * geometry.application_icon_scale();
+            assert!((width - geometry.icon).abs() < 0.001);
+        }
+    }
+
     #[test]
     fn icon_footprint_grows_with_the_logical_viewport() {
         let small = Geometry::new(Rect::new(0.0, 0.0, 800.0, 600.0), &Theme::LIGHT, 7);
