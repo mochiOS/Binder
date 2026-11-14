@@ -11,8 +11,10 @@ use viewkit::prelude::*;
 use viewkit::typography::{TextMeasurer, Typography};
 use viewkit::view::PaintContext;
 
+use crate::platform::{NativeWindow, ProcessId, RemoteWindowId};
 use crate::ui::window_decoration::{TITLE_BAR_HEIGHT as VIEW_TITLE_BAR_HEIGHT, WindowDecoration};
 use crate::window::{WindowControl, WindowInteraction};
+use mochios_viewkit_gpu_protocol::window_management as wm;
 
 const COMPOSITOR_SERVICE_NAME: &str = "compositor.service";
 const OP_ATTACH_BUFFER: u32 = 2;
@@ -84,9 +86,213 @@ pub(super) struct DecorationManager {
     compositor: u64,
     metadata_endpoint: u64,
     decorations: Vec<Decoration>,
+    work_area: Option<(Rect, f64)>,
+    windows: Vec<NativeWindow>,
 }
 
 impl DecorationManager {
+    pub(super) fn set_work_area(
+        &mut self,
+        area: Option<Rect>,
+        scale: f64,
+    ) -> Result<(), DecorationError> {
+        if !scale.is_finite()
+            || scale <= 0.0
+            || area.is_some_and(|area| {
+                area.is_empty()
+                    || ![
+                        area.origin.x,
+                        area.origin.y,
+                        area.size.width,
+                        area.size.height,
+                    ]
+                    .iter()
+                    .all(|v| v.is_finite())
+            })
+        {
+            return Err(DecorationError(22));
+        }
+        if area.is_none() && self.work_area.is_some() {
+            for window in &self.windows {
+                ipc_call_status(
+                    self.compositor,
+                    &wm::Present {
+                        window: window.window.0,
+                        flags: 0,
+                        bounds: wm::Bounds {
+                            x: 0,
+                            y: 0,
+                            width: 0,
+                            height: 0,
+                        },
+                    }
+                    .encode(),
+                )?;
+            }
+            self.windows.clear();
+        }
+        self.work_area = area.map(|area| (area, scale));
+        Ok(())
+    }
+
+    fn physical_work_area(&self) -> Option<wm::Bounds> {
+        let (area, scale) = self.work_area?;
+        let left = (f64::from(area.origin.x) * scale).round() as i32;
+        let top = (f64::from(area.origin.y) * scale).round() as i32;
+        let right = (f64::from(area.origin.x + area.size.width) * scale).round() as i32;
+        let bottom = (f64::from(area.origin.y + area.size.height) * scale).round() as i32;
+        Some(wm::Bounds {
+            x: left,
+            y: top,
+            width: right.saturating_sub(left) as u32,
+            height: bottom.saturating_sub(top) as u32,
+        })
+    }
+
+    pub(super) fn snapshot(&mut self) -> Result<Option<Vec<NativeWindow>>, DecorationError> {
+        let Some((area, scale)) = self.work_area else {
+            return Ok(None);
+        };
+        let mut reply = [0; wm::MAX_REPLY];
+        let request = wm::SNAPSHOT.to_le_bytes();
+        let message = syscall_result(syscall::call5(
+            syscall::SyscallNumber::IpcCall,
+            self.compositor,
+            request.as_ptr() as u64,
+            request.len() as u64,
+            reply.as_mut_ptr() as u64,
+            reply.len() as u64,
+        ))?;
+        let length = (message & 0xffff_ffff) as usize;
+        let records = wm::snapshot_records(reply.get(..length).ok_or(DecorationError(5))?)
+            .ok_or(DecorationError(5))?;
+        let bounds = self.physical_work_area().ok_or(DecorationError(22))?;
+        let mut windows = Vec::new();
+        for record in records.chunks_exact(wm::RECORD_LEN) {
+            let info = wm::WindowInfo::decode(record).ok_or(DecorationError(5))?;
+            let process = u32::try_from(info.process).map_err(|_| DecorationError(5))?;
+            let mut window = NativeWindow {
+                process_id: ProcessId(process),
+                window: RemoteWindowId(info.token),
+                title: info.title.to_owned(),
+                frame: Rect::new(
+                    info.bounds.x as f32 / scale as f32,
+                    info.bounds.y as f32 / scale as f32,
+                    info.bounds.width as f32 / scale as f32,
+                    info.bounds.height as f32 / scale as f32,
+                ),
+                focused: info.flags & wm::FOCUSED != 0,
+                minimized: info.flags & wm::MINIMIZED != 0,
+                resizable: info.flags & wm::RESIZABLE != 0,
+            };
+            if info.flags & wm::PROTECTED == 0
+                && (info.flags & wm::MANAGED == 0 || info.bounds != bounds)
+            {
+                let flags = wm::LEASE | if window.focused { wm::VISIBLE } else { 0 };
+                // Failure leaves the authoritative snapshot intact; in particular,
+                // a modal prompt is never pretended to have been hidden.
+                let command = wm::Present {
+                    window: info.token,
+                    flags,
+                    bounds,
+                };
+                match ipc_call_status(self.compositor, &command.encode()) {
+                    Ok(()) => {
+                        window.frame = area;
+                        window.minimized = !window.focused;
+                    }
+                    Err(error) if error.0 == 11 => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            windows.push(window);
+        }
+        self.windows = windows.clone();
+        Ok(Some(windows))
+    }
+
+    pub(super) fn owns(&self, process: ProcessId, token: RemoteWindowId) -> bool {
+        self.work_area.is_some()
+            && self
+                .windows
+                .iter()
+                .any(|window| window.process_id == process && window.window == token)
+    }
+
+    pub(super) fn focus(
+        &self,
+        process: ProcessId,
+        token: RemoteWindowId,
+        focused: bool,
+    ) -> Result<(), DecorationError> {
+        if !self.owns(process, token) {
+            return Err(DecorationError(13));
+        }
+        let bounds = self.physical_work_area().ok_or(DecorationError(22))?;
+        ipc_call_status(
+            self.compositor,
+            &wm::Present {
+                window: token.0,
+                flags: wm::LEASE
+                    | if focused {
+                        wm::VISIBLE | wm::ACTIVATE
+                    } else {
+                        0
+                    },
+                bounds,
+            }
+            .encode(),
+        )
+    }
+
+    pub(super) fn close(
+        &self,
+        process: ProcessId,
+        token: RemoteWindowId,
+    ) -> Result<(), DecorationError> {
+        if !self.owns(process, token) {
+            return Err(DecorationError(13));
+        }
+        token_request(self.compositor, wm::CLOSE, token.0)
+    }
+
+    pub(super) fn resize(
+        &self,
+        process: ProcessId,
+        token: RemoteWindowId,
+    ) -> Result<(), DecorationError> {
+        let window = self
+            .windows
+            .iter()
+            .find(|window| {
+                self.work_area.is_some() && window.process_id == process && window.window == token
+            })
+            .ok_or(DecorationError(13))?;
+        let bounds = self.physical_work_area().ok_or(DecorationError(22))?;
+        ipc_call_status(
+            self.compositor,
+            &wm::Present {
+                window: token.0,
+                flags: wm::LEASE | if window.minimized { 0 } else { wm::VISIBLE },
+                bounds,
+            }
+            .encode(),
+        )
+    }
+
+    pub(super) fn activate(&self, process: ProcessId) -> Result<bool, DecorationError> {
+        let Some(window) = self
+            .windows
+            .iter()
+            .rev()
+            .find(|window| window.process_id == process)
+        else {
+            return Ok(false);
+        };
+        self.focus(process, window.window, true)?;
+        Ok(true)
+    }
+
     pub(super) fn windows_overlap(&self, area: Rect) -> Result<bool, DecorationError> {
         self.query_overlap(area, 4)
     }
@@ -156,12 +362,17 @@ impl DecorationManager {
             compositor,
             metadata_endpoint,
             decorations: Vec::new(),
+            work_area: None,
+            windows: Vec::new(),
         })
     }
 
     pub(super) fn handle_message(&mut self, event: &[u8]) -> Result<bool, DecorationError> {
         match read_u32(event, 0) {
             Some(DECOR_EVENT_WINDOW) => {
+                if self.work_area.is_some() {
+                    return Ok(true);
+                }
                 if let Some((window, width, title, style)) = parse_window_event(event) {
                     if let Some(decoration) = self
                         .decorations

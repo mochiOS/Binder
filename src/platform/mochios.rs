@@ -509,6 +509,97 @@ impl Default for MochiOsPlatform {
 }
 
 impl DesktopPlatform for MochiOsPlatform {
+    fn set_fullscreen_work_area(
+        &mut self,
+        area: Option<viewkit::prelude::Rect>,
+        scale: f64,
+    ) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        {
+            if self.decoration_manager.is_none() {
+                self.decoration_manager = Some(
+                    decoration::DecorationManager::connect()
+                        .map_err(|_| PlatformError::ServiceUnavailable)?,
+                );
+                self.decoration_connect_attempted = true;
+            }
+            return self
+                .decoration_manager
+                .as_mut()
+                .ok_or(PlatformError::ServiceUnavailable)?
+                .set_work_area(area, scale)
+                .map_err(|_| PlatformError::InvalidResponse);
+        }
+        #[cfg(not(target_os = "mochios"))]
+        {
+            let _ = (area, scale);
+            Err(PlatformError::UnsupportedOperation)
+        }
+    }
+
+    fn native_window_snapshot(
+        &mut self,
+    ) -> Result<Option<Vec<super::NativeWindow>>, PlatformError> {
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = self.decoration_manager.as_mut() {
+            return manager
+                .snapshot()
+                .map_err(|_| PlatformError::TransportFailure);
+        }
+        Ok(None)
+    }
+
+    fn notify_window_resized(
+        &mut self,
+        notification: super::WindowResizedNotification,
+    ) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = self
+            .decoration_manager
+            .as_ref()
+            .filter(|manager| manager.owns(notification.process_id, notification.window))
+        {
+            return manager
+                .resize(notification.process_id, notification.window)
+                .map_err(|_| PlatformError::PermissionDenied);
+        }
+        if self
+            .children
+            .get(&notification.process_id)
+            .is_some_and(|child| child.windows.contains(&notification.window))
+        {
+            return Ok(()); // Internal renderer already consumes Binder's layout.
+        }
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn notify_window_focus_changed(
+        &mut self,
+        notification: super::WindowFocusChangedNotification,
+    ) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = self
+            .decoration_manager
+            .as_ref()
+            .filter(|manager| manager.owns(notification.process_id, notification.window))
+        {
+            return manager
+                .focus(
+                    notification.process_id,
+                    notification.window,
+                    notification.focused,
+                )
+                .map_err(|_| PlatformError::PermissionDenied);
+        }
+        if self
+            .children
+            .get(&notification.process_id)
+            .is_some_and(|child| child.windows.contains(&notification.window))
+        {
+            return Ok(());
+        }
+        Err(PlatformError::UnsupportedOperation)
+    }
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError> {
         Ok(self.system_bar.clone())
     }
@@ -659,6 +750,16 @@ impl DesktopPlatform for MochiOsPlatform {
         process_id: ProcessId,
         window: RemoteWindowId,
     ) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = self
+            .decoration_manager
+            .as_ref()
+            .filter(|manager| manager.owns(process_id, window))
+        {
+            return manager
+                .close(process_id, window)
+                .map_err(|_| PlatformError::PermissionDenied);
+        }
         let Some(child) = self.children.get_mut(&process_id) else {
             return Ok(());
         };
@@ -886,6 +987,14 @@ impl DesktopPlatform for MochiOsPlatform {
     fn activate_application(&self, process_id: ProcessId) -> Result<(), PlatformError> {
         #[cfg(target_os = "mochios")]
         {
+            if let Some(manager) = self.decoration_manager.as_ref() {
+                if manager
+                    .activate(process_id)
+                    .map_err(|_| PlatformError::PermissionDenied)?
+                {
+                    return Ok(());
+                }
+            }
             mochi_user_platform::workspace::activate_application(u64::from(process_id.0))
                 .map_err(|_| PlatformError::TransportFailure)
         }

@@ -5,6 +5,7 @@ mod dock_preferences;
 mod ipc;
 mod platform;
 mod session;
+mod shell;
 mod startup;
 mod ui;
 mod window;
@@ -81,6 +82,13 @@ fn main() -> Result<(), ViewKitError> {
             value.starts_with(SERVICE_READY_ARGUMENT_PREFIX)
                 || value.starts_with(session::USER_ARGUMENT_PREFIX)
         }) {
+            continue;
+        }
+        if let Some(mode) = text.and_then(|value| value.strip_prefix("--shell-mode=")) {
+            if shell::ShellMode::parse(mode).is_none() {
+                eprintln!("invalid Binder shell mode: {mode}");
+                return Ok(());
+            }
             continue;
         }
         if role.is_none()

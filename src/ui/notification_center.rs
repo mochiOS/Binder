@@ -131,6 +131,7 @@ fn grouped_entries(
 }
 
 pub(crate) struct NotificationCenterLayer<C> {
+    external_transition: bool,
     content: C,
     open: State<bool>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
@@ -139,6 +140,7 @@ pub(crate) struct NotificationCenterLayer<C> {
     pressed: Cell<Option<Hit>>,
     icon_cache: RefCell<HashMap<PathBuf, ImageData>>,
     interaction: Rc<NotificationCenterInteraction>,
+    activation: Rc<RefCell<super::app_library::PendingAppActivation>>,
 }
 
 impl<C: View> NotificationCenterLayer<C> {
@@ -148,8 +150,10 @@ impl<C: View> NotificationCenterLayer<C> {
         platform: Rc<RefCell<dyn DesktopPlatform>>,
         apps: State<Vec<AppInfo>>,
         interaction: Rc<NotificationCenterInteraction>,
+        activation: Rc<RefCell<super::app_library::PendingAppActivation>>,
     ) -> Self {
         Self {
+            external_transition: false,
             content,
             open,
             platform,
@@ -158,7 +162,17 @@ impl<C: View> NotificationCenterLayer<C> {
             pressed: Cell::new(None),
             icon_cache: RefCell::new(HashMap::new()),
             interaction,
+            activation,
         }
+    }
+
+    pub(super) fn with_external_transition(mut self) -> Self {
+        self.external_transition = true;
+        self
+    }
+
+    pub(super) fn banner_contains(&self,bounds:Rect,position:Point)->bool {
+        self.interaction.banner.borrow().as_ref().is_some_and(|banner|Self::banner_rect(bounds,*banner,Instant::now()).0.contains(position))
     }
 
     fn banner_damage(bounds: Rect) -> Rect {
@@ -337,6 +351,13 @@ impl<C: View> NotificationCenterLayer<C> {
     }
 
     fn panel_presentation(&self, bounds: Rect, now: Instant) -> (Rect, f32, Option<Instant>) {
+        if self.external_transition {
+            return (
+                Self::panel(bounds),
+                if self.open.get() { 1.0 } else { 0.0 },
+                None,
+            );
+        }
         let (amount, next) = self.interaction.panel_motion.borrow_mut().sample(
             self.open.get(),
             Theme::current().motion.standard,
@@ -789,12 +810,7 @@ impl<C: View> NotificationCenterLayer<C> {
         let Some(app) = app else {
             return;
         };
-        let mut platform = self.platform.borrow_mut();
-        if let Some(process) = platform.process_id_for_bundle(&app.bundle_id) {
-            let _ = platform.activate_application(process);
-        } else {
-            let _ = platform.launch_app(&app);
-        }
+        self.activation.borrow_mut().queue(app);
         self.open.set(false);
     }
 }

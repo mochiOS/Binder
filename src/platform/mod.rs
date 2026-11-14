@@ -46,6 +46,18 @@ pub struct WindowFocusChangedNotification {
     pub focused: bool,
 }
 
+/// Authoritative windows composited outside Binder's own draw list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeWindow {
+    pub process_id: ProcessId,
+    pub window: RemoteWindowId,
+    pub title: String,
+    pub frame: viewkit::prelude::Rect,
+    pub focused: bool,
+    pub minimized: bool,
+    pub resizable: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClockState {
     pub date: String,
@@ -219,6 +231,19 @@ pub enum PlatformError {
 }
 
 pub trait DesktopPlatform {
+    /// Presentation policy from the shell, independent of application identity.
+    /// None leaves normal desktop placement in force.
+    fn set_fullscreen_work_area(
+        &mut self,
+        _area: Option<viewkit::prelude::Rect>,
+        _scale_factor: f64,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
+    }
+
+    fn native_window_snapshot(&mut self) -> Result<Option<Vec<NativeWindow>>, PlatformError> {
+        Ok(None)
+    }
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError>;
 
     fn native_background_color(

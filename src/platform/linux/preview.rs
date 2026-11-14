@@ -110,6 +110,7 @@ struct Application {
 }
 
 pub(super) struct PreviewDesktop {
+    pub fullscreen_work_area: Option<viewkit::geometry::Rect>,
     listener: UnixListener,
     directory: PathBuf,
     children: HashMap<ProcessId, Application>,
@@ -142,6 +143,7 @@ impl PreviewDesktop {
         let listener = UnixListener::bind(directory.join("viewkit.sock"))?;
         listener.set_nonblocking(true)?;
         Ok(Self {
+            fullscreen_work_area: None,
             listener,
             directory,
             children: HashMap::new(),
@@ -522,6 +524,21 @@ impl PreviewDesktop {
                                         && app.local_windows.insert(id) =>
                                 {
                                     let key = renderer(pid, id);
+                                    let size = self.fullscreen_work_area.map_or(config.size, |area| area.size);
+                                    if self.fullscreen_work_area.is_some() {
+                                        // Negotiate the shell's initial viewport before the
+                                        // normal window-model registration round trip.
+                                        let resized = PlatformEvent::Resized {
+                                            viewport: viewkit::platform::linux::preview::viewport(
+                                                size.width.round().max(1.0) as u32,
+                                                size.height.round().max(1.0) as u32,
+                                            ),
+                                        };
+                                        if connection.borrow_mut().send(Packet::Event { id, event: resized }).is_err() {
+                                            exited.push(pid);
+                                            break;
+                                        }
+                                    }
                                     SURFACES.with(|surfaces| {
                                         surfaces.borrow_mut().insert(
                                             key.clone(),
@@ -540,9 +557,9 @@ impl PreviewDesktop {
                                         process_id: pid,
                                         renderer: key,
                                         title: config.title,
-                                        width: config.size.width.round() as u32,
-                                        height: config.size.height.round() as u32
-                                            + crate::ui::window_decoration::TITLE_BAR_HEIGHT as u32,
+                                        width: size.width.round() as u32,
+                                        height: size.height.round() as u32
+                                            + if self.fullscreen_work_area.is_some(){0}else{crate::ui::window_decoration::TITLE_BAR_HEIGHT as u32},
                                         resizable: config.resizable,
                                     });
                                 }

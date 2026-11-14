@@ -144,21 +144,15 @@ pub(crate) fn view(
     >,
     apps: State<Vec<AppInfo>>,
 ) -> impl View + 'static {
-    let content: Box<dyn View + 'static> = match window.renderer.as_str() {
-        apps::ABOUT_ENTRY => Box::new(about::view()),
-        apps::LAUNCH_FAILURE_ENTRY => Box::new(launch_failure::view(
-            launch_failure_state.unwrap_or_default(),
-            window.id,
-            windows,
-        )),
-        apps::CONTROL_CENTER_EDITOR_ENTRY => Box::new(control_center_editor::view(
-            control_center_preferences,
-            control_center_editor_interaction,
-            apps,
-        )),
-        apps::TEST_ENTRY => Box::new(test::view(test_state.unwrap_or_default())),
-        _ => remote_content_view(&window.renderer),
-    };
+    let content = content(
+        window,
+        test_state,
+        launch_failure_state,
+        windows,
+        control_center_preferences,
+        control_center_editor_interaction,
+        apps,
+    );
 
     let mut decoration =
         window_decoration::WindowDecoration::new(window.title.clone(), window.interaction)
@@ -185,6 +179,35 @@ pub(crate) fn view(
     }
 }
 
+/// Content and lifecycle are shared by floating and fullscreen presentations.
+pub(super) fn content(
+    window: &DesktopWindow,
+    test_state: Option<test::TestWindowState>,
+    launch_failure_state: Option<launch_failure::LaunchFailureWindowState>,
+    windows: State<crate::window::DesktopWindows>,
+    control_center_preferences: Rc<RefCell<ControlCenterPreferences>>,
+    control_center_editor_interaction: Rc<
+        RefCell<control_center_editor::ControlCenterEditorInteraction>,
+    >,
+    apps: State<Vec<AppInfo>>,
+) -> Box<dyn View + 'static> {
+    match window.renderer.as_str() {
+        apps::ABOUT_ENTRY => Box::new(about::view()),
+        apps::LAUNCH_FAILURE_ENTRY => Box::new(launch_failure::view(
+            launch_failure_state.unwrap_or_default(),
+            window.id,
+            windows,
+        )),
+        apps::CONTROL_CENTER_EDITOR_ENTRY => Box::new(control_center_editor::view(
+            control_center_preferences,
+            control_center_editor_interaction,
+            apps,
+        )),
+        apps::TEST_ENTRY => Box::new(test::view(test_state.unwrap_or_default())),
+        _ => remote_content_view(&window.renderer),
+    }
+}
+
 pub(crate) fn corner_radius(window: &DesktopWindow) -> f32 {
     if window.restore_frame.is_some() {
         0.0
@@ -198,6 +221,9 @@ pub(crate) fn contains(window: &DesktopWindow, point: Point) -> bool {
 }
 
 fn remote_content_view(renderer: &str) -> Box<dyn View> {
+    if renderer == "kagami" {
+        return Box::new(viewkit::components::EmptyView);
+    }
     #[cfg(target_os = "linux")]
     if let Some(surface) = super::host_surface::HostSurface::for_renderer(renderer) {
         return Box::new(surface);

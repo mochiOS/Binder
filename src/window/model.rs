@@ -28,6 +28,9 @@ pub struct DesktopWindow {
 }
 
 impl DesktopWindow {
+    pub fn externally_composited(&self) -> bool {
+        self.renderer == "kagami"
+    }
     pub fn integrated(&self) -> bool {
         self.decoration
             .is_some_and(|c| c.mode == viewkit::decoration::DecorationMode::Integrated)
@@ -118,6 +121,63 @@ impl Default for DesktopWindows {
 }
 
 impl DesktopWindows {
+    /// Reconcile compositor-owned windows without inventing remote IDs or
+    /// spawning an application again. Internal Binder windows are independent.
+    pub fn synchronize_native(&mut self, snapshot: &[crate::platform::NativeWindow]) -> bool {
+        let before = self.clone();
+        self.windows.retain(|window| {
+            !window.externally_composited()
+                || snapshot.iter().any(|native| {
+                    window.process_id == Some(native.process_id)
+                        && window.remote_window == Some(native.window)
+                })
+        });
+        for native in snapshot {
+            let index = self.windows.iter().position(|window| {
+                window.externally_composited()
+                    && window.process_id == Some(native.process_id)
+                    && window.remote_window == Some(native.window)
+            });
+            let index = index.unwrap_or_else(|| {
+                let id = self.allocate_id();
+                self.windows.push(DesktopWindow {
+                    id,
+                    title: native.title.clone(),
+                    frame: native.frame,
+                    resizable: native.resizable,
+                    minimized: native.minimized,
+                    close_requested: false,
+                    renderer: String::from("kagami"),
+                    process_id: Some(native.process_id),
+                    remote_window: Some(native.window),
+                    interaction: WindowInteraction::default(),
+                    restore_frame: None,
+                    decoration: None,
+                });
+                self.windows.len() - 1
+            });
+            let window = &mut self.windows[index];
+            window.title.clone_from(&native.title);
+            window.frame = native.frame;
+            window.minimized = native.minimized;
+            window.resizable = native.resizable;
+            // Close is a request, not a forceful removal. A surviving window
+            // may have cancelled its unsaved-document confirmation.
+            window.close_requested = false;
+            if native.focused && !native.minimized {
+                self.focused = Some(window.id);
+            }
+        }
+        if self.focused.is_some_and(|id| {
+            !self
+                .windows
+                .iter()
+                .any(|window| window.id == id && !window.minimized)
+        }) {
+            self.focused = None;
+        }
+        self.windows != before.windows || self.focused != before.focused
+    }
     /// Keep every window reachable when the display is smaller than its
     /// requested size (or when the display resolution changes).
     pub fn fit_to_work_area(&mut self, area: Rect) -> bool {
@@ -771,6 +831,48 @@ pub struct WindowDrag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compositor_snapshots_preserve_real_tokens_and_internal_windows() {
+        let mut desktop = DesktopWindows::default();
+        let internal = desktop.open_control_center_editor();
+        let snapshot = crate::platform::NativeWindow {
+            process_id: ProcessId(41),
+            window: RemoteWindowId(9001),
+            title: "Files".into(),
+            frame: Rect::new(0.0, 32.0, 1280.0, 768.0),
+            focused: true,
+            minimized: false,
+            resizable: true,
+        };
+        assert!(desktop.synchronize_native(&[snapshot.clone()]));
+        let native = desktop
+            .windows
+            .iter()
+            .find(|window| window.externally_composited())
+            .unwrap();
+        let id = native.id;
+        assert_eq!(native.remote_window, Some(RemoteWindowId(9001)));
+        assert_eq!(desktop.focused, Some(id));
+        assert!(!desktop.synchronize_native(&[snapshot.clone()]));
+        desktop.synchronize_native(&[crate::platform::NativeWindow {
+            focused: false,
+            minimized: true,
+            ..snapshot
+        }]);
+        assert_eq!(desktop.focused, None);
+        assert_eq!(
+            desktop
+                .windows
+                .iter()
+                .find(|window| window.externally_composited())
+                .unwrap()
+                .id,
+            id
+        );
+        assert!(desktop.synchronize_native(&[]));
+        assert_eq!(desktop.windows.len(), 1);
+        assert_eq!(desktop.windows[0].id, internal);
+    }
 
     #[test]
     fn initial_fit_preserves_user_movement_when_other_windows_open_or_close() {

@@ -54,7 +54,7 @@ impl PendingAppActivation {
         self.closed_frame_drawn = false;
     }
 
-    fn advance(&mut self) -> PendingActivationStep {
+    pub(super) fn advance(&mut self) -> PendingActivationStep {
         if self.app.is_none() {
             return PendingActivationStep::Idle;
         }
@@ -66,7 +66,7 @@ impl PendingAppActivation {
     }
 }
 
-enum PendingActivationStep {
+pub(super) enum PendingActivationStep {
     Idle,
     PresentClosedFrame,
     Launch(AppInfo),
@@ -359,39 +359,13 @@ where
     }
 
     fn perform_activation(&self, app: &AppInfo) {
-        let running_process = self.platform.borrow().process_id_for_bundle(&app.bundle_id);
-        let process_id = match running_process {
-            Some(process_id) => process_id,
-            None => match self.platform.borrow_mut().launch_app(app) {
-                Ok(process_id) => {
-                    self.fast_poll_until
-                        .set(Some(Instant::now() + Duration::from_secs(5)));
-                    process_id
-                }
-                Err(error) => {
-                    eprintln!("failed to launch app {}: {error:?}", app.bundle_id);
-                    let state = super::launch_failure::LaunchFailureWindowState::new(app, error);
-                    let mut window_id = None;
-                    self.windows.update(|desktop| {
-                        window_id = Some(desktop.open_launch_failure());
-                    });
-                    if let Some(window_id) = window_id {
-                        self.launch_failure_states
-                            .borrow_mut()
-                            .insert(window_id, state);
-                    }
-                    return;
-                }
-            },
-        };
-        if running_process.is_some()
-            && let Err(error) = self.platform.borrow().activate_application(process_id)
-        {
-            eprintln!("failed to activate app {}: {error:?}", app.bundle_id);
-        }
-        self.windows.update(|desktop| {
-            desktop.activate_process(process_id);
-        });
+        perform_activation(
+            app,
+            &self.platform,
+            &self.windows,
+            &self.fast_poll_until,
+            &self.launch_failure_states,
+        );
     }
 
     fn advance_pending_activation(&self, context: &mut PaintContext<'_>) {
@@ -839,7 +813,7 @@ pub(super) fn paint_fallback_icon(bounds: Rect, context: &mut PaintContext<'_>) 
         .paint(bounds, context);
 }
 
-fn matching_app_indices(apps: &[AppInfo], query: &str) -> Vec<usize> {
+pub(super) fn matching_app_indices(apps: &[AppInfo], query: &str) -> Vec<usize> {
     let query = query.trim().to_lowercase();
     apps.iter()
         .enumerate()
@@ -958,4 +932,46 @@ mod tests {
         assert_eq!(actual, expected);
         assert!(matches!(pending.advance(), PendingActivationStep::Idle));
     }
+}
+
+/// Shared launch/activation path for both shell presentations.
+pub(super) fn perform_activation(
+    app: &AppInfo,
+    platform: &Rc<RefCell<dyn DesktopPlatform>>,
+    windows: &State<DesktopWindows>,
+    fast_poll_until: &Rc<Cell<Option<Instant>>>,
+    launch_failure_states: &Rc<
+        RefCell<HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>>,
+    >,
+) {
+    let running_process = platform.borrow().process_id_for_bundle(&app.bundle_id);
+    let process_id = match running_process {
+        Some(process_id) => process_id,
+        None => match platform.borrow_mut().launch_app(app) {
+            Ok(process_id) => {
+                fast_poll_until.set(Some(Instant::now() + Duration::from_secs(5)));
+                process_id
+            }
+            Err(error) => {
+                eprintln!("failed to launch app {}: {error:?}", app.bundle_id);
+                let state = super::launch_failure::LaunchFailureWindowState::new(app, error);
+                let mut window_id = None;
+                windows.update(|desktop| {
+                    window_id = Some(desktop.open_launch_failure());
+                });
+                if let Some(window_id) = window_id {
+                    launch_failure_states.borrow_mut().insert(window_id, state);
+                }
+                return;
+            }
+        },
+    };
+    if running_process.is_some()
+        && let Err(error) = platform.borrow().activate_application(process_id)
+    {
+        eprintln!("failed to activate app {}: {error:?}", app.bundle_id);
+    }
+    windows.update(|desktop| {
+        desktop.activate_process(process_id);
+    });
 }

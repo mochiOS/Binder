@@ -131,6 +131,7 @@ impl Default for ControlCenterInteraction {
 }
 
 pub(crate) struct ControlCenterLayer<C> {
+    external_transition: bool,
     content: C,
     open: State<bool>,
     notification_open: State<bool>,
@@ -180,6 +181,7 @@ impl<C: View> ControlCenterLayer<C> {
         let network_enabled = saved.network_enabled.clone();
         drop(saved);
         Self {
+            external_transition: false,
             content,
             open,
             notification_open,
@@ -200,6 +202,11 @@ impl<C: View> ControlCenterLayer<C> {
 
     fn items(&self) -> Vec<Item> {
         self.cached_app_items()
+    }
+
+    pub(super) fn with_external_transition(mut self) -> Self {
+        self.external_transition = true;
+        self
     }
 
     fn cached_app_items(&self) -> Vec<Item> {
@@ -1032,15 +1039,15 @@ impl<C: View> View for ControlCenterLayer<C> {
             if open {
                 interaction.closing_detail = detail.clone();
             }
-            let (amount, next) = interaction.transition.sample(
-                open,
-                if open {
-                    context.theme.motion.menu
-                } else {
-                    context.theme.motion.menu_dismiss
-                },
-                now,
-            );
+            let (amount, next) = if self.external_transition {
+                (if open { 1.0 } else { 0.0 }, None)
+            } else {
+                interaction.transition.sample(
+                    open,
+                    if open { context.theme.motion.menu } else { context.theme.motion.menu_dismiss },
+                    now,
+                )
+            };
             let transform = PaintTransform {
                 anchor: Point::new(panel.origin.x + panel.size.width, panel.origin.y),
                 scale: context.theme.motion.menu_closed_scale

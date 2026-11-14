@@ -163,6 +163,7 @@ pub(crate) fn view(
         Rc::clone(&platform),
         apps.clone(),
         notification_center_interaction,
+        Rc::clone(&pending_app_activation),
     );
     let root = super::app_library::AppLibraryLayer::new(
         notified_desktop,
@@ -405,7 +406,7 @@ mod pointer_tracker_tests {
     }
 }
 
-struct PlatformRefreshView {
+pub(super) struct PlatformRefreshView {
     platform: Rc<RefCell<dyn DesktopPlatform>>,
 
     system_bar: State<SystemBarState>,
@@ -422,7 +423,7 @@ struct PlatformRefreshView {
 }
 
 impl PlatformRefreshView {
-    fn new(
+    pub(super) fn new(
         platform: Rc<RefCell<dyn DesktopPlatform>>,
 
         system_bar: State<SystemBarState>,
@@ -589,6 +590,19 @@ impl View for PlatformRefreshView {
 
                     false
                 });
+
+                match platform.native_window_snapshot() {
+                    Ok(Some(snapshot)) => {
+                        if self
+                            .windows
+                            .update_for_repaint(|desktop| desktop.synchronize_native(&snapshot))
+                        {
+                            context.request_redraw_in_at(bounds, Instant::now());
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => eprintln!("failed to refresh native windows: {error:?}"),
+                }
 
                 if platform.take_content_changed() {
                     if let Some(dirty) = self.visible_windows_damage() {

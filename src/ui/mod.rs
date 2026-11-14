@@ -7,6 +7,7 @@ pub(crate) mod control_center;
 pub(crate) mod control_center_editor;
 pub(crate) mod cursor;
 pub(crate) mod desktop;
+pub(crate) mod tablet;
 pub(crate) mod desktop_metrics;
 pub(crate) mod dock;
 mod dock_material;

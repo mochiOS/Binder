@@ -19,10 +19,10 @@ const ICON_SIZE: f32 = 56.0;
 const PANEL_PADDING: f32 = 16.0;
 
 #[derive(Clone)]
-struct Entry {
-    process: ProcessId,
-    app: AppInfo,
-    minimized: bool,
+pub(super) struct Entry {
+    pub(super) process: ProcessId,
+    pub(super) app: AppInfo,
+    pub(super) minimized: bool,
 }
 
 #[derive(Default)]
@@ -73,59 +73,12 @@ impl<C: View> AppSwitcherLayer<C> {
     fn begin_or_advance(&self, backwards: bool) {
         let mut state = self.state.borrow_mut();
         if !state.open {
-            let apps = self.apps.get();
-            let platform = self.platform.borrow();
-            let by_bundle = apps
-                .iter()
-                .cloned()
-                .map(|app| (app.bundle_id.clone(), app))
-                .collect::<HashMap<_, _>>();
-            let by_process = apps
-                .into_iter()
-                .filter_map(|app| {
-                    platform
-                        .process_id_for_bundle(&app.bundle_id)
-                        .map(|process| (process, app))
-                })
-                .collect::<HashMap<_, _>>();
-            drop(platform);
-            let desktop = self.windows.get();
-            let mut seen = HashSet::new();
-            state.entries = desktop
-                .windows
-                .iter()
-                .rev()
-                .filter_map(|window| {
-                    let process = window.process_id?;
-                    if !seen.insert(process) {
-                        return None;
-                    }
-                    Some(Entry {
-                        process,
-                        app: by_process.get(&process)?.clone(),
-                        minimized: desktop
-                            .windows
-                            .iter()
-                            .filter(|candidate| candidate.process_id == Some(process))
-                            .all(|candidate| candidate.minimized),
-                    })
-                })
-                .collect();
-            for bundle_id in self.running_apps.get() {
-                let Some(app) = by_bundle.get(&bundle_id).cloned() else {
-                    continue;
-                };
-                let Some(process) = self.platform.borrow().process_id_for_bundle(&bundle_id) else {
-                    continue;
-                };
-                if seen.insert(process) {
-                    state.entries.push(Entry {
-                        process,
-                        app,
-                        minimized: false,
-                    });
-                }
-            }
+            state.entries = running_entries(
+                &self.platform,
+                &self.windows.get(),
+                &self.apps.get(),
+                &self.running_apps.get(),
+            );
             state.open = !state.entries.is_empty();
             state.selected = if state.entries.len() > 1 { 1 } else { 0 };
             if backwards && state.entries.len() > 1 {
@@ -345,4 +298,60 @@ impl<C: View> View for AppSwitcherLayer<C> {
             _ => self.content.handle_event(bounds, event, context),
         }
     }
+}
+
+/// The shell switcher presentations share actual process/window enumeration.
+pub(super) fn running_entries(
+    platform: &Rc<RefCell<dyn DesktopPlatform>>,
+    desktop: &DesktopWindows,
+    apps: &[AppInfo],
+    running: &[String],
+) -> Vec<Entry> {
+    let platform = platform.borrow();
+    let by_process = apps
+        .iter()
+        .filter_map(|app| {
+            platform
+                .process_id_for_bundle(&app.bundle_id)
+                .map(|pid| (pid, app))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut seen = HashSet::new();
+    let mut entries = desktop
+        .windows
+        .iter()
+        .rev()
+        .filter_map(|window| {
+            let process = window.process_id?;
+            let app = by_process.get(&process)?;
+            if !seen.insert(process) {
+                return None;
+            }
+            Some(Entry {
+                process,
+                app: (*app).clone(),
+                minimized: desktop
+                    .windows
+                    .iter()
+                    .filter(|candidate| candidate.process_id == Some(process))
+                    .all(|candidate| candidate.minimized),
+            })
+        })
+        .collect::<Vec<_>>();
+    for bundle in running {
+        let Some(app) = apps.iter().find(|app| &app.bundle_id == bundle) else {
+            continue;
+        };
+        let Some(process) = platform.process_id_for_bundle(bundle) else {
+            continue;
+        };
+        if seen.insert(process) {
+            entries.push(Entry {
+                process,
+                app: app.clone(),
+                minimized: false,
+            });
+        }
+    }
+    entries
 }

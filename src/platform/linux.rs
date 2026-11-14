@@ -62,6 +62,7 @@ struct ManagedChild {
     close_deadlines: HashMap<RemoteWindowId, Instant>,
 }
 pub struct LinuxPlatform {
+    fullscreen_work_area: Option<viewkit::prelude::Rect>,
     system_bar: SystemBarState,
     last_system_bar_refresh: Instant,
     app_catalogue: RefCell<(Instant, Vec<AppInfo>)>,
@@ -89,17 +90,14 @@ impl LinuxPlatform {
 
     fn try_new() -> Result<Self, PlatformError> {
         Ok(Self {
+            fullscreen_work_area: None,
             system_bar: read_system_bar_state().unwrap_or_default(),
             last_system_bar_refresh: Instant::now(),
             app_catalogue: RefCell::new((Instant::now(), read_apps())),
 
             transport: LinuxIpcServer::new()?,
             preview: RefCell::new(preview::PreviewDesktop::new().map_err(|_| PlatformError::TransportFailure)?),
-            notifications: RefCell::new(vec![super::UserNotification {
-                id: 1, created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(), read: false, bundle_id: "org.mochios.binder".into(),
-                title: "mochiOS desktop preview".into(),
-                body: "Applications run inside this desktop. System controls use temporary preview state.".into(),
-            }]),
+            notifications: RefCell::new(Vec::new()),
             focus_enabled: false,
 
             children: HashMap::new(),
@@ -347,6 +345,15 @@ impl Default for LinuxPlatform {
 }
 
 impl DesktopPlatform for LinuxPlatform {
+    fn set_fullscreen_work_area(
+        &mut self,
+        area: Option<viewkit::prelude::Rect>,
+        _scale_factor: f64,
+    ) -> Result<(), PlatformError> {
+        self.fullscreen_work_area = area;
+        self.preview.borrow_mut().fullscreen_work_area = area;
+        Ok(())
+    }
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError> {
         let mut state = self.system_bar.clone();
         state.notifications.unread_count = self
@@ -367,52 +374,23 @@ impl DesktopPlatform for LinuxPlatform {
         self.preview.borrow_mut().launch(&app).map(|_| ())
     }
 
-    fn set_output_volume(&mut self, level: u8) -> Result<super::VolumeState, PlatformError> {
-        self.system_bar.volume.available = true;
-        self.system_bar.volume.level = level.min(100);
-        self.system_bar.volume.muted = self.system_bar.volume.level == 0;
-        Ok(self.system_bar.volume.clone())
+    fn set_output_volume(&mut self, _level: u8) -> Result<super::VolumeState, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
     }
 
-    fn set_output_muted(&mut self, muted: bool) -> Result<super::VolumeState, PlatformError> {
-        self.system_bar.volume.available = true;
-        self.system_bar.volume.muted = muted;
-        Ok(self.system_bar.volume.clone())
+    fn set_output_muted(&mut self, _muted: bool) -> Result<super::VolumeState, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
     }
 
-    fn set_network_enabled(&mut self, enabled: bool) -> Result<super::NetworkState, PlatformError> {
-        self.system_bar.network = if enabled {
-            super::NetworkState::Disconnected
-        } else {
-            super::NetworkState::Disabled
-        };
-        Ok(self.system_bar.network.clone())
+    fn set_network_enabled(
+        &mut self,
+        _enabled: bool,
+    ) -> Result<super::NetworkState, PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
     }
 
-    fn perform_system_action(&self, action: SystemAction) -> Result<(), PlatformError> {
-        let mut notifications = self.notifications.borrow_mut();
-        let id = notifications
-            .iter()
-            .map(|item| item.id)
-            .filter(|id| id >> 32 == 0)
-            .max()
-            .unwrap_or(0)
-            + 1;
-        notifications.insert(
-            0,
-            super::UserNotification {
-                id,
-                created_at: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                read: false,
-                bundle_id: "org.mochios.binder".into(),
-                title: format!("{action:?}"),
-                body: "This system action was requested in the Linux preview.".into(),
-            },
-        );
-        Ok(())
+    fn perform_system_action(&self, _action: SystemAction) -> Result<(), PlatformError> {
+        Err(PlatformError::UnsupportedOperation)
     }
 
     fn control_center_cards(&self) -> Vec<super::ControlCenterCard> {
@@ -538,7 +516,7 @@ impl DesktopPlatform for LinuxPlatform {
                 .is_some_and(|c| c.mode == viewkit::decoration::DecorationMode::Integrated);
             let height = notification
                 .height
-                .saturating_sub(if integrated {
+                .saturating_sub(if integrated || self.fullscreen_work_area.is_some() {
                     0
                 } else {
                     crate::ui::window_decoration::TITLE_BAR_HEIGHT as u32
@@ -723,8 +701,13 @@ impl DesktopPlatform for LinuxPlatform {
         &mut self,
         pid: ProcessId,
         remote: RemoteWindowId,
-        layout: viewkit::decoration::DecorationLayout,
+        mut layout: viewkit::decoration::DecorationLayout,
     ) -> Result<(), PlatformError> {
+        if self.fullscreen_work_area.is_some() {
+            layout.height = 0.0;
+            layout.controls_width = 0.0;
+            layout.state = viewkit::decoration::WindowState::Maximized;
+        }
         self.preview.borrow_mut().layout(pid, remote, layout)
     }
     fn take_window_decorations(
@@ -781,17 +764,8 @@ fn read_system_bar_state() -> Result<SystemBarState, PlatformError> {
     Ok(SystemBarState {
         clock: read_clock()?,
         japanese_input: viewkit::platform::input_method::enabled().unwrap_or(false),
-        network: super::NetworkState::Connected {
-            network_name: Some("Preview Network".into()),
-            signal_strength: Some(85),
-            interface: Some("preview0".into()),
-            address: Some("192.0.2.2".into()),
-        },
-        battery: super::BatteryState {
-            available: true,
-            charging: true,
-            percentage: 82,
-        },
+        // The host preview does not control mochiOS hardware services. Keep
+        // unavailable capabilities honest instead of inventing device state.
         ..SystemBarState::default()
     })
 }

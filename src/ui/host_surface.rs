@@ -100,6 +100,15 @@ impl View for HostSurface {
             .position()
             .map(|position| Point::new(position.x - bounds.origin.x, position.y - bounds.origin.y));
         let event = match event {
+            ViewEvent::Touch { id, phase, .. } => {
+                let point = local_position.unwrap();
+                PlatformEvent::Touch {
+                    id: *id,
+                    phase: *phase,
+                    x: point.x,
+                    y: point.y,
+                }
+            }
             ViewEvent::PointerMoved { .. } => {
                 context.set_cursor(surface.cursor);
                 let point = local_position.unwrap();

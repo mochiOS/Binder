@@ -235,22 +235,11 @@ where
     }
 
     fn dock_apps(&self) -> Vec<AppInfo> {
-        let apps = self.apps.get();
-        let preferences = self.preferences.get();
-        let mut visible = Vec::new();
-        for bundle_id in preferences.pinned() {
-            if let Some(app) = apps.iter().find(|app| &app.bundle_id == bundle_id) {
-                visible.push(app.clone());
-            }
-        }
-        for bundle_id in self.running_apps.get() {
-            if preferences.is_pinned(&bundle_id) {
-                continue;
-            }
-            if let Some(app) = apps.iter().find(|app| app.bundle_id == bundle_id) {
-                visible.push(app.clone());
-            }
-        }
+        let mut visible = ordered_applications(
+            &self.apps.get(),
+            &self.preferences.get(),
+            &self.running_apps.get(),
+        );
         visible.push(app_library_item());
         visible
     }
@@ -1272,6 +1261,27 @@ fn snap_rect(rect: Rect) -> Rect {
     let height = rect.size.height.round().max(1.0);
 
     Rect::new(x, y, width, height)
+}
+
+/// Both Dock orientations use the same pins and running application catalogue.
+pub(super) fn ordered_applications(
+    apps: &[AppInfo],
+    preferences: &DockPreferences,
+    running: &[String],
+) -> Vec<AppInfo> {
+    let mut visible = Vec::new();
+    for bundle_id in preferences.pinned().iter().chain(running.iter()) {
+        if visible
+            .iter()
+            .any(|app: &AppInfo| &app.bundle_id == bundle_id)
+        {
+            continue;
+        }
+        if let Some(app) = apps.iter().find(|app| &app.bundle_id == bundle_id) {
+            visible.push(app.clone());
+        }
+    }
+    visible
 }
 
 fn app_library_item() -> AppInfo {

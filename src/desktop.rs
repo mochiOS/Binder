@@ -11,6 +11,8 @@ use crate::window::{DesktopWindows, WindowDrag, WindowId};
 use viewkit::prelude::*;
 
 pub struct BinderApp {
+    shell_mode: crate::shell::ShellMode,
+    tablet: Rc<RefCell<crate::ui::tablet::TabletState>>,
     #[cfg(target_os = "mochios")]
     ready_target: Option<mochi_user_platform::service_ready::Target>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
@@ -84,6 +86,8 @@ impl App for BinderApp {
             startup.queue(app);
         }
         Self {
+            shell_mode: crate::shell::ShellMode::current(),
+            tablet: Rc::new(RefCell::new(crate::ui::tablet::TabletState::default())),
             #[cfg(target_os = "mochios")]
             ready_target: mochi_user_platform::service_ready::take_bootstrap_target(),
             platform,
@@ -146,12 +150,16 @@ impl App for BinderApp {
         let options = WindowOptions::new("Binder").size(1280.0, 800.0);
         #[cfg(target_os = "linux")]
         {
-            WindowOptions::new(
-                "Binder - Ctrl + Alt + G: Release mouse | Click inside: Capture mouse",
-            )
-            .size(1280.0, 800.0)
-            .resizable(true)
-            .fullscreen(false)
+            let title = match self.shell_mode {
+                crate::shell::ShellMode::Desktop => {
+                    "Binder - Ctrl + Alt + G: Release mouse | Click inside: Capture mouse"
+                }
+                crate::shell::ShellMode::Tablet => "Binder - Tablet",
+            };
+            WindowOptions::new(title)
+                .size(1280.0, 800.0)
+                .resizable(true)
+                .fullscreen(self.shell_mode == crate::shell::ShellMode::Tablet)
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -169,6 +177,27 @@ impl App for BinderApp {
     }
 
     fn body(&self, _context: &ViewContext) -> Self::Body {
+        if self.shell_mode == crate::shell::ShellMode::Tablet {
+            return Box::new(crate::ui::tablet::TabletShell::new(
+                crate::ui::tablet::Resources {
+                    platform: self.platform.clone(),
+                    system_bar: self.system_bar.clone(),
+                    windows: self.windows.clone(),
+                    apps: self.apps.clone(),
+                    running: self.dock_running_apps.clone(),
+                    dock: self.dock_preferences.clone(),
+                    pending: self.pending_app_activation.clone(),
+                    fast_poll: self.fast_poll_until.clone(),
+                    test_states: self.test_window_states.clone(),
+                    failures: self.launch_failure_states.clone(),
+                    control_preferences: self.control_center_preferences.clone(),
+                    control_interaction: self.control_center_interaction.clone(),
+                    control_editor: self.control_center_editor_interaction.clone(),
+                    wallpaper: self.wallpaper.clone(),
+                },
+                self.tablet.clone(),
+            ));
+        }
         crate::ui::desktop::view(
             self.system_bar.clone(),
             self.status_area_interaction.clone(),
