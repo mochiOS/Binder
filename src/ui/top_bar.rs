@@ -259,23 +259,13 @@ impl SystemBar {
         ]
     }
     pub(crate) fn set_backdrop(&self, background: Color) -> bool {
-        let linear = |channel: u8| {
-            let value = f32::from(channel) / 255.0;
-            if value <= 0.04045 {
-                value / 12.92
-            } else {
-                ((value + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        let luminance = 0.2126 * linear(background.red)
-            + 0.7152 * linear(background.green)
-            + 0.0722 * linear(background.blue);
-        let threshold = if self.palette.get().foreground == Color::BLACK {
-            0.14
+        let previous = self.palette.get().foreground;
+        let foreground = if background.contrast_ratio(previous) >= 4.5 {
+            previous
         } else {
-            0.22
+            background.readable_foreground()
         };
-        let dark_text = luminance > threshold;
+        let dark_text = foreground == Color::BLACK;
         let palette = ChromePalette {
             foreground: if dark_text {
                 Color::BLACK

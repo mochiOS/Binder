@@ -1,12 +1,10 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::platform::{AppInfo, DesktopPlatform, SystemAction};
 use viewkit::{
-    draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
     platform::{CursorIcon, Key, PointerButton},
     prelude::*,
@@ -57,12 +55,6 @@ struct SearchResult {
     action: SearchAction,
 }
 
-#[derive(Clone)]
-enum CachedIcon {
-    Image(ImageData),
-    Missing,
-}
-
 pub(crate) struct SpotlightLayer<C> {
     content: C,
     state: Rc<RefCell<SpotlightState>>,
@@ -75,7 +67,7 @@ pub(crate) struct SpotlightLayer<C> {
     app_library_open: State<bool>,
     hovered: Cell<Option<usize>>,
     pressed: Cell<Option<usize>>,
-    icon_cache: RefCell<HashMap<PathBuf, CachedIcon>>,
+    icon_cache: super::app_icon::AppIcons,
 }
 
 impl<C: View> SpotlightLayer<C> {
@@ -103,7 +95,7 @@ impl<C: View> SpotlightLayer<C> {
             app_library_open,
             hovered: Cell::new(None),
             pressed: Cell::new(None),
-            icon_cache: RefCell::new(HashMap::new()),
+            icon_cache: super::app_icon::AppIcons::default(),
         }
     }
 
@@ -212,25 +204,6 @@ impl<C: View> SpotlightLayer<C> {
         (0..result_count).find(|index| Self::row_rect(panel, *index, theme).contains(position))
     }
 
-    fn load_icon(&self, path: &Path) -> CachedIcon {
-        if let Some(icon) = self.icon_cache.borrow().get(path) {
-            return icon.clone();
-        }
-        let icon = if path.extension().and_then(|value| value.to_str()) == Some("svg") {
-            SvgData::from_path(path)
-                .ok()
-                .and_then(|svg| ImageData::from_svg(&svg, 64, 64).ok())
-                .map_or(CachedIcon::Missing, CachedIcon::Image)
-        } else {
-            ImageData::thumbnail_from_path(path, 64, 64)
-                .map_or(CachedIcon::Missing, CachedIcon::Image)
-        };
-        self.icon_cache
-            .borrow_mut()
-            .insert(path.to_path_buf(), icon.clone());
-        icon
-    }
-
     fn paint_result_icon(
         &self,
         result: &SearchResult,
@@ -239,13 +212,9 @@ impl<C: View> SpotlightLayer<C> {
     ) {
         if let SearchAction::Application(app) = &result.action {
             if let Some(path) = app.icon.as_deref()
-                && let CachedIcon::Image(icon) = self.load_icon(path)
+                && let Some(icon) = self.icon_cache.load(path,bounds,context.scale_factor())
             {
-                Image::new(icon)
-                    .content_mode(ImageContentMode::Fit)
-                    .sampling(ImageSampling::Bicubic)
-                    .radius(CornerRadius::Small)
-                    .paint(bounds, context);
+                super::app_icon::paint(icon,bounds,context);
                 return;
             }
             super::app_library::paint_fallback_icon(bounds, context);

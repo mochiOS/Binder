@@ -767,7 +767,10 @@ impl TabletShell {
     }
 
     fn paint_dock(&self, geometry: &Geometry, context: &mut PaintContext<'_>) {
-        let material = super::super::dock_material::DockMaterial::for_theme(context.theme);
+        let background = context
+            .display_list
+            .sample_background(geometry.dock, context.theme.shell.window_background);
+        let material = super::super::dock_material::DockMaterial::for_backdrop(background);
         Rectangle::new()
             .color(RectangleColor::Custom(material.background))
             .radius(CornerRadius::Custom(

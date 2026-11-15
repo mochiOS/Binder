@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::path::Path;
+#[cfg(any(test, target_os = "mochios"))]
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -53,12 +53,6 @@ struct DockItemVisual {
     item: Rect,
     icon: Rect,
     influence: f32,
-}
-
-#[derive(Clone)]
-enum DockIcon {
-    Image(ImageData),
-    Missing,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +125,8 @@ pub(crate) struct DockLayer<C> {
     launch_failure_states: Rc<
         RefCell<HashMap<crate::window::WindowId, super::launch_failure::LaunchFailureWindowState>>,
     >,
-    icon_cache: RefCell<HashMap<PathBuf, DockIcon>>,
+    icon_cache: super::app_icon::AppIcons,
+    backdrop: Cell<Option<(Instant, Rect, Color)>>,
     native_overlap_cache: Cell<Option<(Instant, bool)>>,
     pin_menu: Menu,
     unpin_menu: Menu,
@@ -186,7 +181,8 @@ where
             app_library_open,
             fast_poll_until,
             launch_failure_states,
-            icon_cache: RefCell::new(HashMap::new()),
+            icon_cache: super::app_icon::AppIcons::default(),
+            backdrop: Cell::new(None),
             native_overlap_cache: Cell::new(None),
             pin_menu: Menu::new()
                 .item(MenuItem::new("Open").on_select(move || {
@@ -662,41 +658,13 @@ where
             .reduce(Rect::union)
     }
 
-    fn load_icon(&self, path: &Path) -> DockIcon {
-        if let Some(icon) = self.icon_cache.borrow().get(path) {
-            return icon.clone();
-        }
-
-        let icon = if path.extension().and_then(|extension| extension.to_str()) == Some("svg") {
-            SvgData::from_path(path)
-                .ok()
-                .and_then(|svg| {
-                    ImageData::from_svg(&svg, DOCK_ICON_MAX_SIZE as u32, DOCK_ICON_MAX_SIZE as u32)
-                        .ok()
-                })
-                .map_or(DockIcon::Missing, DockIcon::Image)
-        } else {
-            ImageData::thumbnail_from_path(
-                path,
-                DOCK_ICON_MAX_SIZE as u32,
-                DOCK_ICON_MAX_SIZE as u32,
-            )
-            .map_or(DockIcon::Missing, DockIcon::Image)
-        };
-
-        self.icon_cache
-            .borrow_mut()
-            .insert(path.to_path_buf(), icon.clone());
-        icon
-    }
-
     fn paint_app_icon(&self, app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
         if app.bundle_id == APP_LIBRARY_BUNDLE_ID {
             self.paint_app_library_icon(bounds, context);
             return;
         }
         if let Some(icon) = &app.icon {
-            if let DockIcon::Image(image) = self.load_icon(icon) {
+            if let Some(image) = self.icon_cache.load(icon,bounds,context.scale_factor()) {
                 super::app_icon::paint(image, bounds, context);
 
                 return;
@@ -748,7 +716,7 @@ where
                 cell.size.height - inset * 2.0,
             );
             if let Some(path) = app.icon.as_deref()
-                && let DockIcon::Image(image) = self.load_icon(path)
+                && let Some(image) = self.icon_cache.load(path,icon,context.scale_factor())
             {
                 super::app_icon::paint(image, icon, context);
             }
@@ -803,7 +771,7 @@ where
             .any(|bundle_id| bundle_id == &app.bundle_id)
     }
 
-    fn paint_running_indicator(icon: Rect, context: &mut PaintContext<'_>) {
+    fn paint_running_indicator(icon: Rect, color: Color, context: &mut PaintContext<'_>) {
         let size = 4.0;
 
         let x = icon.origin.x + icon.size.width / 2.0 - size / 2.0;
@@ -812,7 +780,7 @@ where
 
         Ellipse::new()
             .color(EllipseColor::Custom(
-                DockMaterial::for_theme(context.theme).running_indicator,
+                color,
             ))
             .paint(Rect::new(x, y, size, size), context);
     }
@@ -863,7 +831,28 @@ where
             context.display_list.add_input_region(region);
         }
 
-        let material = DockMaterial::for_theme(context.theme);
+        let now = Instant::now();
+        let background = if let Some((at, region, color)) = self.backdrop.get()
+            && region == dock
+            && now.saturating_duration_since(at) < Duration::from_millis(100)
+        {
+            color
+        } else {
+            let color = self
+                .platform
+                .borrow()
+                .native_background_color(dock)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| {
+                    context
+                        .display_list
+                        .sample_background(dock, context.theme.shell.window_background)
+                });
+            self.backdrop.set(Some((now, dock, color)));
+            color
+        };
+        let material = DockMaterial::for_backdrop(background);
         Rectangle::new()
             .color(RectangleColor::Custom(
                 material.background,
@@ -904,7 +893,7 @@ where
             self.paint_app_icon(app, icon, context);
 
             if self.is_running(app) {
-                Self::paint_running_indicator(icon, context);
+                Self::paint_running_indicator(icon, material.running_indicator, context);
             }
 
             if hovered == Some(index) {

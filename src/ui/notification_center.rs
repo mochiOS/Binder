@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 #[cfg(not(target_os = "mochios"))]
@@ -9,7 +9,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::platform::{AppInfo, DesktopPlatform, UserNotification};
 use viewkit::{
     animation::{Animation, Easing, interpolate},
-    draw_command::ImageSampling,
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
     prelude::*,
@@ -138,7 +137,7 @@ pub(crate) struct NotificationCenterLayer<C> {
     apps: State<Vec<AppInfo>>,
     hovered: Cell<Option<Hit>>,
     pressed: Cell<Option<Hit>>,
-    icon_cache: RefCell<HashMap<PathBuf, ImageData>>,
+    icon_cache: super::app_icon::AppIcons,
     interaction: Rc<NotificationCenterInteraction>,
     activation: Rc<RefCell<super::app_library::PendingAppActivation>>,
 }
@@ -160,7 +159,7 @@ impl<C: View> NotificationCenterLayer<C> {
             apps,
             hovered: Cell::new(None),
             pressed: Cell::new(None),
-            icon_cache: RefCell::new(HashMap::new()),
+            icon_cache: super::app_icon::AppIcons::default(),
             interaction,
             activation,
         }
@@ -571,22 +570,6 @@ impl<C: View> NotificationCenterLayer<C> {
             .find(|application| application.bundle_id == notification.bundle_id)
     }
 
-    fn load_icon(&self, path: &Path) -> Option<ImageData> {
-        if let Some(icon) = self.icon_cache.borrow().get(path) {
-            return Some(icon.clone());
-        }
-        let icon = if path.extension().and_then(|extension| extension.to_str()) == Some("svg") {
-            SvgData::from_path(path)
-                .ok()
-                .and_then(|svg| ImageData::from_svg(&svg, 72, 72).ok())
-        } else {
-            ImageData::thumbnail_from_path(path, 72, 72).ok()
-        }?;
-        self.icon_cache
-            .borrow_mut()
-            .insert(path.to_path_buf(), icon.clone());
-        Some(icon)
-    }
 
     fn paint_notification(
         &self,
@@ -613,12 +596,8 @@ impl<C: View> NotificationCenterLayer<C> {
         let icon_path = app
             .and_then(|application| application.icon.as_deref())
             .unwrap_or_else(|| Path::new(FALLBACK_ICON));
-        if let Some(icon) = self.load_icon(icon_path) {
-            Image::new(icon)
-                .content_mode(ImageContentMode::Fit)
-                .sampling(ImageSampling::Bicubic)
-                .radius(CornerRadius::Medium)
-                .paint(icon_bounds, context);
+        if let Some(icon) = self.icon_cache.load(icon_path,icon_bounds,context.scale_factor()) {
+            super::app_icon::paint(icon,icon_bounds,context);
         } else {
             Icon::new(SymbolName::Bell)
                 .size(theme.layout.stepper_icon_size)
@@ -739,13 +718,9 @@ impl<C: View> NotificationCenterLayer<C> {
         let app = self.app(notification, apps);
         let painted_icon = app
             .and_then(|application| application.icon.as_deref())
-            .and_then(|path| self.load_icon(path))
+            .and_then(|path| self.icon_cache.load(path,icon_bounds,context.scale_factor()))
             .map(|icon| {
-                Image::new(icon)
-                    .content_mode(ImageContentMode::Fit)
-                    .sampling(ImageSampling::Bicubic)
-                    .radius(CornerRadius::Medium)
-                    .paint(icon_bounds, context);
+                super::app_icon::paint(icon,icon_bounds,context);
             })
             .is_some();
         if !painted_icon {
