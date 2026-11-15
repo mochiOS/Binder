@@ -518,6 +518,41 @@ impl<C: View> ControlCenterLayer<C> {
         );
     }
 
+    // Registered app rows and built-in details share the same native layout.
+    // Center the measured line, rather than painting text into the full row.
+    fn paint_detail_value(bounds: Rect, label: &str, value: &str, context: &mut PaintContext<'_>) {
+        Rectangle::new()
+            .color(RectangleColor::Custom(context.theme.shell.item_enabled))
+            .radius(CornerRadius::Medium)
+            .paint(bounds, context);
+        let line = HStack::new()
+            .alignment(StackAlignment::FirstBaseline)
+            .gap(StackGap::Small)
+            .child(
+                Text::caption(label)
+                    .weight(650)
+                    .single_line(true)
+                    .color(context.theme.shell.secondary_text),
+            )
+            .child(
+                Text::label(value)
+                    .single_line(true)
+                    .alignment(TextAlignment::End)
+                    .color(context.theme.shell.primary_text)
+                    .layout()
+                    .flex_grow(1.),
+            );
+        Padding::symmetric(context.theme.spacing.medium, 0.)
+            .content(
+                VStack::new()
+                    .gap(StackGap::None)
+                    .alignment(StackAlignment::Stretch)
+                    .distribution(StackDistribution::Center)
+                    .child(line),
+            )
+            .paint(bounds, context);
+    }
+
     fn paint_network_detail(&self, panel: Rect, context: &mut PaintContext<'_>) {
         let state = self.system_bar.get().network;
         if !self.network_switch.interaction().is_pressed() {
@@ -647,29 +682,7 @@ impl<C: View> ControlCenterLayer<C> {
                 summary.size.width,
                 42.0,
             );
-            Rectangle::new()
-                .color(RectangleColor::Custom(context.theme.shell.item_enabled))
-                .radius(CornerRadius::Medium)
-                .paint(row, context);
-            Text::styled(label, TextRole::Caption)
-                .weight(650)
-                .color(context.theme.shell.secondary_text)
-                .paint(
-                    Rect::new(row.origin.x + 12.0, row.origin.y, 94.0, row.size.height),
-                    context,
-                );
-            Text::styled(value, TextRole::Label)
-                .alignment(TextAlignment::End)
-                .color(context.theme.shell.primary_text)
-                .paint(
-                    Rect::new(
-                        row.origin.x + 106.0,
-                        row.origin.y,
-                        row.size.width - 118.0,
-                        row.size.height,
-                    ),
-                    context,
-                );
+            Self::paint_detail_value(row, label, value, context);
         }
     }
 
@@ -857,34 +870,7 @@ impl<C: View> ControlCenterLayer<C> {
                 panel.size.width - PANEL_PADDING * 2.0,
                 44.0,
             );
-            Rectangle::new()
-                .color(RectangleColor::Custom(context.theme.shell.item_enabled))
-                .radius(CornerRadius::Medium)
-                .paint(bounds, context);
-            Text::styled(row.label.clone(), TextRole::Caption)
-                .weight(650)
-                .color(context.theme.shell.secondary_text)
-                .paint(
-                    Rect::new(
-                        bounds.origin.x + 12.0,
-                        bounds.origin.y,
-                        100.0,
-                        bounds.size.height,
-                    ),
-                    context,
-                );
-            Text::styled(row.value.clone(), TextRole::Label)
-                .alignment(TextAlignment::End)
-                .color(context.theme.shell.primary_text)
-                .paint(
-                    Rect::new(
-                        bounds.origin.x + 112.0,
-                        bounds.origin.y,
-                        bounds.size.width - 124.0,
-                        bounds.size.height,
-                    ),
-                    context,
-                );
+            Self::paint_detail_value(bounds, &row.label, &row.value, context);
         }
     }
 
@@ -1774,5 +1760,66 @@ mod tests {
                 .iter()
                 .any(|item| item.id == "builtin.network")
         );
+    }
+}
+
+#[cfg(test)]
+mod detail_value_layout_tests {
+    use super::*;
+    use viewkit::{
+        draw_command::{DisplayList, DrawCommand},
+        typography::TextMeasurer,
+    };
+    #[test]
+    fn detail_rows_center_the_measured_line_and_align_label_value_baselines() {
+        for theme in [Theme::LIGHT, Theme::DARK] {
+            for height in [42., 58.] {
+                let bounds = Rect::new(20., 40., 268., height);
+                let mut list = DisplayList::new();
+                let mut text = TextMeasurer::new();
+                ControlCenterLayer::<Rectangle>::paint_detail_value(
+                    bounds,
+                    "Network",
+                    "Unavailable",
+                    &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut text),
+                );
+                let commands: Vec<_> = list
+                    .commands()
+                    .iter()
+                    .filter_map(|c| match c {
+                        DrawCommand::DrawText { command } => Some(command),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(commands.len(), 2);
+                for command in &commands {
+                    assert!(command.bounds.origin.y > bounds.origin.y + 8.);
+                    assert!(
+                        command.bounds.origin.y + command.bounds.size.height
+                            < bounds.origin.y + bounds.size.height - 8.
+                    );
+                    assert!(command.bounds.origin.x >= bounds.origin.x + theme.spacing.medium);
+                    assert!(
+                        command.bounds.origin.x + command.bounds.size.width
+                            <= bounds.origin.x + bounds.size.width - theme.spacing.medium + 0.01
+                    );
+                }
+                let mut context = MeasureContext {
+                    theme: &theme,
+                    typography: &theme.typography,
+                    text_measurer: &mut text,
+                };
+                let label = commands[0].bounds.origin.y
+                    + Text::caption("Network")
+                        .weight(650)
+                        .first_baseline(commands[0].bounds.size, &mut context)
+                        .unwrap();
+                let value = commands[1].bounds.origin.y
+                    + Text::label("Unavailable")
+                        .first_baseline(commands[1].bounds.size, &mut context)
+                        .unwrap();
+                assert!((label - value).abs() < 0.01);
+            }
+        }
     }
 }
