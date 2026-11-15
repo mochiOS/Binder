@@ -1,10 +1,14 @@
 //! Application icon presentation owned by the desktop, using ViewKit's
 //! continuous-corner image clipping rather than a separate mask implementation.
 
+use std::sync::OnceLock;
 use std::{
     cell::RefCell,
     path::{Path, PathBuf},
 };
+
+const FALLBACK_APP_ICON_SVG: &[u8] = include_bytes!("../../resources/appicon.svg");
+
 use viewkit::{draw_command::ImageSampling, prelude::*, view::PaintContext};
 
 #[derive(Clone)]
@@ -37,12 +41,12 @@ impl AppIcons {
         context: &mut PaintContext<'_>,
     ) {
         let Some(path) = &app.icon else {
-            return super::app_library::paint_fallback_icon(bounds, context);
+            return paint_fallback_icon(bounds, context);
         };
         if let Some(data) = self.load(path, bounds, context.scale_factor()) {
             paint(data, bounds, context);
         } else {
-            super::app_library::paint_fallback_icon(bounds, context);
+            paint_fallback_icon(bounds, context);
         }
     }
 
@@ -85,6 +89,27 @@ impl AppIcons {
     }
 }
 
+pub(super) fn fallback_app_icon() -> Option<&'static SvgData> {
+    static ICON: OnceLock<Option<SvgData>> = OnceLock::new();
+    ICON.get_or_init(|| SvgData::decode(FALLBACK_APP_ICON_SVG).ok())
+        .as_ref()
+}
+
+pub(super) fn paint_fallback_icon(bounds: Rect, context: &mut PaintContext<'_>) {
+    if let Some(icon) = fallback_app_icon() {
+        Svg::new(icon.clone())
+            .radius(radius(bounds))
+            .paint(bounds, context);
+        return;
+    }
+
+    Rectangle::new()
+        .color(RectangleColor::Custom(context.theme.colors.surface_muted))
+        .radius(radius(bounds))
+        .border(BorderStyle::Standard { width: 1.0 })
+        .paint(bounds, context);
+}
+
 const RADIUS_RATIO: f32 = 0.30;
 
 /// アイコンの表示サイズに比例する連続角丸の半径を返す。
@@ -104,6 +129,47 @@ pub(super) fn paint(image: ImageData, bounds: Rect, context: &mut PaintContext<'
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn absent_missing_and_invalid_app_icons_all_use_binders_own_artwork() {
+        use viewkit::{draw_command::DisplayList, typography::TextMeasurer};
+        let bounds = Rect::new(0., 0., 56., 56.);
+        let theme = Theme::LIGHT;
+        let mut text = TextMeasurer::new();
+        let mut expected = DisplayList::new();
+        paint_fallback_icon(
+            bounds,
+            &mut PaintContext::new(&mut expected, &theme, &theme.typography, &mut text),
+        );
+        assert!(fallback_app_icon().is_some());
+        let icons = AppIcons::default();
+        for icon in [
+            None,
+            Some(PathBuf::from("/nonexistent/mochios-missing-icon.png")),
+            Some(PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/Cargo.toml"
+            ))),
+        ] {
+            let app = crate::platform::AppInfo {
+                root: PathBuf::new(),
+                name: "No Artwork".into(),
+                bundle_id: "org.example.no-artwork".into(),
+                version: "1".into(),
+                developer: String::new(),
+                entry: String::new(),
+                description: String::new(),
+                icon,
+                resources: Vec::new(),
+            };
+            let mut actual = DisplayList::new();
+            icons.paint(
+                &app,
+                bounds,
+                &mut PaintContext::new(&mut actual, &theme, &theme.typography, &mut text),
+            );
+            assert_eq!(actual.commands(), expected.commands());
+        }
+    }
     #[test]
     fn raster_buckets_follow_physical_size_without_unbounded_growth() {
         let r = Rect::new(0., 0., 44., 44.);

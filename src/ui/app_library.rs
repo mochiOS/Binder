@@ -2,7 +2,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::dock_preferences::DockPreferences;
@@ -27,7 +26,6 @@ const SEARCH_HEIGHT: f32 = 38.0;
 const PAGE_BUTTON_SIZE: f32 = 30.0;
 const MENU_WIDTH: f32 = 190.0;
 const MENU_HEIGHT: f32 = 80.0;
-const FALLBACK_APP_ICON_SVG: &[u8] = include_bytes!("../../resources/appicon.svg");
 
 #[derive(Clone)]
 enum CachedIcon {
@@ -475,7 +473,7 @@ where
             super::app_icon::paint(image, bounds, context);
             return;
         }
-        paint_fallback_icon(bounds, context);
+        super::app_icon::paint_fallback_icon(bounds, context);
     }
 }
 
@@ -887,29 +885,6 @@ where
     }
 }
 
-fn fallback_app_icon() -> Option<&'static SvgData> {
-    static ICON: OnceLock<Option<SvgData>> = OnceLock::new();
-    ICON.get_or_init(|| SvgData::decode(FALLBACK_APP_ICON_SVG).ok())
-        .as_ref()
-}
-
-pub(super) fn paint_fallback_icon(bounds: Rect, context: &mut PaintContext<'_>) {
-    if let Some(icon) = fallback_app_icon() {
-        Svg::new(icon.clone())
-            .radius(super::app_icon::radius(bounds))
-            .paint(bounds, context);
-        return;
-    }
-
-    Rectangle::new()
-        .color(RectangleColor::Custom(
-            context.theme.colors.surface_muted,
-        ))
-        .radius(super::app_icon::radius(bounds))
-        .border(BorderStyle::Standard { width: 1.0 })
-        .paint(bounds, context);
-}
-
 pub(super) fn matching_app_indices(apps: &[AppInfo], query: &str) -> Vec<usize> {
     let query = query.trim().to_lowercase();
     apps.iter()
@@ -996,7 +971,7 @@ mod tests {
 
     #[test]
     fn embedded_fallback_application_icon_is_valid_svg() {
-        assert!(fallback_app_icon().is_some());
+        assert!(super::super::app_icon::fallback_app_icon().is_some());
     }
 
     #[test]

@@ -179,7 +179,7 @@ impl<C: View> AppSwitcherLayer<C> {
         {
             super::app_icon::paint(image, bounds, context);
         } else {
-            super::app_library::paint_fallback_icon(bounds, context);
+            super::app_icon::paint_fallback_icon(bounds, context);
         }
     }
 }

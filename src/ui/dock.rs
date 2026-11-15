@@ -670,7 +670,7 @@ where
             }
         }
 
-        super::app_library::paint_fallback_icon(bounds, context);
+        super::app_icon::paint_fallback_icon(bounds, context);
     }
 
     fn paint_app_library_icon(&self, bounds: Rect, context: &mut PaintContext<'_>) {

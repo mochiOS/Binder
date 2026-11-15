@@ -217,7 +217,7 @@ impl<C: View> SpotlightLayer<C> {
                 super::app_icon::paint(icon,bounds,context);
                 return;
             }
-            super::app_library::paint_fallback_icon(bounds, context);
+            super::app_icon::paint_fallback_icon(bounds, context);
             return;
         }
         Icon::new(result.symbol)

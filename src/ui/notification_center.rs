@@ -724,7 +724,7 @@ impl<C: View> NotificationCenterLayer<C> {
             })
             .is_some();
         if !painted_icon {
-            super::app_library::paint_fallback_icon(icon_bounds, context);
+            super::app_icon::paint_fallback_icon(icon_bounds, context);
         }
 
         let app_name = app
