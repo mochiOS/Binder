@@ -35,6 +35,50 @@ enum CachedIcon {
     Missing,
 }
 
+#[derive(Default)]
+struct PageMotion {
+    position: f32,
+    target: usize,
+    spring: Option<viewkit::animation::SpringAnimation>,
+}
+
+impl PageMotion {
+    fn sample(
+        &mut self,
+        target: usize,
+        motion: viewkit::theme::Motion,
+        now: Instant,
+    ) -> (f32, Option<Instant>) {
+        if motion.duration.is_zero() {
+            self.position = target as f32;
+            self.target = target;
+            self.spring = None;
+            return (self.position, None);
+        }
+        let previous = self.spring.map(|spring| spring.sample(now));
+        if target != self.target {
+            self.spring = Some(viewkit::animation::SpringAnimation::new(
+                previous.map_or(self.position, |sample| sample.value),
+                target as f32,
+                previous.map_or(0., |sample| sample.velocity),
+                now,
+                motion.duration,
+            ));
+            self.target = target;
+        }
+        if let Some(spring) = self.spring {
+            let sample = spring.sample(now);
+            self.position = sample.value;
+            if sample.next_redraw_at.is_none() {
+                self.spring = None;
+            }
+            (self.position, sample.next_redraw_at)
+        } else {
+            (self.position, None)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
     Open,
@@ -89,6 +133,7 @@ pub(crate) struct AppLibraryLayer<C> {
     selected: Cell<Option<usize>>,
     query: RefCell<String>,
     page: Cell<usize>,
+    page_motion: RefCell<PageMotion>,
     was_open: Cell<bool>,
     menu_index: Cell<Option<usize>>,
     menu_position: Cell<Option<Point>>,
@@ -137,6 +182,7 @@ where
             selected: Cell::new(None),
             query: RefCell::new(String::new()),
             page: Cell::new(0),
+            page_motion: RefCell::new(PageMotion::default()),
             was_open: Cell::new(false),
             menu_index: Cell::new(None),
             menu_position: Cell::new(None),
@@ -161,7 +207,11 @@ where
 
     fn panel_rect(bounds: Rect, visible_count: usize, has_multiple_pages: bool) -> Rect {
         let width = PANEL_WIDTH.min(bounds.size.width - 64.0).max(320.0);
-        let rows = visible_count.div_ceil(GRID_COLUMNS).max(1).min(GRID_ROWS);
+        let rows = if has_multiple_pages {
+            GRID_ROWS
+        } else {
+            visible_count.div_ceil(GRID_COLUMNS).max(1).min(GRID_ROWS)
+        };
         let desired_height =
             84.0 + rows as f32 * ITEM_HEIGHT + if has_multiple_pages { 60.0 } else { 34.0 };
         let height = desired_height.min((bounds.size.height - 120.0).max(220.0));
@@ -238,6 +288,7 @@ where
     fn reset_selection(&self) {
         let filtered = self.filtered_indices();
         self.page.set(0);
+        *self.page_motion.borrow_mut() = PageMotion::default();
         self.selected.set(filtered.first().copied());
         self.hovered.set(None);
         self.pressed.set(None);
@@ -279,11 +330,27 @@ where
 
     fn hit_index(&self, panel: Rect, position: Point) -> Option<usize> {
         let filtered = self.filtered_indices();
-        self.visible_indices(&filtered)
-            .into_iter()
+        if !Self::grid_rect(panel, self.page_count(&filtered) > 1).contains(position) {
+            return None;
+        }
+        let presented = self.page_motion.borrow().position;
+        filtered.into_iter()
             .enumerate()
-            .find(|(local_index, _)| Self::item_rect(panel, *local_index).contains(position))
+            .find(|(index, _)| {
+                let mut item = Self::item_rect(panel, *index % PAGE_SIZE);
+                item.origin.x += (*index / PAGE_SIZE) as f32 * panel.size.width - presented * panel.size.width;
+                item.contains(position)
+            })
             .map(|(_, app_index)| app_index)
+    }
+
+    fn grid_rect(panel: Rect, paginated: bool) -> Rect {
+        Rect::new(
+            panel.origin.x + 24.,
+            panel.origin.y + 84.,
+            (panel.size.width - 48.).max(0.),
+            (panel.size.height - 84. - if paginated { 60. } else { 34. }).max(0.),
+        )
     }
 
     fn menu_bounds(&self, bounds: Rect) -> Option<Rect> {
@@ -436,7 +503,15 @@ where
         self.clamp_page(&filtered);
         let visible = self.visible_indices(&filtered);
         let page_count = self.page_count(&filtered);
-        let panel = Self::panel_rect(bounds, visible.len(), page_count > 1);
+        let panel = Self::panel_rect(
+            bounds,
+            if page_count > 1 {
+                PAGE_SIZE
+            } else {
+                visible.len()
+            },
+            page_count > 1,
+        );
         Surface::floating().radius(CornerRadius::Custom(super::desktop_metrics::PANEL_RADIUS))
             .paint(panel, context);
         Text::styled("Applications", TextRole::TitleSmall).paint(
@@ -477,11 +552,30 @@ where
             context,
         );
 
-        for (local_index, app_index) in visible.iter().copied().enumerate() {
+        let (presented, deadline) = self.page_motion.borrow_mut().sample(
+            self.page.get(),
+            context.theme.motion.standard,
+            Instant::now(),
+        );
+        if let Some(deadline) = deadline {
+            context.request_redraw_in_at(panel, deadline);
+        }
+        let grid = Self::grid_rect(panel, page_count > 1);
+        context
+            .display_list
+            .push(viewkit::draw_command::DrawCommand::PushClip { rect: grid });
+        for (index, app_index) in filtered.iter().copied().enumerate() {
             let Some(app) = apps.get(app_index) else {
                 continue;
             };
-            let item = Self::item_rect(panel, local_index);
+            let mut item = Self::item_rect(panel, index % PAGE_SIZE);
+            item.origin.x +=
+                (index / PAGE_SIZE) as f32 * panel.size.width - presented * panel.size.width;
+            if item.origin.x >= grid.origin.x + grid.size.width
+                || item.origin.x + item.size.width <= grid.origin.x
+            {
+                continue;
+            }
             if self.selected.get() == Some(app_index) {
                 let selected_hovered =
                     self.hovered.get() == Some(app_index) || self.pressed.get() == Some(app_index);
@@ -521,6 +615,9 @@ where
                 );
         }
 
+        context
+            .display_list
+            .push(viewkit::draw_command::DrawCommand::PopClip);
         if filtered.is_empty() {
             Text::styled("No applications found", TextRole::Body)
                 .alignment(TextAlignment::Center)
@@ -846,6 +943,30 @@ fn adjacent_selection(filtered: &[usize], selected: Option<usize>, offset: isize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_motion_retargets_without_jumping_and_reduced_motion_is_immediate() {
+        let now = Instant::now();
+        let motion = Theme::LIGHT.motion.standard;
+        let mut page = PageMotion::default();
+        assert_eq!(page.sample(1, motion, now).0, 0.);
+        let time = now + Duration::from_millis(50);
+        let (between, deadline) = page.sample(1, motion, time);
+        assert!(between > 0. && between < 1. && deadline.is_some());
+        assert!((page.sample(0, motion, time).0 - between).abs() < 0.0001);
+        let (end, deadline) = page.sample(0, motion, now + Duration::from_secs(4));
+        assert_eq!(end, 0.);
+        assert!(deadline.is_none());
+        assert_eq!(
+            page.sample(1, Theme::LIGHT.motion.reduced().standard, now),
+            (1., None)
+        );
+        let bounds = Rect::new(0., 0., 1920., 1080.);
+        assert_eq!(
+            AppLibraryLayer::<Rectangle>::panel_rect(bounds, 2, true),
+            AppLibraryLayer::<Rectangle>::panel_rect(bounds, PAGE_SIZE, true)
+        );
+    }
 
     fn app(name: &str, bundle_id: &str, developer: &str) -> AppInfo {
         AppInfo {
