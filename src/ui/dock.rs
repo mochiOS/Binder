@@ -1,6 +1,5 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-#[cfg(any(test, target_os = "mochios"))]
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
