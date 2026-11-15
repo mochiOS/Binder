@@ -2,7 +2,9 @@ use crate::platform::{
     CloseWindowRequest, ProcessId, RemoteWindowId, WindowFocusChangedNotification,
     WindowResizedNotification,
 };
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use crate::apps;
 use viewkit::decoration::metrics;
@@ -103,6 +105,15 @@ pub struct DesktopWindows {
     reported_focus: HashMap<(ProcessId, RemoteWindowId), bool>,
     fitted_windows: HashSet<WindowId>,
     fitted_work_area: Option<Rect>,
+    openings: RefCell<
+        HashMap<
+            WindowId,
+            (
+                Instant,
+                mochios_viewkit_gpu_protocol::window_motion::Opening,
+            ),
+        >,
+    >,
 }
 
 impl Default for DesktopWindows {
@@ -116,11 +127,39 @@ impl Default for DesktopWindows {
             reported_focus: HashMap::new(),
             fitted_windows: HashSet::new(),
             fitted_work_area: None,
+            openings: RefCell::new(HashMap::new()),
         }
     }
 }
 
 impl DesktopWindows {
+    pub(crate) fn opening_opacity(
+        &self,
+        id: WindowId,
+        ready: bool,
+        immediate: bool,
+        now: Instant,
+    ) -> (u8, bool) {
+        let mut openings = self.openings.borrow_mut();
+        if openings.len() > self.windows.len() {
+            openings.retain(|id, _| self.windows.iter().any(|window| window.id == *id));
+        }
+        let (start, opening) = openings.entry(id).or_insert_with(|| {
+            (
+                now,
+                mochios_viewkit_gpu_protocol::window_motion::Opening::pending(),
+            )
+        });
+        opening.advance(
+            now.saturating_duration_since(*start)
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+            ready,
+            immediate,
+        );
+        (opening.opacity(), ready && opening.pending_frames())
+    }
+
     /// Reconcile compositor-owned windows without inventing remote IDs or
     /// spawning an application again. Internal Binder windows are independent.
     pub fn synchronize_native(&mut self, snapshot: &[crate::platform::NativeWindow]) -> bool {
@@ -1091,5 +1130,35 @@ mod tests {
         assert_eq!(desktop.focused, Some(first));
         assert!(desktop.focus_next_visible());
         assert_eq!(desktop.focused, Some(third));
+    }
+}
+
+#[cfg(test)]
+mod opening_tests {
+    use super::*;
+    use std::time::Duration;
+    #[test]
+    fn window_reveal_waits_for_content_and_does_not_replay_on_restore() {
+        let mut desktop = DesktopWindows::default();
+        let (id, _) = desktop.open_test(ProcessId(1), "Test".into(), 640, 480, true);
+        let now = Instant::now();
+        assert_eq!(desktop.opening_opacity(id, false, false, now), (0, false));
+        assert_eq!(
+            desktop.opening_opacity(id, true, false, now + Duration::from_secs(1)),
+            (0, true)
+        );
+        let (between, active) =
+            desktop.opening_opacity(id, true, false, now + Duration::from_millis(1090));
+        assert!(between > 0 && between < 255 && active);
+        assert_eq!(
+            desktop.opening_opacity(id, true, false, now + Duration::from_secs(2)),
+            (255, false)
+        );
+        desktop.minimize(id);
+        desktop.focus(id);
+        assert_eq!(
+            desktop.opening_opacity(id, true, false, now + Duration::from_secs(3)),
+            (255, false)
+        );
     }
 }

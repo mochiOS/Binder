@@ -21,6 +21,7 @@ use viewkit::platform::{CursorIcon, PlatformEvent};
 
 pub(crate) struct Surface {
     pub list: DisplayList,
+    pub has_frame: bool,
     pub cursor: CursorIcon,
     connection: Rc<RefCell<Connection>>,
     local_id: u64,
@@ -544,6 +545,7 @@ impl PreviewDesktop {
                                             key.clone(),
                                             Rc::new(RefCell::new(Surface {
                                                 list: DisplayList::new(),
+                                                has_frame: false,
                                                 cursor: CursorIcon::Default,
                                                 connection: Rc::clone(connection),
                                                 local_id: id,
@@ -574,6 +576,7 @@ impl PreviewDesktop {
                                         }
                                         let mut surface = surface.borrow_mut();
                                         surface.list = list;
+                                        surface.has_frame = true;
                                         surface.cursor = cursor;
                                         self.dirty = true;
                                     }
@@ -1080,6 +1083,7 @@ mod decoration_admission_tests {
                 key.clone(),
                 Rc::new(RefCell::new(Surface {
                     list: DisplayList::new(),
+                    has_frame: false,
                     cursor: CursorIcon::Default,
                     connection,
                     local_id: 1,

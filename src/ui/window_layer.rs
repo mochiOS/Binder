@@ -541,13 +541,30 @@ where
             });
 
             for desktop_window in &desktop.windows {
-                if desktop_window.minimized {
+                if desktop_window.minimized || desktop_window.externally_composited() {
                     continue;
                 }
 
                 let focused = desktop.focused == Some(desktop_window.id);
+                let ready = {
+                    #[cfg(target_os = "linux")]
+                    { !desktop_window.renderer.starts_with("host-preview:") ||
+                        crate::platform::linux::preview::surface(&desktop_window.renderer)
+                            .is_some_and(|surface| surface.borrow().has_frame) }
+                    #[cfg(not(target_os = "linux"))]
+                    { true }
+                };
+                let (opacity, active) = desktop.opening_opacity(desktop_window.id, ready,
+                    !context.theme.motion.omochi.enabled || context.theme.motion.standard.duration.is_zero(), Instant::now());
+                if active {
+                    context.request_redraw_in_at(desktop_window.frame.expanded(WINDOW_EFFECT_EXTENT),
+                        Instant::now() + viewkit::animation::DEFAULT_FRAME_INTERVAL);
+                }
+                let transform = viewkit::draw_command::PaintTransform {
+                    anchor: desktop_window.frame.origin, scale: 1., offset: Point::default(), opacity: f32::from(opacity) / 255.,
+                };
 
-                window::view(
+                context.with_presentation(transform, true, |context| window::view(
                     desktop_window,
                     focused,
                     self.test_state(desktop_window),
@@ -560,7 +577,7 @@ where
                     Rc::clone(&self.control_center_editor_interaction),
                     self.apps.clone(),
                 )
-                .paint(desktop_window.frame, context);
+                .paint(desktop_window.frame, context));
             }
         });
     }
