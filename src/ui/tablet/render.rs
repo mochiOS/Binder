@@ -17,6 +17,58 @@ pub(super) struct Geometry {
     pub dock_pitch: f32,
 }
 
+struct NotificationSheetLayout {
+    time: Rect,
+    date: Rect,
+    list: Rect,
+    controls: Rect,
+}
+
+impl NotificationSheetLayout {
+    fn new(geometry: &Geometry, theme: &Theme) -> Self {
+        let bounds = geometry.bounds;
+        let margin = theme.spacing.extra_large;
+        let top = (bounds.size.height * 0.08)
+            .max(theme.layout.status_bar_height + margin)
+            .min(theme.layout.settings_row_height * 2.0);
+        let time = Rect::new(
+            bounds.origin.x,
+            bounds.origin.y + top,
+            bounds.size.width,
+            theme.typography.display_large.line_height,
+        );
+        let date = Rect::new(
+            bounds.origin.x,
+            time.origin.y + time.size.height + theme.spacing.extra_small,
+            bounds.size.width,
+            theme.typography.label.line_height,
+        );
+        let list_top = date.origin.y + date.size.height + theme.layout.section_gap * 2.0;
+        let width = (bounds.size.width - margin * 2.0)
+            .max(0.0)
+            .min(theme.layout.content_max_width);
+        let list = Rect::new(
+            bounds.origin.x + (bounds.size.width - width) * 0.5,
+            list_top,
+            width,
+            (geometry.edge.origin.y - margin - list_top).max(0.0),
+        );
+        let side = theme.controls.touch_height;
+        let controls = Rect::new(
+            bounds.origin.x + bounds.size.width - margin - side,
+            bounds.origin.y + theme.layout.status_bar_height + theme.spacing.small,
+            side,
+            side,
+        );
+        Self {
+            time,
+            date,
+            list,
+            controls,
+        }
+    }
+}
+
 impl Geometry {
     pub fn for_environment(
         bounds: Rect,
@@ -390,13 +442,22 @@ impl TabletShell {
         self.icons.paint(app, bounds, context);
     }
     pub(super) fn notification_bounds(&self, geometry: &Geometry) -> Rect {
-        let width = 418.0_f32.min(geometry.bounds.size.width);
-        Rect::new(
-            geometry.bounds.origin.x + (geometry.bounds.size.width - width) * 0.5,
-            geometry.bounds.origin.y + 80.0,
-            width,
-            (geometry.bounds.size.height - 80.0 - geometry.edge.size.height).max(1.0),
-        )
+        NotificationSheetLayout::new(geometry, &Theme::current()).list
+    }
+
+    pub(super) fn notification_settings_bounds(&self, geometry: &Geometry) -> Rect {
+        NotificationSheetLayout::new(geometry, &Theme::current()).controls
+    }
+
+    pub(super) fn notification_settings_button(&self) -> Button {
+        Button::with_interaction_and_label(self.state.borrow().notification_settings.clone(), "")
+            .style(ButtonStyle::Standard)
+            .size(ButtonSize::Touch)
+            .radius(CornerRadius::Full)
+            .accessibility_label("Quick settings")
+            .content(
+                Icon::new(SymbolName::ChevronDown).size(Theme::current().layout.control_icon_size),
+            )
     }
 
     pub(super) fn home_item_at(&self, point: Point, geometry: &Geometry) -> Option<u64> {
@@ -560,13 +621,7 @@ impl TabletShell {
                 return None;
             }
             Surface::Notifications => {
-                if Rect::new(
-                    geometry.bounds.origin.x + geometry.bounds.size.width - 160.0,
-                    geometry.bounds.origin.y + geometry.gap,
-                    140.0,
-                    44.0,
-                )
-                .contains(point)
+                if self.notification_settings_bounds(geometry).contains(point)
                 {
                     return Some(Hit::Controls);
                 }
@@ -1060,7 +1115,20 @@ impl TabletShell {
         if matches!(surface, Surface::Home)
             || (!native_foreground && (previous == Surface::Home || progress < 1.0))
         {
-            self.paint_home(&geometry, context);
+            if surface == Surface::Notifications {
+                context.with_presentation(
+                    PaintTransform {
+                        anchor: geometry.bounds.origin,
+                        scale: 1.0,
+                        offset: Point::new(0.0, 0.0),
+                        opacity: 1.0 - amount,
+                    },
+                    false,
+                    |context| self.paint_home(&geometry, context),
+                );
+            } else {
+                self.paint_home(&geometry, context);
+            }
         }
         // Panel pixels outside these sensors remain transparent to both
         // composition and input. App events go directly through Kagami.
@@ -1091,8 +1159,12 @@ impl TabletShell {
                 })
             });
             if let Some(window) = window.filter(|window| !window.externally_composited()) {
+                let mut transform = self.app_transform(&geometry);
+                if surface == Surface::Notifications {
+                    transform.opacity *= 1.0 - amount;
+                }
                 context.with_presentation(
-                    self.app_transform(&geometry),
+                    transform,
                     surface == Surface::Application && progress > 0.99,
                     |context| {
                         context.display_list.push(DrawCommand::PushRoundedClip {
@@ -1141,35 +1213,19 @@ impl TabletShell {
                     Surface::Library => self.paint_library(&geometry, context),
                     Surface::Notifications => {
                         let clock = self.resources.system_bar.get().clock;
-                        Text::styled(
-                            format!("{}  {}", clock.date, clock.time),
-                            TextRole::TitleLarge,
-                        )
-                        .alignment(TextAlignment::Center)
-                        .color(Color::WHITE)
-                        .paint(
-                            Rect::new(
-                                geometry.bounds.origin.x,
-                                geometry.bounds.origin.y + 32.0,
-                                geometry.bounds.size.width,
-                                48.0,
-                            ),
-                            context,
-                        );
-                        self.notifications
-                            .paint(self.notification_bounds(&geometry), context);
-                        Button::new("Quick settings")
-                            .style(ButtonStyle::Ghost)
-                            .content(Text::label("Quick settings").color(Color::WHITE))
-                            .paint(
-                                Rect::new(
-                                    geometry.bounds.origin.x + geometry.bounds.size.width - 160.0,
-                                    geometry.bounds.origin.y + geometry.gap,
-                                    140.0,
-                                    44.0,
-                                ),
-                                context,
-                            );
+                        let layout = NotificationSheetLayout::new(&geometry, context.theme);
+                        Text::styled(clock.time, TextRole::DisplayLarge)
+                            .weight(500)
+                            .alignment(TextAlignment::Center)
+                            .color(Color::WHITE)
+                            .paint(layout.time, context);
+                        Text::styled(clock.date, TextRole::Label)
+                            .alignment(TextAlignment::Center)
+                            .color(Color::WHITE.with_alpha(220))
+                            .paint(layout.date, context);
+                        self.notifications.paint(layout.list, context);
+                        self.notification_settings_button()
+                            .paint(layout.controls, context);
                     }
                     Surface::Switcher => self.paint_switcher(&geometry, context),
                     Surface::Folder(id) => self.paint_folder(id, &geometry, context),
@@ -1186,20 +1242,22 @@ impl TabletShell {
         } else {
             Color::WHITE
         };
-        Text::styled(
-            format!("{}  {}", system.clock.date, system.clock.time),
-            TextRole::Caption,
-        )
-        .color(foreground)
-        .paint(
-            Rect::new(
-                geometry.bounds.origin.x + geometry.gap,
-                geometry.bounds.origin.y + 12.0,
-                320.0,
-                24.0,
-            ),
-            context,
-        );
+        if surface != Surface::Notifications {
+            Text::styled(
+                format!("{}  {}", system.clock.date, system.clock.time),
+                TextRole::Caption,
+            )
+            .color(foreground)
+            .paint(
+                Rect::new(
+                    geometry.bounds.origin.x + geometry.gap,
+                    geometry.bounds.origin.y + 12.0,
+                    320.0,
+                    24.0,
+                ),
+                context,
+            );
+        }
         let right = geometry.bounds.origin.x + geometry.bounds.size.width - geometry.gap;
         if system.battery.available {
             Icon::new(SymbolName::BatteryFull)
@@ -1280,6 +1338,29 @@ impl TabletShell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notification_column_keeps_header_and_touch_controls_clear_in_both_orientations() {
+        for (width, height) in [(800., 1100.), (1280., 800.), (600., 480.)] {
+            let geometry = Geometry::for_environment(
+                Rect::new(0., 0., width, height),
+                &Theme::LIGHT,
+                3,
+                WindowEnvironment {
+                    safe_area: viewkit::edge_insets::EdgeInsets::new(20., 0., 16., 0.),
+                    ..Default::default()
+                },
+            );
+            let layout = NotificationSheetLayout::new(&geometry, &Theme::LIGHT);
+            assert!(layout.list.origin.y > layout.date.origin.y + layout.date.size.height);
+            assert!(layout.list.origin.x >= geometry.bounds.origin.x);
+            assert!(layout.list.origin.y + layout.list.size.height <= geometry.edge.origin.y);
+            assert!(layout.list.size.width <= Theme::LIGHT.layout.content_max_width);
+            assert_eq!(layout.controls.size, Size::new(44., 44.));
+            assert!(
+                (layout.list.origin.x + layout.list.size.width * 0.5 - width * 0.5).abs() < 0.01
+            );
+        }
+    }
     #[test]
     fn keyboard_reduces_library_without_resizing_active_application() {
         let bounds = Rect::new(0., 0., 800., 1100.);

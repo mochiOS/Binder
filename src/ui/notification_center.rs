@@ -1,6 +1,5 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 #[cfg(not(target_os = "mochios"))]
@@ -21,7 +20,6 @@ const PANEL_MARGIN: f32 = 14.0;
 const PANEL_PADDING: f32 = 16.0;
 const HEADER_HEIGHT: f32 = 42.0;
 const ROW_HEIGHT: f32 = 102.0;
-const FALLBACK_ICON: &str = "/system/applications/Binder.app/appicon.svg";
 const BANNER_WIDTH: f32 = 370.0;
 const BANNER_HEIGHT: f32 = 92.0;
 const BANNER_MARGIN: f32 = 14.0;
@@ -84,8 +82,27 @@ enum CenterEntry {
     Notification(u64),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CenterPresentation {
+    Panel,
+    Tablet,
+}
+
 impl CenterEntry {
-    fn height(&self, theme: &Theme) -> f32 {
+    fn height(&self, theme: &Theme, presentation: CenterPresentation) -> f32 {
+        if presentation == CenterPresentation::Tablet {
+            return match self {
+                Self::Group { .. } => theme.controls.touch_height + theme.spacing.small,
+                Self::Notification(_) => {
+                    theme.spacing.medium * 2.0
+                        + theme.typography.caption.line_height
+                        + theme.typography.label.line_height
+                        + theme.typography.body.line_height * 2.0
+                        + theme.spacing.extra_small * 2.0
+                        + theme.spacing.small
+                }
+            };
+        }
         match self {
             Self::Group { .. } => theme.layout.control_height + theme.spacing.small,
             Self::Notification(_) => ROW_HEIGHT,
@@ -130,7 +147,7 @@ fn grouped_entries(
 }
 
 pub(crate) struct NotificationCenterLayer<C> {
-    external_transition: bool,
+    presentation: CenterPresentation,
     content: C,
     open: State<bool>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
@@ -152,7 +169,7 @@ impl<C: View> NotificationCenterLayer<C> {
         activation: Rc<RefCell<super::app_library::PendingAppActivation>>,
     ) -> Self {
         Self {
-            external_transition: false,
+            presentation: CenterPresentation::Panel,
             content,
             open,
             platform,
@@ -165,13 +182,37 @@ impl<C: View> NotificationCenterLayer<C> {
         }
     }
 
-    pub(super) fn with_external_transition(mut self) -> Self {
-        self.external_transition = true;
+    pub(super) fn with_tablet_presentation(mut self) -> Self {
+        self.presentation = CenterPresentation::Tablet;
         self
     }
 
-    pub(super) fn banner_contains(&self,bounds:Rect,position:Point)->bool {
-        self.interaction.banner.borrow().as_ref().is_some_and(|banner|Self::banner_rect(bounds,*banner,Instant::now()).0.contains(position))
+    fn is_tablet(&self) -> bool {
+        self.presentation == CenterPresentation::Tablet
+    }
+
+    fn frame(&self, bounds: Rect) -> Rect {
+        if self.is_tablet() {
+            bounds
+        } else {
+            Self::panel(bounds)
+        }
+    }
+
+    pub(super) fn scroll_bounds(&self, bounds: Rect) -> Rect {
+        self.body_rect(self.frame(bounds))
+    }
+
+    pub(super) fn banner_contains(&self, bounds: Rect, position: Point) -> bool {
+        self.interaction
+            .banner
+            .borrow()
+            .as_ref()
+            .is_some_and(|banner| {
+                Self::banner_rect(bounds, *banner, Instant::now())
+                    .0
+                    .contains(position)
+            })
     }
 
     fn banner_damage(bounds: Rect) -> Rect {
@@ -336,7 +377,10 @@ impl<C: View> NotificationCenterLayer<C> {
         )
     }
 
-    fn panel_damage(bounds: Rect) -> Rect {
+    fn panel_damage(&self, bounds: Rect) -> Rect {
+        if self.is_tablet() {
+            return bounds;
+        }
         let target = Self::panel(bounds);
         let extent = Self::floating_extent();
         Rect::new(
@@ -350,9 +394,9 @@ impl<C: View> NotificationCenterLayer<C> {
     }
 
     fn panel_presentation(&self, bounds: Rect, now: Instant) -> (Rect, f32, Option<Instant>) {
-        if self.external_transition {
+        if self.is_tablet() {
             return (
-                Self::panel(bounds),
+                self.frame(bounds),
                 if self.open.get() { 1.0 } else { 0.0 },
                 None,
             );
@@ -371,7 +415,16 @@ impl<C: View> NotificationCenterLayer<C> {
         (panel, amount, next)
     }
 
-    fn clear_rect(panel: Rect) -> Rect {
+    fn clear_rect(&self, panel: Rect) -> Rect {
+        if self.is_tablet() {
+            let size = Theme::current().controls.touch_height;
+            return Rect::new(
+                panel.origin.x + panel.size.width - size,
+                panel.origin.y,
+                size,
+                size,
+            );
+        }
         Rect::new(
             panel.origin.x + panel.size.width - 92.0,
             panel.origin.y + 10.0,
@@ -380,7 +433,17 @@ impl<C: View> NotificationCenterLayer<C> {
         )
     }
 
-    fn body_rect(panel: Rect) -> Rect {
+    fn body_rect(&self, panel: Rect) -> Rect {
+        if self.is_tablet() {
+            let theme = Theme::current();
+            let header = theme.controls.touch_height + theme.spacing.small;
+            return Rect::new(
+                panel.origin.x,
+                panel.origin.y + header,
+                panel.size.width,
+                (panel.size.height - header).max(0.0),
+            );
+        }
         Rect::new(
             panel.origin.x + PANEL_PADDING,
             panel.origin.y + HEADER_HEIGHT,
@@ -397,9 +460,9 @@ impl<C: View> NotificationCenterLayer<C> {
         let theme = Theme::current();
         (entries
             .iter()
-            .map(|entry| entry.height(&theme))
+            .map(|entry| entry.height(&theme, self.presentation))
             .sum::<f32>()
-            - Self::body_rect(panel).size.height)
+            - self.body_rect(panel).size.height)
             .max(0.0)
     }
 
@@ -416,12 +479,12 @@ impl<C: View> NotificationCenterLayer<C> {
             .get()
             .clamp(0.0, self.maximum_scroll(panel, &entries));
         self.interaction.scroll.set(offset);
-        let body = Self::body_rect(panel);
+        let body = self.body_rect(panel);
         let mut y = body.origin.y - offset;
         entries
             .into_iter()
             .filter_map(|entry| {
-                let height = entry.height(&theme);
+                let height = entry.height(&theme, self.presentation);
                 let row = Rect::new(
                     body.origin.x,
                     y,
@@ -444,7 +507,26 @@ impl<C: View> NotificationCenterLayer<C> {
             .clone();
         Button::with_interaction_and_label(state, label)
             .style(ButtonStyle::Ghost)
-            .size(ButtonSize::Small)
+            .size(if self.is_tablet() {
+                ButtonSize::Touch
+            } else {
+                ButtonSize::Small
+            })
+    }
+
+    fn clear_control(&self) -> Button {
+        let button = self
+            .control(Hit::Clear, "Clear All")
+            .accessibility_label("Clear all notifications");
+        if self.is_tablet() {
+            button.content_padding(false).content(
+                Icon::new(SymbolName::X)
+                    .size(Theme::current().layout.control_icon_size)
+                    .color(Color::WHITE),
+            )
+        } else {
+            button
+        }
     }
 
     fn row_control(&self, entry: &CenterEntry, row: Rect, apps: &[AppInfo]) -> (Hit, Rect, Button) {
@@ -474,9 +556,11 @@ impl<C: View> NotificationCenterLayer<C> {
                                 } else {
                                     SymbolName::ChevronRight
                                 })
+                                .color(if self.is_tablet() { Color::WHITE } else { Theme::current().shell.secondary_text })
                                 .size(14.0),
                             )
-                            .child(Text::label(label).layout().flex_grow(1.0)),
+                            .child(Text::label(label).color(if self.is_tablet() { Color::WHITE }
+                                else { Theme::current().shell.primary_text }).layout().flex_grow(1.0)),
                     );
                 (hit, row, button)
             }
@@ -486,8 +570,12 @@ impl<C: View> NotificationCenterLayer<C> {
                     .control(hit, "")
                     .accessibility_label("Dismiss notification")
                     .content_padding(false)
-                    .content(Icon::new(SymbolName::X).size(10.0));
-                (hit, Self::remove_rect(row), button)
+                    .content(Icon::new(SymbolName::X).size(if self.is_tablet() {
+                        Theme::current().layout.compact_icon_size
+                    } else {
+                        10.0
+                    }));
+                (hit, self.remove_rect(row), button)
             }
         }
     }
@@ -515,7 +603,17 @@ impl<C: View> NotificationCenterLayer<C> {
         }
     }
 
-    fn remove_rect(row: Rect) -> Rect {
+    fn remove_rect(&self, row: Rect) -> Rect {
+        if self.is_tablet() {
+            let theme = Theme::current();
+            let size = theme.controls.touch_height;
+            return Rect::new(
+                row.origin.x + row.size.width - size - theme.spacing.extra_small,
+                row.origin.y + theme.spacing.extra_small,
+                size,
+                size,
+            );
+        }
         Rect::new(
             row.origin.x + row.size.width - 32.0,
             row.origin.y + 8.0,
@@ -541,10 +639,10 @@ impl<C: View> NotificationCenterLayer<C> {
         ) {
             return None;
         }
-        if Self::clear_rect(panel).contains(position) && !notifications.is_empty() {
+        if self.clear_rect(panel).contains(position) && !notifications.is_empty() {
             return Some(Hit::Clear);
         }
-        if !Self::body_rect(panel).contains(position) {
+        if !self.body_rect(panel).contains(position) {
             return None;
         }
         for (entry, row) in self.visible_entries(panel, notifications) {
@@ -553,7 +651,7 @@ impl<C: View> NotificationCenterLayer<C> {
                     return Some(Hit::Group(latest));
                 }
                 CenterEntry::Notification(id) if row.contains(position) => {
-                    return Some(if Self::remove_rect(row).contains(position) {
+                    return Some(if self.remove_rect(row).contains(position) {
                         Hit::Remove(id)
                     } else {
                         Hit::Notification(id)
@@ -583,26 +681,63 @@ impl<C: View> NotificationCenterLayer<C> {
             self.hovered.get(),
             Some(Hit::Notification(id) | Hit::Remove(id)) if id == notification.id
         );
-        Card::new()
-            .color(RectangleColor::Custom(if hovered {
-                theme.shell.item_hover
-            } else {
-                theme.card.background
-            }))
-            .shadow(ShadowStyle::None)
-            .paint(row, context);
-
-        let icon_bounds = Rect::new(row.origin.x + 12.0, row.origin.y + 13.0, 38.0, 38.0);
-        let icon_path = app
-            .and_then(|application| application.icon.as_deref())
-            .unwrap_or_else(|| Path::new(FALLBACK_ICON));
-        if let Some(icon) = self.icon_cache.load(icon_path,icon_bounds,context.scale_factor()) {
-            super::app_icon::paint(icon,icon_bounds,context);
+        let card = if self.is_tablet() {
+            Card::new()
+                .radius(CornerRadius::ExtraLarge)
+                .border(BorderStyle::None)
         } else {
-            Icon::new(SymbolName::Bell)
-                .size(theme.layout.stepper_icon_size)
-                .color(theme.shell.secondary_text)
-                .paint(icon_bounds, context);
+            Card::new()
+        };
+        card.color(RectangleColor::Custom(if hovered {
+            theme.shell.item_hover
+        } else {
+            theme.card.background
+        }))
+        .shadow(ShadowStyle::None)
+        .paint(row, context);
+
+        let inset = if self.is_tablet() {
+            theme.spacing.medium
+        } else {
+            12.0
+        };
+        let icon_size = if self.is_tablet() {
+            theme.layout.avatar_size
+        } else {
+            38.0
+        };
+        let icon_bounds = Rect::new(
+            row.origin.x + inset,
+            row.origin.y + inset,
+            icon_size,
+            icon_size,
+        );
+        let text_x = if self.is_tablet() {
+            icon_bounds.origin.x + icon_size + theme.spacing.small
+        } else {
+            row.origin.x + 60.0
+        };
+        let header_top = if self.is_tablet() { inset } else { 8.0 };
+        let title_top = if self.is_tablet() {
+            header_top + theme.typography.caption.line_height + theme.spacing.extra_small
+        } else {
+            29.0
+        };
+        let body_top = if self.is_tablet() {
+            title_top + theme.typography.label.line_height + theme.spacing.extra_small
+        } else {
+            52.0
+        };
+        let text_width = (row.origin.x + row.size.width - inset - text_x).max(0.0);
+        let timestamp_right = if self.is_tablet() {
+            self.remove_rect(row).origin.x
+        } else {
+            row.origin.x + row.size.width - 42.0
+        };
+        if let Some(app) = app {
+            self.icon_cache.paint(app, icon_bounds, context);
+        } else {
+            super::app_icon::paint_fallback_icon(icon_bounds, context);
         }
 
         let app_name = app
@@ -613,10 +748,10 @@ impl<C: View> NotificationCenterLayer<C> {
             .color(theme.shell.secondary_text)
             .paint(
                 Rect::new(
-                    row.origin.x + 60.0,
-                    row.origin.y + 8.0,
-                    (row.size.width - 160.0).max(0.0),
-                    20.0,
+                    text_x,
+                    row.origin.y + header_top,
+                    (timestamp_right - 56.0 - theme.spacing.small - text_x).max(0.0),
+                    theme.typography.caption.line_height,
                 ),
                 context,
             );
@@ -644,10 +779,10 @@ impl<C: View> NotificationCenterLayer<C> {
             .color(theme.shell.tertiary_text)
             .paint(
                 Rect::new(
-                    row.origin.x + row.size.width - 98.0,
-                    row.origin.y + 8.0,
+                    timestamp_right - 56.0,
+                    row.origin.y + header_top,
                     56.0,
-                    20.0,
+                    theme.typography.caption.line_height,
                 ),
                 context,
             );
@@ -662,24 +797,35 @@ impl<C: View> NotificationCenterLayer<C> {
             .color(theme.shell.primary_text)
             .paint(
                 Rect::new(
-                    row.origin.x + 60.0,
-                    row.origin.y + 29.0,
-                    row.size.width - 76.0,
-                    22.0,
+                    text_x,
+                    row.origin.y + title_top,
+                    (text_width - if self.is_tablet() { theme.controls.touch_height } else { 0.0 }).max(0.0),
+                    theme.typography.label.line_height,
                 ),
                 context,
             );
-        Text::styled(&notification.body, TextRole::Caption)
-            .color(theme.shell.secondary_text)
-            .paint(
-                Rect::new(
-                    row.origin.x + 60.0,
-                    row.origin.y + 52.0,
-                    row.size.width - 76.0,
-                    32.0,
-                ),
-                context,
-            );
+        Text::styled(
+            &notification.body,
+            if self.is_tablet() {
+                TextRole::Body
+            } else {
+                TextRole::Caption
+            },
+        )
+        .color(theme.shell.secondary_text)
+        .paint(
+            Rect::new(
+                text_x,
+                row.origin.y + body_top,
+                text_width,
+                if self.is_tablet() {
+                    theme.typography.body.line_height * 2.0
+                } else {
+                    32.0
+                },
+            ),
+            context,
+        );
     }
 
     fn paint_banner(
@@ -817,7 +963,7 @@ impl<C: View> View for NotificationCenterLayer<C> {
         }
         let (panel, amount, next_panel_frame) = self.panel_presentation(bounds, now);
         if let Some(next) = next_panel_frame {
-            context.request_redraw_in_at(Self::panel_damage(bounds), next);
+            context.request_redraw_in_at(self.panel_damage(bounds), next);
         }
         if amount <= 0.0 && !self.open.get() {
             let apps = self.apps.get();
@@ -838,48 +984,84 @@ impl<C: View> View for NotificationCenterLayer<C> {
             .expanded_groups
             .borrow_mut()
             .retain(|bundle| notifications.iter().any(|item| item.bundle_id == *bundle));
-        Surface::floating().paint(panel, context);
+        if !self.is_tablet() {
+            Surface::floating().paint(panel, context);
+        }
         if self.open.get() {
-            let mut scope = AccessibilityNode::new(AccessibilityRole::Group, Self::panel(bounds));
+            let mut scope = AccessibilityNode::new(AccessibilityRole::Group, self.frame(bounds));
             scope.label = Some("Notification Center".into());
             scope.focus_scope = true;
             context.record_accessibility(scope);
         }
-        Text::styled("Notifications", TextRole::TitleSmall)
-            .color(Theme::current().shell.primary_text)
-            .paint(
-                Rect::new(
-                    panel.origin.x + PANEL_PADDING,
-                    panel.origin.y + 12.0,
-                    220.0,
-                    26.0,
-                ),
-                context,
-            );
+        let theme = Theme::current();
+        if !self.is_tablet() || !notifications.is_empty() {
+            Text::styled("Notifications", TextRole::TitleSmall)
+                .color(if self.is_tablet() {
+                    Color::WHITE
+                } else {
+                    theme.shell.primary_text
+                })
+                .paint(
+                    Rect::new(
+                        panel.origin.x
+                            + if self.is_tablet() {
+                                theme.spacing.extra_small
+                            } else {
+                                PANEL_PADDING
+                            },
+                        panel.origin.y
+                            + if self.is_tablet() {
+                                (theme.controls.touch_height
+                                    - theme.typography.title_small.line_height)
+                                    * 0.5
+                            } else {
+                                12.0
+                            },
+                        (panel.size.width - theme.controls.touch_height - theme.spacing.small)
+                            .max(0.0),
+                        theme.typography.title_small.line_height,
+                    ),
+                    context,
+                );
+        }
         if !notifications.is_empty() {
-            self.control(Hit::Clear, "Clear All")
-                .paint(Self::clear_rect(panel), context);
+            self.clear_control().paint(self.clear_rect(panel), context);
         }
         if notifications.is_empty() {
+            let body = self.body_rect(panel);
+            let center_y = body.origin.y + body.size.height * 0.35;
+            let foreground = if self.is_tablet() {
+                Color::WHITE.with_alpha(210)
+            } else {
+                theme.shell.secondary_text
+            };
             Icon::new(SymbolName::Bell)
-                .size(28.0)
-                .color(Theme::current().shell.tertiary_text)
+                .size(theme.layout.avatar_size)
+                .color(foreground)
                 .paint(
                     Rect::new(
                         panel.origin.x,
-                        panel.origin.y + panel.size.height * 0.38,
+                        if self.is_tablet() {
+                            center_y - theme.layout.avatar_size
+                        } else {
+                            panel.origin.y + panel.size.height * 0.38
+                        },
                         panel.size.width,
-                        36.0,
+                        theme.layout.avatar_size,
                     ),
                     context,
                 );
             Text::styled("No Notifications", TextRole::Label)
                 .alignment(TextAlignment::Center)
-                .color(Theme::current().shell.secondary_text)
+                .color(foreground)
                 .paint(
                     Rect::new(
                         panel.origin.x,
-                        panel.origin.y + panel.size.height * 0.48,
+                        if self.is_tablet() {
+                            center_y + theme.spacing.medium
+                        } else {
+                            panel.origin.y + panel.size.height * 0.48
+                        },
                         panel.size.width,
                         24.0,
                     ),
@@ -887,7 +1069,7 @@ impl<C: View> View for NotificationCenterLayer<C> {
                 );
             return;
         }
-        let body = Self::body_rect(panel);
+        let body = self.body_rect(panel);
         context
             .display_list
             .push(viewkit::draw_command::DrawCommand::PushClip { rect: body });
@@ -1021,19 +1203,17 @@ impl<C: View> View for NotificationCenterLayer<C> {
             | ViewEvent::PointerFocusRequested { position } => Some(*position),
             _ => None,
         };
-        if bar_position.is_some_and(|point| point.y < bounds.origin.y + PANEL_TOP) {
+        if !self.is_tablet()
+            && bar_position.is_some_and(|point| point.y < bounds.origin.y + PANEL_TOP)
+        {
             return self.content.handle_event(bounds, event, context);
         }
         let apps = self.apps.get();
         let mut controls = Vec::new();
         if !notifications.is_empty() {
-            controls.push((
-                Hit::Clear,
-                Self::clear_rect(panel),
-                self.control(Hit::Clear, "Clear All"),
-            ));
+            controls.push((Hit::Clear, self.clear_rect(panel), self.clear_control()));
         }
-        let body = Self::body_rect(panel);
+        let body = self.body_rect(panel);
         for (entry, row) in self.visible_entries(panel, &notifications) {
             let control = self.row_control(&entry, row, &apps);
             if control.1.intersection(body) == Some(control.1) {
@@ -1043,7 +1223,7 @@ impl<C: View> View for NotificationCenterLayer<C> {
         if let ViewEvent::PointerMoved { position } = event {
             let hit = self.hit(bounds, *position, &notifications);
             if self.hovered.replace(hit) != hit {
-                context.request_redraw_in(Self::panel_damage(bounds));
+                context.request_redraw_in(self.panel_damage(bounds));
             }
         }
         let mut consumed = false;
@@ -1051,7 +1231,7 @@ impl<C: View> View for NotificationCenterLayer<C> {
             consumed |= control.handle_event(frame, event, context).is_consumed();
             if control.interaction().take_clicked() {
                 self.apply(hit, &notifications);
-                context.request_redraw_in(Self::panel_damage(bounds));
+                context.request_redraw_in(self.panel_damage(bounds));
                 return EventResult::Consumed;
             }
         }

@@ -140,6 +140,7 @@ pub(crate) struct TabletState {
     catalogue: Vec<String>,
     search: TextFieldInteractionState,
     notification_interaction: Rc<super::notification_center::NotificationCenterInteraction>,
+    notification_settings: ButtonInteractionState,
     // Existing overlay components request dismissal through these retained
     // adapters. Surface remains the authoritative exclusive presentation.
     notification_open: State<bool>,
@@ -186,6 +187,7 @@ impl Default for TabletState {
             notification_interaction: Rc::new(
                 super::notification_center::NotificationCenterInteraction::default(),
             ),
+            notification_settings: ButtonInteractionState::new(),
             notification_open: State::new(false),
             control_open: State::new(false),
             list_delta: 0.0,
@@ -236,7 +238,7 @@ impl TabletShell {
             state.borrow().notification_interaction.clone(),
             resources.pending.clone(),
         )
-        .with_external_transition();
+        .with_tablet_presentation();
         let controls = super::control_center::ControlCenterLayer::new(
             EmptyView,
             control_open.clone(),
@@ -1051,8 +1053,7 @@ impl TabletShell {
                     Surface::Library => Origin::Library,
                     Surface::Folder(_) => Origin::Folder,
                     Surface::Notifications
-                        if position.y > self.notification_bounds(geometry).origin.y + 105.0
-                            && self.notification_bounds(geometry).contains(position)
+                        if self.notifications.scroll_bounds(self.notification_bounds(geometry)).contains(position)
                             && !self.resources.platform.borrow().notifications().is_empty() =>
                     {
                         Origin::NotificationList
@@ -1309,6 +1310,29 @@ impl TabletShell {
             self.dock_apps().len(),
             context.environment(),
         );
+        if self.state.borrow().surface == Surface::Notifications
+            && matches!(
+                event,
+                ViewEvent::KeyPressed { .. }
+                    | ViewEvent::KeyReleased { .. }
+                    | ViewEvent::KeyboardFocusRequested { .. }
+                    | ViewEvent::FocusVisibilityChanged { .. }
+                    | ViewEvent::FocusChanged { .. }
+                    | ViewEvent::ReconcileComponents { .. }
+            )
+        {
+            let button = self.notification_settings_button();
+            let result =
+                button.handle_event(self.notification_settings_bounds(&geometry), event, context);
+            if button.interaction().take_clicked() {
+                self.show(Surface::Controls, Instant::now());
+                context.request_redraw();
+                return EventResult::Consumed;
+            }
+            if result.is_consumed() {
+                return result;
+            }
+        }
         if matches!(event, ViewEvent::FocusChanged { focused: false }) {
             let mut state = self.state.borrow_mut();
             state.gestures.clear();
