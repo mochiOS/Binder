@@ -11,6 +11,8 @@ use std::process::{Command, Stdio};
 use crate::apps;
 
 #[cfg(target_os = "mochios")]
+mod background;
+#[cfg(target_os = "mochios")]
 mod context_menu;
 #[cfg(target_os = "mochios")]
 mod decoration;
@@ -62,7 +64,7 @@ pub struct MochiOsPlatform {
     #[cfg(target_os = "mochios")]
     context_menu_connect_attempted: bool,
     #[cfg(target_os = "mochios")]
-    _desktop_background: Option<viewkit::platform::mochios::DesktopBackground>,
+    desktop_background: Option<background::Background>,
 }
 
 impl MochiOsPlatform {
@@ -74,7 +76,15 @@ impl MochiOsPlatform {
     pub fn with_context_menu_state(context_menu_state: State<Option<ContextMenuModel>>) -> Self {
         Self {
             system_bar: SystemBarState::default(),
-            apps: read_apps(),
+            apps: {
+                let apps = read_apps();
+                #[cfg(target_os = "mochios")]
+                mochi_user_platform::logln!(
+                    "Binder.app: application catalog loaded count={}",
+                    apps.len()
+                );
+                apps
+            },
             children: HashMap::new(),
             create_window_requests: Vec::new(),
             close_window_requests: Vec::new(),
@@ -94,9 +104,7 @@ impl MochiOsPlatform {
             #[cfg(target_os = "mochios")]
             context_menu_connect_attempted: false,
             #[cfg(target_os = "mochios")]
-            _desktop_background: crate::ui::wallpaper::Wallpaper::load_default_image().and_then(
-                |image| viewkit::platform::mochios::DesktopBackground::from_image(image).ok(),
-            ),
+            desktop_background: None,
         }
     }
 
@@ -661,15 +669,28 @@ impl DesktopPlatform for MochiOsPlatform {
     fn reload_appearance(&mut self) -> Result<bool, PlatformError> {
         #[cfg(target_os = "mochios")]
         {
-            self._desktop_background = crate::ui::wallpaper::Wallpaper::load_default_image()
-                .and_then(|image| {
-                    viewkit::platform::mochios::DesktopBackground::from_image(image).ok()
-                });
-            return Ok(true);
+            if let Some(background) = &self.desktop_background {
+                background
+                    .reload()
+                    .map_err(|_| PlatformError::TransportFailure)?;
+            }
+            return Ok(false);
         }
         #[cfg(not(target_os = "mochios"))]
         {
             Ok(false)
+        }
+    }
+
+    fn first_frame_presented(&mut self) {
+        #[cfg(target_os = "mochios")]
+        if self.desktop_background.is_none() {
+            match background::Background::start() {
+                Ok(background) => self.desktop_background = Some(background),
+                Err(error) => mochi_user_platform::logln!(
+                    "Binder.app: desktop background worker failed: {error}"
+                ),
+            }
         }
     }
 

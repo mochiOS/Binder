@@ -174,6 +174,7 @@ impl App for BinderApp {
         {
             mochi_user_platform::logln!("Binder.app: desktop ready notification failed");
         }
+        self.platform.borrow_mut().first_frame_presented();
     }
 
     fn body(&self, _context: &ViewContext) -> Self::Body {

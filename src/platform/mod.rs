@@ -374,6 +374,8 @@ pub trait DesktopPlatform {
         Ok(false)
     }
 
+    fn first_frame_presented(&mut self) {}
+
     fn refresh(&mut self) -> Result<bool, PlatformError>;
 
     fn take_activation_requests(&mut self) -> Vec<ProcessId> {
