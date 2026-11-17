@@ -43,6 +43,7 @@ const LINUX_SERVICE_NAME: &str = "linux.service";
 
 #[allow(unused)]
 pub struct MochiOsPlatform {
+    input_mode: viewkit::environment::InputMode,
     system_bar: SystemBarState,
     apps: Vec<AppInfo>,
     children: HashMap<ProcessId, ManagedApp>,
@@ -76,6 +77,7 @@ impl MochiOsPlatform {
     pub fn with_context_menu_state(context_menu_state: State<Option<ContextMenuModel>>) -> Self {
         Self {
             system_bar: SystemBarState::default(),
+            input_mode: viewkit::environment::InputMode::Pointer,
             apps: {
                 let apps = read_apps();
                 #[cfg(target_os = "mochios")]
@@ -155,7 +157,7 @@ impl MochiOsPlatform {
             return Ok(process_id);
         }
 
-        let (process_id, child) = spawn_application(app)?;
+        let (process_id, child) = spawn_application(app, self.input_mode)?;
         self.children.insert(
             process_id,
             ManagedApp {
@@ -335,7 +337,10 @@ fn inspect_live_processes() -> Result<HashSet<ProcessId>, PlatformError> {
 }
 
 #[cfg(target_os = "mochios")]
-fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), PlatformError> {
+fn spawn_application(
+    app: &AppInfo,
+    input: viewkit::environment::InputMode,
+) -> Result<(ProcessId, Option<Child>), PlatformError> {
     const CAPABILITY_SERVICE_NAME: &str = "capability.service";
     use mochi_user_syscall as syscall;
 
@@ -343,7 +348,12 @@ fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), Platfo
     let executable = executable
         .to_str()
         .ok_or(PlatformError::ProcessLaunchFailed)?;
-    let environment = session_environment_arguments();
+    let mut environment = session_environment_arguments();
+    environment.push(format!(
+        "{EXEC_MANIFEST_ENV_PREFIX}{}={}",
+        viewkit::environment::INPUT_MODE_ENV,
+        input.as_str()
+    ));
     let request = encode_spawn_app_request_with_environment(
         executable,
         shell_endpoint_from_environment(),
@@ -427,13 +437,17 @@ fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), Platfo
 }
 
 #[cfg(not(target_os = "mochios"))]
-fn spawn_application(app: &AppInfo) -> Result<(ProcessId, Option<Child>), PlatformError> {
+fn spawn_application(
+    app: &AppInfo,
+    input: viewkit::environment::InputMode,
+) -> Result<(ProcessId, Option<Child>), PlatformError> {
     let executable = app.entry_path();
     if !executable.is_file() {
         return Err(PlatformError::ProcessLaunchFailed);
     }
 
     let child = Command::new(&executable)
+        .env(viewkit::environment::INPUT_MODE_ENV, input.as_str())
         .env("MOCHI_EXECUTABLE_PATH", executable.as_os_str())
         .env("MOCHI_APP_BUNDLE_PATH", app.root.as_os_str())
         .stdin(Stdio::null())
@@ -531,12 +545,17 @@ impl DesktopPlatform for MochiOsPlatform {
                 );
                 self.decoration_connect_attempted = true;
             }
-            return self
-                .decoration_manager
+            self.decoration_manager
                 .as_mut()
                 .ok_or(PlatformError::ServiceUnavailable)?
                 .set_work_area(area, scale)
-                .map_err(|_| PlatformError::InvalidResponse);
+                .map_err(|_| PlatformError::InvalidResponse)?;
+            self.input_mode = if area.is_some() {
+                viewkit::environment::InputMode::Touch
+            } else {
+                viewkit::environment::InputMode::Pointer
+            };
+            return Ok(());
         }
         #[cfg(not(target_os = "mochios"))]
         {

@@ -3,6 +3,7 @@ use super::*;
 use viewkit::draw_command::{DrawCommand, PaintTransform};
 
 pub(super) struct Geometry {
+    library_bottom: f32,
     pub bounds: Rect,
     pub canvas: Rect,
     pub application: Rect,
@@ -17,6 +18,18 @@ pub(super) struct Geometry {
 }
 
 impl Geometry {
+    pub fn for_environment(
+        bounds: Rect,
+        theme: &Theme,
+        dock_count: usize,
+        environment: WindowEnvironment,
+    ) -> Self {
+        let mut geometry = Self::new(environment.safe_bounds(bounds), theme, dock_count);
+        let content = environment.content_bounds(bounds);
+        geometry.library_bottom = content.origin.y + content.size.height;
+        geometry.library_bottom = geometry.library_bottom.min(geometry.edge.origin.y);
+        geometry
+    }
     pub fn new(bounds: Rect, theme: &Theme, dock_count: usize) -> Self {
         let gap = theme.spacing.large.max(12.0);
         let status = theme.typography.label.line_height + gap;
@@ -62,9 +75,10 @@ impl Geometry {
             bounds.origin.x + (bounds.size.width - search_width) * 0.5,
             bounds.origin.y + status + gap + theme.typography.title_medium.line_height + gap,
             search_width,
-            theme.layout.control_height.max(40.0),
+            theme.controls.touch_height,
         );
         Self {
+            library_bottom: edge.origin.y,
             bounds,
             canvas,
             application: Rect::new(
@@ -168,7 +182,7 @@ impl Geometry {
             self.bounds.origin.x + self.gap,
             self.search.origin.y + self.search.size.height + self.gap,
             self.bounds.size.width - self.gap * 2.0,
-            (self.edge.origin.y - self.search.origin.y - self.search.size.height - self.gap)
+            (self.library_bottom - self.search.origin.y - self.search.size.height - self.gap)
                 .max(1.0),
         )
     }
@@ -1266,6 +1280,30 @@ impl TabletShell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn keyboard_reduces_library_without_resizing_active_application() {
+        let bounds = Rect::new(0., 0., 800., 1100.);
+        let environment = WindowEnvironment {
+            input_mode: InputMode::Touch,
+            safe_area: viewkit::edge_insets::EdgeInsets::new(24., 0., 20., 0.),
+            ..Default::default()
+        };
+        let home = Geometry::for_environment(bounds, &Theme::LIGHT, 3, environment);
+        let keyboard = Geometry::for_environment(
+            bounds,
+            &Theme::LIGHT,
+            3,
+            WindowEnvironment {
+                keyboard_occlusion: Some(Rect::new(0., 700., 800., 400.)),
+                ..environment
+            },
+        );
+        assert_eq!(home.application, keyboard.application);
+        assert_eq!(home.bounds, environment.safe_bounds(bounds));
+        let library = keyboard.library_body();
+        assert_eq!(library.origin.y + library.size.height, 700.);
+        assert!(home.library_body().size.height > library.size.height);
+    }
     #[test]
     fn application_starts_at_the_home_icon_width_in_each_orientation() {
         for (width, height) in [(1280., 800.), (800., 1280.), (640., 480.)] {

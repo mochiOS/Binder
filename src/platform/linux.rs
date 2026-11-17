@@ -293,6 +293,14 @@ impl LinuxPlatform {
 
         let child = command
             .env(BINDER_SOCKET_ENV, self.transport.socket_path())
+            .env(
+                viewkit::environment::INPUT_MODE_ENV,
+                if self.fullscreen_work_area.is_some() {
+                    "touch"
+                } else {
+                    "pointer"
+                },
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())

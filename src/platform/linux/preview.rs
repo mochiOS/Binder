@@ -208,6 +208,14 @@ impl PreviewDesktop {
             return Err(PlatformError::PermissionDenied);
         }
         let mut command = Command::new(executable);
+        command.env(
+            viewkit::environment::INPUT_MODE_ENV,
+            if self.fullscreen_work_area.is_some() {
+                "touch"
+            } else {
+                "pointer"
+            },
+        );
         command.args(args);
         if let Some(reply) = reply {
             command.env("MOCHIOS_PREVIEW_FILE_PANEL_REPLY", reply);

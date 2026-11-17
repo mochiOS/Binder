@@ -401,7 +401,12 @@ impl TabletShell {
 
     fn prepare(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         let now = Instant::now();
-        let geometry = Geometry::new(bounds, context.theme, self.dock_apps().len());
+        let geometry = Geometry::for_environment(
+            bounds,
+            context.theme,
+            self.dock_apps().len(),
+            context.environment(),
+        );
         if let Err(error) = self
             .resources
             .platform
@@ -431,7 +436,7 @@ impl TabletShell {
                 }
                 state.catalogue = catalogue;
             }
-            if state.last_size != bounds.size {
+            if state.last_size != geometry.bounds.size {
                 let previous = Geometry::new(
                     Rect::new(0., 0., state.last_size.width, state.last_size.height),
                     context.theme,
@@ -453,7 +458,7 @@ impl TabletShell {
                     geometry.canvas.size.width,
                     maximum,
                 ));
-                state.last_size = bounds.size;
+                state.last_size = geometry.bounds.size;
                 if state.app_motion.value >= 0.99 && state.app_motion.transition.is_none() {
                     state
                         .app_x
@@ -980,7 +985,7 @@ impl TabletShell {
         TextField::with_interaction(self.state.borrow().search.clone())
             .placeholder("Search applications")
             .leading_symbol(SymbolName::Search)
-            .size(TextFieldSize::Large)
+            .size(TextFieldSize::Touch)
     }
 
     fn contact(
@@ -1265,7 +1270,12 @@ impl View for TabletShell {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.prepare(bounds, context);
         self.paint_scene(
-            Geometry::new(bounds, context.theme, self.dock_apps().len()),
+            Geometry::for_environment(
+                bounds,
+                context.theme,
+                self.dock_apps().len(),
+                context.environment(),
+            ),
             context,
         );
     }
@@ -1293,7 +1303,12 @@ impl TabletShell {
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
-        let geometry = Geometry::new(bounds, context.theme(), self.dock_apps().len());
+        let geometry = Geometry::for_environment(
+            bounds,
+            context.theme(),
+            self.dock_apps().len(),
+            context.environment(),
+        );
         if matches!(event, ViewEvent::FocusChanged { focused: false }) {
             let mut state = self.state.borrow_mut();
             state.gestures.clear();
