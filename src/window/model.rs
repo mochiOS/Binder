@@ -463,6 +463,10 @@ impl DesktopWindows {
 
         let mut window = self.windows.remove(index);
 
+        if window.minimized {
+            // Restart the reveal only when the window becomes visible again.
+            self.openings.get_mut().remove(&id);
+        }
         window.minimized = false;
 
         self.windows.push(window);
@@ -1138,7 +1142,7 @@ mod opening_tests {
     use super::*;
     use std::time::Duration;
     #[test]
-    fn window_reveal_waits_for_content_and_does_not_replay_on_restore() {
+    fn window_reveal_waits_for_content_and_restarts_only_on_restore() {
         let mut desktop = DesktopWindows::default();
         let (id, _) = desktop.open_test(ProcessId(1), "Test".into(), 640, 480, true);
         let now = Instant::now();
@@ -1154,11 +1158,16 @@ mod opening_tests {
             desktop.opening_opacity(id, true, false, now + Duration::from_secs(2)),
             (255, false)
         );
-        desktop.minimize(id);
         desktop.focus(id);
         assert_eq!(
             desktop.opening_opacity(id, true, false, now + Duration::from_secs(3)),
             (255, false)
+        );
+        desktop.minimize(id);
+        desktop.focus(id);
+        assert_eq!(
+            desktop.opening_opacity(id, true, false, now + Duration::from_secs(4)),
+            (0, true)
         );
     }
 }

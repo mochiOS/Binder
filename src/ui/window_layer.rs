@@ -22,6 +22,13 @@ const RESIZE_CORNER_LENGTH: f32 = 28.0;
 const MINIMUM_WINDOW_WIDTH: f32 = 280.0;
 const MINIMUM_WINDOW_HEIGHT: f32 = 180.0;
 const WINDOW_EFFECT_EXTENT: f32 = 20.0;
+const WINDOW_REVEAL_TRAVEL: f32 = window_decoration::TITLE_BAR_HEIGHT;
+
+pub(super) fn window_reveal_damage(frame: Rect) -> Rect {
+    let mut damage = frame.expanded(WINDOW_EFFECT_EXTENT);
+    damage.size.height += WINDOW_REVEAL_TRAVEL;
+    damage
+}
 
 pub(crate) fn window_work_area(bounds: Rect) -> Rect {
     let width = bounds.size.width.max(1.0);
@@ -188,7 +195,7 @@ where
                 .windows
                 .iter()
                 .filter(|window| !window.minimized)
-                .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+                .map(|window| window_reveal_damage(window.frame))
                 .reduce(Rect::union)
         })
     }
@@ -554,14 +561,23 @@ where
                     #[cfg(not(target_os = "linux"))]
                     { true }
                 };
-                let (opacity, active) = desktop.opening_opacity(desktop_window.id, ready,
-                    !context.theme.motion.omochi.enabled || context.theme.motion.standard.duration.is_zero(), Instant::now());
+                let now = Instant::now();
+                let immediate = !context.theme.motion.omochi.enabled
+                    || context.theme.motion.standard.duration.is_zero();
+                let (opacity, active) =
+                    desktop.opening_opacity(desktop_window.id, ready, immediate, now);
+                let opacity = f32::from(opacity) / 255.0;
                 if active {
-                    context.request_redraw_in_at(desktop_window.frame.expanded(WINDOW_EFFECT_EXTENT),
-                        Instant::now() + viewkit::animation::DEFAULT_FRAME_INTERVAL);
+                    context.request_redraw_in_at(
+                        window_reveal_damage(desktop_window.frame),
+                        now + viewkit::animation::DEFAULT_FRAME_INTERVAL,
+                    );
                 }
                 let transform = viewkit::draw_command::PaintTransform {
-                    anchor: desktop_window.frame.origin, scale: 1., offset: Point::default(), opacity: f32::from(opacity) / 255.,
+                    anchor: desktop_window.frame.origin,
+                    scale: 1.0,
+                    offset: Point::new(0.0, WINDOW_REVEAL_TRAVEL * (1.0 - opacity)),
+                    opacity,
                 };
 
                 context.with_presentation(transform, true, |context| window::view(

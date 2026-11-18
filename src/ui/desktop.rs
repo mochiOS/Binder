@@ -28,7 +28,6 @@ const PLATFORM_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const LAUNCH_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const SYSTEM_OVERLAY_DAMAGE_HEIGHT: f32 = 400.0;
 const DOCK_DAMAGE_HEIGHT: f32 = 150.0;
-const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 
 pub(crate) fn view(
     system_bar: State<SystemBarState>,
@@ -491,7 +490,7 @@ impl PlatformRefreshView {
                 .windows
                 .iter()
                 .filter(|window| !window.minimized)
-                .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
+                .map(|window| super::window_layer::window_reveal_damage(window.frame))
                 .reduce(Rect::union)
         })
     }
