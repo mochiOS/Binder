@@ -10,11 +10,9 @@ use crate::platform::{AppInfo, DesktopPlatform};
 
 use crate::window::{DesktopWindows, ProcessActivation};
 use viewkit::{
-    animation::{Animation, Easing, VisibilityTransition},
     event::{EventContext, EventResult, ViewEvent},
     platform::PointerButton,
     prelude::*,
-    theme::{Motion, MotionTokens},
     view::{Constraints, MeasureContext, PaintContext},
 };
 
@@ -33,8 +31,10 @@ const DOCK_ITEM_RADIUS: f32 = 16.0;
 const DOCK_INTERACTION_TOP_OVERFLOW: f32 = 26.0;
 const DOCK_REDRAW_MARGIN: f32 = 20.0;
 const DOCK_REVEAL_EDGE: f32 = 9.0;
-const DOCK_ACTIVATION_LIFT: f32 = 8.0;
+const DOCK_SLIDE_DURATION: Duration = Duration::from_millis(210);
+const DOCK_FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
 const NATIVE_OVERLAP_CACHE_INTERVAL: Duration = Duration::from_millis(50);
+const WINDOW_EFFECT_EXTENT: f32 = 20.0;
 const APP_LIBRARY_BUNDLE_ID: &str = "internal:app-library";
 
 const DOCK_MENU_WIDTH: f32 = 180.0;
@@ -61,71 +61,49 @@ enum DockMenuAction {
     Unpin,
 }
 
-#[derive(Default)]
-struct DockIconMotion {
-    press: VisibilityTransition,
-    activated: Option<Instant>,
-}
-
-impl DockIconMotion {
-    fn activation_lift(&mut self, motion: Motion, now: Instant) -> (f32, Option<Instant>) {
-        let Some(start) = self.activated else {
-            return (0.0, None);
-        };
-        let sample = Animation::new(start, motion.duration).sample(now);
-        if sample.finished {
-            self.activated = None;
-            return (0.0, None);
-        }
-        let t = sample.linear_progress;
-        (
-            DOCK_ACTIVATION_LIFT * 4.0 * t * (1.0 - t),
-            sample.next_redraw_at,
-        )
-    }
-}
-
-#[derive(Default)]
 pub(crate) struct DockVisibility {
-    slide: VisibilityTransition,
-    amount: f32,
+    amount_from: f32,
+    target_visible: bool,
+    started: Instant,
     edge_hover: bool,
-    magnify: VisibilityTransition,
-    last_pointer: Option<Point>,
-    icons: HashMap<String, DockIconMotion>,
+}
+
+impl Default for DockVisibility {
+    fn default() -> Self {
+        Self {
+            amount_from: 1.0,
+            target_visible: true,
+            started: Instant::now(),
+            edge_hover: false,
+        }
+    }
 }
 
 impl DockVisibility {
-    fn sample_slide(
-        &mut self,
-        visible: bool,
-        motion: MotionTokens,
-        now: Instant,
-    ) -> Option<Instant> {
-        let motion = if visible {
-            Motion::new(motion.slow.duration, Easing::EaseOutCubic)
+    fn amount(&self, now: Instant) -> f32 {
+        let progress = (now.saturating_duration_since(self.started).as_secs_f32()
+            / DOCK_SLIDE_DURATION.as_secs_f32())
+        .clamp(0.0, 1.0);
+        let eased = if self.target_visible {
+            1.0 - (1.0 - progress).powi(3)
         } else {
-            Motion::new(motion.standard.duration, Easing::EaseInOutCubic)
+            progress.powi(3)
         };
-        let (amount, next) = self.slide.sample(visible, motion, now);
-        self.amount = amount;
-        next
+        let destination = if self.target_visible { 1.0 } else { 0.0 };
+        self.amount_from + (destination - self.amount_from) * eased
     }
 
-    fn sample_hover(
-        &mut self,
-        pointer: Option<Point>,
-        motion: Motion,
-        now: Instant,
-    ) -> (Option<Point>, f32, Option<Instant>) {
-        if pointer.is_some() {
-            self.last_pointer = pointer;
+    fn set_target(&mut self, visible: bool, now: Instant) {
+        if self.target_visible != visible {
+            self.amount_from = self.amount(now);
+            self.target_visible = visible;
+            self.started = now;
         }
-        let (amount, next) = self.magnify.sample(pointer.is_some(), motion, now);
-        if pointer.is_none() && next.is_none() {
-            self.last_pointer = None;
-        }
-        (self.last_pointer, amount, next)
+    }
+
+    fn animating(&self, now: Instant) -> bool {
+        (self.amount_from - if self.target_visible { 1.0 } else { 0.0 }).abs() > 0.001
+            && now.saturating_duration_since(self.started) < DOCK_SLIDE_DURATION
     }
 }
 
@@ -300,10 +278,7 @@ where
 
     fn dock_rect(&self, bounds: Rect) -> Option<Rect> {
         let mut dock = self.base_dock_rect(bounds)?;
-        let amount = self.visibility.borrow().amount;
-        if amount <= 0.001 {
-            return None;
-        }
+        let amount = self.visibility.borrow().amount(Instant::now());
         dock.origin.y += (1.0 - amount) * (DOCK_HEIGHT + DOCK_BOTTOM_MARGIN + 8.0);
         Some(dock)
     }
@@ -362,7 +337,7 @@ where
         };
         let mut visibility = self.visibility.borrow_mut();
         let was_hovering = visibility.edge_hover;
-        let can_retain = was_hovering || visibility.amount > 0.001;
+        let can_retain = was_hovering || visibility.amount(Instant::now()) > 0.001;
         visibility.edge_hover = position.is_some_and(|position| {
             Self::edge_hover_for_position(bounds, dock, position, can_retain)
         });
@@ -436,9 +411,6 @@ where
         }
         if let Some(dirty) = dirty {
             context.request_redraw_in(dirty);
-        } else {
-            // Magnification still follows the pointer through the gaps.
-            context.request_redraw_in(Self::animation_damage(bounds));
         }
     }
 
@@ -575,18 +547,20 @@ where
         dock: Rect,
         index: usize,
         pointer: Option<Point>,
-        magnification: f32,
-        press: f32,
-        activation_lift: f32,
+        pressed: Option<usize>,
     ) -> DockItemVisual {
         let item = self.item_rect(dock, index);
 
-        let influence = Self::magnification_influence(item, pointer) * magnification;
+        let influence = Self::magnification_influence(item, pointer);
 
         let mut icon_size = DOCK_ICON_SIZE + (DOCK_ICON_MAX_SIZE - DOCK_ICON_SIZE) * influence;
 
-        icon_size *= 1.0 - 0.06 * press;
-        let lift = DOCK_ICON_LIFT * influence - DOCK_PRESS_DROP * press + activation_lift;
+        let mut lift = DOCK_ICON_LIFT * influence;
+
+        if pressed == Some(index) {
+            icon_size *= 0.94;
+            lift = (lift - DOCK_PRESS_DROP).max(0.0);
+        }
 
         let center_x = item.origin.x + item.size.width / 2.0;
 
@@ -670,12 +644,6 @@ where
         self.windows.update(|desktop| {
             activation = desktop.activate_process(process_id);
         });
-        self.visibility
-            .borrow_mut()
-            .icons
-            .entry(app.bundle_id)
-            .or_default()
-            .activated = Some(Instant::now());
         Some(activation)
     }
 
@@ -685,7 +653,7 @@ where
             .windows
             .iter()
             .filter(|window| !window.minimized)
-            .map(|window| super::window_layer::window_reveal_damage(window.frame))
+            .map(|window| window.frame.expanded(WINDOW_EFFECT_EXTENT))
             .reduce(Rect::union)
     }
 
@@ -839,17 +807,20 @@ where
         self.update_edge_hover(bounds, self.cursor_position.get());
         let now = Instant::now();
         let should_show = self.should_show(bounds);
-        let motion = if context.theme.motion.omochi.enabled {
-            context.theme.motion
-        } else {
-            context.theme.motion.reduced()
+        let amount = {
+            let mut visibility = self.visibility.borrow_mut();
+            visibility.set_target(should_show, now);
+            let amount = visibility.amount(now);
+            if visibility.animating(now) {
+                context.request_redraw_in_at(
+                    Self::animation_damage(bounds),
+                    now + DOCK_FRAME_INTERVAL,
+                );
+            }
+            amount
         };
-        let next_slide = self
-            .visibility
-            .borrow_mut()
-            .sample_slide(should_show, motion, now);
-        if let Some(next) = next_slide {
-            context.request_redraw_in_at(Self::animation_damage(bounds), next);
+        if amount <= 0.001 {
+            return;
         }
         let Some(dock) = self.dock_rect(bounds) else {
             return;
@@ -859,11 +830,9 @@ where
             context.display_list.add_input_region(region);
         }
 
-        // Use the resting rectangle throughout the slide so the native
-        // backdrop sample stays reusable across animation frames.
-        let sample_rect = self.base_dock_rect(bounds).unwrap_or(dock);
+        let now = Instant::now();
         let background = if let Some((at, region, color)) = self.backdrop.get()
-            && region == sample_rect
+            && region == dock
             && now.saturating_duration_since(at) < Duration::from_millis(100)
         {
             color
@@ -871,15 +840,15 @@ where
             let color = self
                 .platform
                 .borrow()
-                .native_background_color(sample_rect)
+                .native_background_color(dock)
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| {
                     context
                         .display_list
-                        .sample_background(sample_rect, context.theme.shell.window_background)
+                        .sample_background(dock, context.theme.shell.window_background)
                 });
-            self.backdrop.set(Some((now, sample_rect, color)));
+            self.backdrop.set(Some((now, dock, color)));
             color
         };
         let material = DockMaterial::for_backdrop(background);
@@ -898,29 +867,12 @@ where
 
         let pressed = self.pressed.get();
 
-        let mut visibility = self.visibility.borrow_mut();
-        let (pointer, magnification, next_hover) =
-            visibility.sample_hover(self.pointer.get(), motion.fast, now);
-        visibility
-            .icons
-            .retain(|bundle, _| apps.iter().any(|app| &app.bundle_id == bundle));
-        let mut next_icon_frame = next_hover;
+        let pointer = self.pointer.get();
 
         let mut tooltip: Option<(&AppInfo, Rect)> = None;
 
         for (index, app) in apps.iter().enumerate() {
-            let icon_motion = visibility.icons.entry(app.bundle_id.clone()).or_default();
-            let (press, next_press) =
-                icon_motion
-                    .press
-                    .sample(pressed == Some(index), motion.fast, now);
-            let (lift, next_lift) = icon_motion.activation_lift(motion.standard, now);
-            next_icon_frame = next_icon_frame
-                .into_iter()
-                .chain(next_press)
-                .chain(next_lift)
-                .min();
-            let visual = self.item_visual(dock, index, pointer, magnification, press, lift);
+            let visual = self.item_visual(dock, index, pointer, pressed);
 
             if hovered == Some(index) || pressed == Some(index) {
                 let hover = material.item_hover;
@@ -940,20 +892,12 @@ where
             self.paint_app_icon(app, icon, context);
 
             if self.is_running(app) {
-                Self::paint_running_indicator(
-                    self.item_rect(dock, index),
-                    material.running_indicator,
-                    context,
-                );
+                Self::paint_running_indicator(icon, material.running_indicator, context);
             }
 
             if hovered == Some(index) {
                 tooltip = Some((app, icon));
             }
-        }
-        drop(visibility);
-        if let Some(next) = next_icon_frame {
-            context.request_redraw_in_at(Self::animation_damage(bounds), next);
         }
 
         let pinned_count = self.pinned_visible_count();
@@ -1148,9 +1092,11 @@ where
                 };
 
                 let previous_hovered = self.hovered.get();
-                let previous_pointer = self.pointer.replace(inside.then_some(*position));
-                self.hovered.set(hit);
-                if previous_hovered != hit || previous_pointer != self.pointer.get() {
+                let changed = previous_hovered != hit;
+
+                if changed {
+                    self.hovered.set(hit);
+                    self.pointer.set(self.pointer_for_hit(bounds, hit));
                     self.request_dock_redraw(bounds, previous_hovered, hit, context);
                 }
 
@@ -1400,39 +1346,19 @@ mod visibility_tests {
         let screen = Rect::new(0.0, 0.0, 1280.0, 800.0);
         assert!(layer.update_edge_hover(screen, Some(Point::new(640.0, 798.0))));
         assert!(layer.update_edge_hover(screen, None));
-        layer.visibility.borrow_mut().sample_slide(
-            true,
-            MotionTokens::DEFAULT.reduced(),
-            Instant::now(),
-        );
         assert!(layer.update_edge_hover(screen, Some(Point::new(640.0, 785.0))));
     }
 
     #[test]
     fn dock_slides_offscreen_and_back() {
         let start = Instant::now();
-        let motion = MotionTokens::DEFAULT;
         let mut visibility = DockVisibility::default();
-        assert_eq!(visibility.amount, 0.0);
-        assert!(visibility.sample_slide(true, motion, start).is_some());
-        let halfway = start + motion.slow.duration / 2;
-        assert!(visibility.sample_slide(true, motion, halfway).is_some());
-        assert!(visibility.amount > 0.0 && visibility.amount < 1.0);
-        let before = visibility.amount;
-        visibility.sample_slide(false, motion, halfway);
-        assert_eq!(visibility.amount, before);
-        assert!(
-            visibility
-                .sample_slide(false, motion, halfway + motion.standard.duration)
-                .is_none()
-        );
-        assert_eq!(visibility.amount, 0.0);
-        assert!(
-            visibility
-                .sample_slide(true, motion.reduced(), halfway)
-                .is_none()
-        );
-        assert_eq!(visibility.amount, 1.0);
+        visibility.set_target(false, start);
+        assert!((visibility.amount(start) - 1.0).abs() < 0.001);
+        assert!(visibility.animating(start));
+        assert!(visibility.amount(start + DOCK_SLIDE_DURATION) < 0.001);
+        visibility.set_target(true, start + DOCK_SLIDE_DURATION);
+        assert!(visibility.amount(start + DOCK_SLIDE_DURATION * 2) > 0.999);
     }
 
     #[test]
