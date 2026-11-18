@@ -1278,24 +1278,26 @@ impl TabletShell {
                 );
         }
         let width = (geometry.bounds.size.width * 0.22).clamp(112.0, 280.0);
-        let navigation_amount = if surface == Surface::Application {
-            self.state.borrow().navigation_bar.value.clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
+        let navigation_amount = self.state.borrow().navigation_bar.amount(amount);
         if navigation_amount > 0.001 {
+            let navigation_color = viewkit::animation::interpolate(
+                Color::WHITE,
+                context.theme.shell.primary_text,
+                progress * (1.0 - amount),
+            );
+            let height = 5.0;
+            let bottom = geometry.edge.origin.y + geometry.edge.size.height;
             Rectangle::new()
                 .color(RectangleColor::Custom(
-                    foreground.with_alpha((190.0 * navigation_amount) as u8),
+                    navigation_color.with_alpha((190.0 * navigation_amount) as u8),
                 ))
                 .radius(CornerRadius::Full)
                 .paint(
                     Rect::new(
                         geometry.bounds.origin.x + (geometry.bounds.size.width - width) * 0.5,
-                        geometry.edge.origin.y + geometry.edge.size.height * 0.5 - 2.5
-                            + (1.0 - navigation_amount) * 12.0,
+                        bottom - (geometry.edge.size.height * navigation_amount + height) * 0.5,
                         width,
-                        5.0,
+                        height,
                     ),
                     context,
                 );

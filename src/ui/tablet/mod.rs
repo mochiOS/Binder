@@ -17,7 +17,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use viewkit::components::EmptyView;
 use viewkit::{
@@ -29,6 +29,7 @@ use viewkit::{
 };
 
 const MOUSE: u64 = u64::MAX;
+const NAVIGATION_REVEAL_TIMEOUT: Duration = Duration::from_millis(1200);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Surface {
@@ -107,6 +108,69 @@ impl Motion {
     }
 }
 
+struct NavigationDrag {
+    app_progress: f32,
+    app_center: Point,
+    bar_progress: f32,
+}
+
+struct NavigationBar {
+    reveal: Motion,
+    hide_at: Option<Instant>,
+}
+
+impl Default for NavigationBar {
+    fn default() -> Self {
+        Self {
+            reveal: Motion {
+                value: 1.0,
+                target: 1.0,
+                ..Motion::default()
+            },
+            hide_at: None,
+        }
+    }
+}
+
+impl NavigationBar {
+    fn show(&mut self, visible: bool, now: Instant) {
+        self.hide_at = None;
+        let target = if visible { 1.0 } else { 0.0 };
+        if !Theme::current().motion.omochi.enabled {
+            self.reveal.set(target);
+        } else if self.reveal.target != target {
+            self.reveal.animate(target, now);
+        }
+    }
+
+    fn follow(&mut self, start: f32, delta: f32, edge_height: f32) {
+        self.hide_at = None;
+        self.reveal
+            .set((start - delta / edge_height).clamp(0.0, 1.0));
+    }
+
+    fn finish_gesture(&mut self, now: Instant) {
+        self.reveal.sample(now);
+        if self.reveal.value > 0.0 || self.reveal.target > 0.0 {
+            self.show(true, now);
+            self.hide_at = Some(now + NAVIGATION_REVEAL_TIMEOUT);
+        }
+    }
+
+    fn sample(&mut self, now: Instant, touching_edge: bool) -> Option<Instant> {
+        if self.hide_at.is_some_and(|deadline| now >= deadline) && !touching_edge {
+            self.show(false, now);
+        }
+        let deadline = self.hide_at.filter(|deadline| *deadline > now);
+        self.reveal.sample(now).into_iter().chain(deadline).min()
+    }
+
+    fn amount(&self, sheet_amount: f32) -> f32 {
+        let amount = self.reveal.value.clamp(0.0, 1.0);
+        amount + (1.0 - amount) * sheet_amount
+    }
+}
+
 pub(crate) struct TabletState {
     icons: Rc<super::app_icon::AppIcons>,
     layout: HomeLayout,
@@ -121,9 +185,8 @@ pub(crate) struct TabletState {
     app_initial_progress: Option<f32>,
     app_x: Motion,
     app_y: Motion,
-    navigation_start: Option<(f32, Point)>,
-    navigation_bar: Motion,
-    navigation_hide_at: Option<Instant>,
+    navigation_start: Option<NavigationDrag>,
+    navigation_bar: NavigationBar,
     switch_origin: Option<(ProcessId, Rect)>,
     gestures: Gestures,
     legacy_touches: HashSet<u64>,
@@ -167,8 +230,7 @@ impl Default for TabletState {
             app_x: Motion::default(),
             app_y: Motion::default(),
             navigation_start: None,
-            navigation_bar: Motion::default(),
-            navigation_hide_at: None,
+            navigation_bar: NavigationBar::default(),
             switch_origin: None,
             gestures: Gestures::default(),
             legacy_touches: HashSet::new(),
@@ -195,6 +257,16 @@ impl Default for TabletState {
             error: None,
             keyboard_captured: Cell::new(false),
         }
+    }
+}
+
+impl TabletState {
+    fn clear_gestures(&mut self, now: Instant) {
+        if self.gestures.edge_active() && self.surface == Surface::Application {
+            self.navigation_bar.finish_gesture(now);
+        }
+        self.gestures.clear();
+        self.navigation_start = None;
     }
 }
 
@@ -333,20 +405,16 @@ impl TabletShell {
             desktop.focused = None;
         });
         self.flush_window_state();
-        self.state.borrow_mut().editing = false;
-        self.state.borrow_mut().last_focused = None;
-        self.state
-            .borrow_mut()
-            .app_motion
-            .animate_application(0.0, now);
-        self.state
-            .borrow_mut()
-            .app_x
-            .animate_application(destination.x, now);
-        self.state
-            .borrow_mut()
-            .app_y
-            .animate_application(destination.y, now);
+        {
+            let mut state = self.state.borrow_mut();
+            state.editing = false;
+            state.last_focused = None;
+            state.navigation_start = None;
+            state.navigation_bar.show(true, now);
+            state.app_motion.animate_application(0.0, now);
+            state.app_x.animate_application(destination.x, now);
+            state.app_y.animate_application(destination.y, now);
+        }
         self.show(Surface::Home, now);
     }
 
@@ -469,7 +537,7 @@ impl TabletShell {
                         geometry.application.origin.y + geometry.application.size.height * 0.5,
                     );
                 }
-                state.gestures.clear();
+                state.clear_gestures(now);
                 state.dragged = None;
             }
             if focused.is_some() && focused != state.last_focused {
@@ -482,8 +550,7 @@ impl TabletShell {
                     state.app_motion.set(progress);
                 }
                 state.app_motion.animate_application(1.0, now);
-                state.navigation_bar.set(0.0);
-                state.navigation_hide_at = None;
+                state.navigation_bar.show(false, now);
                 let center = Point::new(
                     geometry.application.origin.x + geometry.application.size.width * 0.5,
                     geometry.application.origin.y + geometry.application.size.height * 0.5,
@@ -509,6 +576,7 @@ impl TabletShell {
             {
                 state.sheet.animate(0.0, now);
             }
+            let touching_edge = state.gestures.edge_active();
             if let Some(deadline) = state
                 .scroll
                 .sample(now)
@@ -518,7 +586,7 @@ impl TabletShell {
                 .chain(state.app_motion.sample(now))
                 .chain(state.app_x.sample(now))
                 .chain(state.app_y.sample(now))
-                .chain(state.navigation_bar.sample(now))
+                .chain(state.navigation_bar.sample(now, touching_edge))
                 .min()
             {
                 context.request_redraw_at(deadline);
@@ -532,15 +600,6 @@ impl TabletShell {
                 .update_for_repaint(|open| *open = state.surface == Surface::Controls);
             if let Some(deadline) = state.gestures.deadline().filter(|deadline| *deadline > now) {
                 context.request_redraw_at(deadline);
-            }
-            if let Some(deadline) = state.navigation_hide_at {
-                if now >= deadline && !state.gestures.edge_active() {
-                    state.navigation_bar.animate(0.0, now);
-                    state.navigation_hide_at = None;
-                    context.request_redraw_at(now);
-                } else if deadline > now {
-                    context.request_redraw_at(deadline);
-                }
             }
         }
         let action = self.state.borrow_mut().gestures.tick(now);
@@ -650,17 +709,14 @@ impl TabletShell {
             } => {
                 if self.state.borrow().surface == Surface::Application {
                     let mut state = self.state.borrow_mut();
-                    if state.navigation_bar.target < 1.0 {
-                        state.navigation_bar.animate(1.0, now);
-                    }
-                    state.navigation_hide_at = Some(now + std::time::Duration::from_millis(1200));
-                    let (start_progress, center) = state.navigation_start.unwrap_or((
-                        1.0,
-                        Point::new(
-                            geometry.application.origin.x + geometry.application.size.width * 0.5,
-                            geometry.application.origin.y + geometry.application.size.height * 0.5,
-                        ),
-                    ));
+                    let Some(&NavigationDrag {
+                        app_progress: start_progress,
+                        app_center: center,
+                        bar_progress,
+                    }) = state.navigation_start.as_ref() else {
+                        return;
+                    };
+                    state.navigation_bar.follow(bar_progress, delta, geometry.edge.size.height);
                     let minimum = start_progress.min(0.35);
                     let progress =
                         (start_progress + delta / geometry.bounds.size.height).clamp(minimum, 1.0);
@@ -680,10 +736,9 @@ impl TabletShell {
             }
             Action::RevealNavigation => {
                 let mut state = self.state.borrow_mut();
-                if state.navigation_bar.target < 1.0 {
-                    state.navigation_bar.animate(1.0, now);
+                if state.surface == Surface::Application {
+                    state.navigation_bar.show(true, now);
                 }
-                state.navigation_hide_at = Some(now + std::time::Duration::from_millis(1200));
             }
             Action::Tap(point) => self.tap(point, geometry, now),
             Action::EdgeTap(_) => {}
@@ -1072,10 +1127,12 @@ impl TabletShell {
                         state.app_motion.sample(now);
                         state.app_x.sample(now);
                         state.app_y.sample(now);
-                        Some((
-                            state.app_motion.value,
-                            Point::new(state.app_x.value, state.app_y.value),
-                        ))
+                        state.navigation_bar.sample(now, true);
+                        Some(NavigationDrag {
+                            app_progress: state.app_motion.value,
+                            app_center: Point::new(state.app_x.value, state.app_y.value),
+                            bar_progress: state.navigation_bar.amount(0.0),
+                        })
                     } else {
                         None
                     };
@@ -1149,23 +1206,27 @@ impl TabletShell {
                 context,
             );
         }
-        let action = {
+        let (action, ends_navigation) = {
             let mut state = self.state.borrow_mut();
+            let mut ends_navigation = false;
             if state.gestures.owns(id) {
+                let ending = matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled);
+                ends_navigation = ending && state.gestures.edge_active();
                 if let Some((_, press)) = &state.press {
-                    if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                    if ending {
                         press.end_press(now);
                     } else {
                         press.move_press(position, now);
                     }
                 }
             }
-            match phase {
+            let action = match phase {
                 TouchPhase::Started => None,
                 TouchPhase::Moved => state.gestures.update(id, position, now),
                 TouchPhase::Ended => state.gestures.end(id, position, now),
                 TouchPhase::Cancelled => state.gestures.cancel(id),
-            }
+            };
+            (action, ends_navigation)
         };
         if let Some(Action::Sheet {
             origin: Origin::NotificationList,
@@ -1244,6 +1305,12 @@ impl TabletShell {
         }
         if let Some(action) = action {
             self.apply(action, geometry, now);
+        }
+        if ends_navigation {
+            let mut state = self.state.borrow_mut();
+            if state.surface == Surface::Application {
+                state.navigation_bar.finish_gesture(now);
+            }
         }
         context.request_redraw();
         EventResult::Consumed
@@ -1335,7 +1402,7 @@ impl TabletShell {
         }
         if matches!(event, ViewEvent::FocusChanged { focused: false }) {
             let mut state = self.state.borrow_mut();
-            state.gestures.clear();
+            state.clear_gestures(Instant::now());
             state.legacy_touches.clear();
             state.dragged = None;
             state.press = None;
@@ -1534,7 +1601,45 @@ impl TabletShell {
 #[cfg(test)]
 mod motion_tests {
     use super::*;
-    use std::time::Duration;
+
+    #[test]
+    fn navigation_bar_follows_drag_then_hides_after_release() {
+        let start = Instant::now();
+        let mut bar = NavigationBar::default();
+        bar.show(false, start);
+        let mid_launch = start + Duration::from_millis(45);
+        assert!(bar.sample(mid_launch, false).is_some());
+        let amount = bar.amount(0.0);
+        assert!(amount > 0.0 && amount < 1.0);
+
+        let drag = start + Duration::from_secs(1);
+        assert!(bar.sample(drag, false).is_none());
+        assert_eq!(bar.amount(0.0), 0.0);
+        bar.follow(0.0, -22.0, 44.0);
+        assert_eq!(bar.amount(0.0), 0.5);
+        bar.follow(0.0, -11.0, 44.0);
+        assert_eq!(bar.amount(0.0), 0.25);
+        bar.finish_gesture(drag);
+        bar.sample(drag, false);
+        assert_eq!(bar.amount(0.0), 0.25);
+
+        let deadline = drag + NAVIGATION_REVEAL_TIMEOUT;
+        bar.sample(deadline, true);
+        assert_eq!(bar.amount(0.0), 1.0);
+        bar.sample(deadline, false);
+        let mid_hide = deadline + Duration::from_millis(45);
+        assert!(bar.sample(mid_hide, false).is_some());
+        let value = bar.amount(0.0);
+        assert!(value > 0.0 && value < 1.0);
+        bar.show(true, mid_hide);
+        bar.sample(mid_hide, false);
+        assert!((bar.amount(0.0) - value).abs() < 0.0001);
+        assert!(
+            bar.sample(mid_hide + Duration::from_secs(1), false)
+                .is_none()
+        );
+        assert_eq!(bar.amount(0.0), 1.0);
+    }
 
     #[test]
     fn reversing_application_motion_preserves_sampled_position_and_velocity() {
