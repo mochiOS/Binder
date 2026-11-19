@@ -85,11 +85,9 @@ impl Geometry {
     }
     pub fn with_keyboard(mut self, keyboard: Option<keyboard::KeyboardGeometry>) -> Self {
         self.keyboard = keyboard;
-        if let Some(keyboard) = keyboard {
-            if keyboard.docked {
-                self.application.size.height = (keyboard.keys.origin.y - self.application.origin.y)
-                    .clamp(1.0, self.application.size.height);
-            }
+        if let Some(keyboard) = keyboard.filter(|keyboard| keyboard.docked()) {
+            self.application.size.height = (keyboard.keys.origin.y - self.application.origin.y)
+                .clamp(1.0, self.application.size.height);
             self.library_bottom = self.library_bottom.min(keyboard.keys.origin.y);
         }
         self
@@ -1176,7 +1174,7 @@ impl TabletShell {
             context.display_list.add_input_region(geometry.bounds);
         }
         if let Some(keyboard) = geometry.keyboard {
-            context.display_list.add_input_region(keyboard.keys);
+            context.display_list.add_input_region(keyboard.bounds);
         }
         if surface != Surface::Switcher
             && (surface == Surface::Application
@@ -1314,14 +1312,9 @@ impl TabletShell {
         }
         if let Some(keyboard) = geometry.keyboard {
             let state = self.state.borrow();
-            state.keyboard.panel.paint_with_footer(
-                &state.keyboard.layouts,
-                keyboard.keys,
-                if keyboard.docked {
-                    geometry.edge.size.height
-                } else {
-                    0.0
-                },
+            state.keyboard.paint(
+                keyboard,
+                geometry.edge.size.height,
                 system.japanese_input,
                 context,
             );
@@ -1452,11 +1445,11 @@ mod tests {
             for selected in [0, 1] {
                 keyboard.panel.selected = selected;
                 let home = Geometry::new(screen, theme, 5);
-                let panel = keyboard.geometry(home.edge, height, theme).unwrap();
+                let panel = keyboard.geometry(home.edge, home.application, theme).unwrap();
                 let edge = home.edge;
                 let app = home.with_keyboard(Some(panel)).application;
                 assert_eq!(app.origin, full.origin);
-                assert!(panel.keys.origin.y + panel.keys.size.height <= edge.origin.y);
+                assert!(panel.bounds.origin.y + panel.bounds.size.height <= edge.origin.y);
                 if selected == 0 {
                     assert_eq!(panel.keys.size.width, width);
                     assert_eq!(app.origin.y + app.size.height, panel.keys.origin.y);

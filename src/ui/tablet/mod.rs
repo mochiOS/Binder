@@ -258,7 +258,7 @@ impl Default for TabletState {
             last_focused: None,
             catalogue: Vec::new(),
             search: TextFieldInteractionState::new(),
-            keyboard: keyboard::Keyboard::default(),
+            keyboard: keyboard::Keyboard::new(),
             last_application_bounds: None,
             notification_interaction: Rc::new(
                 super::notification_center::NotificationCenterInteraction::default(),
@@ -560,6 +560,7 @@ impl TabletShell {
                 ));
                 state.last_size = geometry.bounds.size;
                 state.clear_gestures(now);
+                state.keyboard.cancel_drag();
                 state.dragged = None;
             }
             if state.last_application_bounds != Some(geometry.application) {
@@ -1118,7 +1119,7 @@ impl TabletShell {
             Geometry::for_environment(bounds, theme, self.dock_apps().len(), environment);
         let keyboard = self.state.borrow().keyboard.geometry(
             geometry.edge,
-            geometry.bounds.size.height,
+            geometry.application,
             theme,
         );
         geometry.with_keyboard(keyboard)
@@ -1172,6 +1173,18 @@ impl TabletShell {
         let (consumed, action, kana, target) = {
             let mut state = self.state.borrow_mut();
             let keyboard = &mut state.keyboard;
+            match keyboard.handle_placement(presentation, event, context) {
+                Ok(false) => {}
+                Ok(true) => {
+                    context.request_redraw();
+                    return true;
+                }
+                Err(error) => {
+                    state.error = Some(format!("Could not save the keyboard position: {error}"));
+                    context.request_redraw();
+                    return true;
+                }
+            }
             let selected = keyboard.panel.selected;
             let (consumed, action) =
                 keyboard
