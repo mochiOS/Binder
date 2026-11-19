@@ -941,6 +941,7 @@ impl TabletShell {
     fn paint_switcher(&self, geometry: &Geometry, context: &mut PaintContext<'_>) {
         let entries = self.entries();
         let scroll = self.state.borrow().switch_scroll.value;
+        let mut requested_preview = false;
         if entries.is_empty() {
             Text::styled("No running applications", TextRole::TitleMedium)
                 .alignment(TextAlignment::Center)
@@ -1009,9 +1010,27 @@ impl TabletShell {
                     .iter()
                     .rev()
                     .find(|window| window.process_id == Some(entry.process))
-                    .filter(|window| !window.externally_composited())
                     .cloned()
             }) {
+                if window.externally_composited() {
+                    let image = window.remote_window.and_then(|id| {
+                        if let Some(cached) = self.state.borrow().switch_previews.get(&id) {
+                            return cached.clone();
+                        }
+                        if requested_preview {
+                            context.request_redraw_at(Instant::now());
+                            return None;
+                        }
+                        requested_preview = true;
+                        let image = self.resources.platform.borrow().native_window_preview(id);
+                        self.state.borrow_mut().switch_previews.insert(id, image.clone());
+                        image
+                    });
+                    if let Some(image) = image {
+                        Image::new(image).radius(CornerRadius::Large).paint(preview, context);
+                    }
+                    continue;
+                }
                 context.display_list.push(DrawCommand::PushRoundedClip {
                     rect: preview,
                     radius: 12.0,
@@ -1191,10 +1210,10 @@ impl TabletShell {
                     Color::BLACK.with_alpha((90.0 * amount) as u8),
                 ))
                 .paint(geometry.bounds, context);
+            let travel = (1.0 - amount) * surface.sheet_travel(geometry.bounds.size.height);
             let offset = match surface {
-                Surface::Library => (1.0 - amount) * geometry.bounds.size.height,
-                Surface::Notifications => -(1.0 - amount) * geometry.bounds.size.height,
-                Surface::Controls => -(1.0 - amount) * geometry.bounds.size.height * 0.65,
+                Surface::Library => travel,
+                Surface::Notifications | Surface::Controls => -travel,
                 _ => 0.0,
             };
             context.with_presentation(

@@ -87,6 +87,7 @@ pub(super) struct DecorationManager {
     metadata_endpoint: u64,
     decorations: Vec<Decoration>,
     work_area: Option<(Rect, f64)>,
+    deferred_input: Option<wm::DeferredInput>,
     windows: Vec<NativeWindow>,
 }
 
@@ -137,16 +138,82 @@ impl DecorationManager {
 
     fn physical_work_area(&self) -> Option<wm::Bounds> {
         let (area, scale) = self.work_area?;
+        Some(Self::physical_bounds(area, scale))
+    }
+
+    fn physical_bounds(area: Rect, scale: f64) -> wm::Bounds {
         let left = (f64::from(area.origin.x) * scale).round() as i32;
         let top = (f64::from(area.origin.y) * scale).round() as i32;
         let right = (f64::from(area.origin.x + area.size.width) * scale).round() as i32;
         let bottom = (f64::from(area.origin.y + area.size.height) * scale).round() as i32;
-        Some(wm::Bounds {
+        wm::Bounds {
             x: left,
             y: top,
             width: right.saturating_sub(left) as u32,
             height: bottom.saturating_sub(top) as u32,
-        })
+        }
+    }
+
+    pub(super) fn set_deferred_input(
+        &mut self,
+        region: Option<Rect>,
+        slop: f32,
+        scale: f64,
+    ) -> Result<(), DecorationError> {
+        let next = region.map(|area| wm::DeferredInput {
+            bounds: Self::physical_bounds(area, scale),
+            slop: (f64::from(slop) * scale).round().clamp(1.0, 64.0) as u32,
+        });
+        if next == self.deferred_input {
+            return Ok(());
+        }
+        let command = next.unwrap_or(wm::DeferredInput {
+            bounds: wm::Bounds {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+            slop: 0,
+        });
+        ipc_call_status(self.compositor, &command.encode())?;
+        self.deferred_input = next;
+        Ok(())
+    }
+
+    pub(super) fn preview(&self, window: RemoteWindowId) -> Option<viewkit::image::ImageData> {
+        use platform::memory_object::{MemoryObject, ReadOnlyOffer, receive_readonly_offer};
+
+        let mut reply = [0; ReadOnlyOffer::WIRE_LENGTH];
+        let mut handles = platform::ipc::IpcObjectHandles::default();
+        let message = platform::ipc::call_object_handles(
+            u32::try_from(self.compositor).ok()?,
+            &wm::preview_request(window.0),
+            &mut reply,
+            &mut handles,
+        );
+        let object = if handles.count == 1 && handles.handles[0].handle != 0 {
+            // The reply installed this reference in Binder's handle table.
+            let handle = std::mem::take(&mut handles.handles[0].handle);
+            Some(unsafe { MemoryObject::from_owned_handle(handle) })
+        } else {
+            None
+        };
+        for handle in handles.handles {
+            if handle.handle != 0 {
+                let _ = platform::handle::close(handle.handle);
+            }
+        }
+        if message.ok()? as u32 as usize != reply.len() {
+            return None;
+        }
+        let length = ReadOnlyOffer::decode(&reply).ok()?.length as usize;
+        let mapping = receive_readonly_offer(&reply, object?, wm::PREVIEW_MAX_BYTES as u64).ok()?;
+        // The read-only offer was checked against the object extent and the
+        // maximum preview size, and the mapping remains live for this copy.
+        let bytes = unsafe { std::slice::from_raw_parts(mapping.address() as *const u8, length) };
+        let (width, height, pixels) = wm::preview_image(bytes)?;
+        viewkit::image::ImageData::from_rgba8(width, height, pixels).ok()
     }
 
     pub(super) fn snapshot(&mut self) -> Result<Option<Vec<NativeWindow>>, DecorationError> {
@@ -363,6 +430,7 @@ impl DecorationManager {
             metadata_endpoint,
             decorations: Vec::new(),
             work_area: None,
+            deferred_input: None,
             windows: Vec::new(),
         })
     }

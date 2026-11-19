@@ -203,6 +203,18 @@ impl<C: View> NotificationCenterLayer<C> {
         self.body_rect(self.frame(bounds))
     }
 
+    pub(super) fn scroll_offset(&self) -> f32 {
+        self.interaction.scroll.get()
+    }
+
+    pub(super) fn set_scroll_offset(&self, bounds: Rect, offset: f32) -> f32 {
+        let notifications = self.platform.borrow().notifications();
+        let maximum = self.maximum_scroll(self.frame(bounds), &self.entries(&notifications));
+        let offset = offset.clamp(0.0, maximum);
+        self.interaction.scroll.set(offset);
+        offset
+    }
+
     pub(super) fn banner_contains(&self, bounds: Rect, position: Point) -> bool {
         self.interaction
             .banner

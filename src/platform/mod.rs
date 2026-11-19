@@ -244,6 +244,17 @@ pub trait DesktopPlatform {
     fn native_window_snapshot(&mut self) -> Result<Option<Vec<NativeWindow>>, PlatformError> {
         Ok(None)
     }
+    fn set_deferred_window_input(
+        &mut self,
+        _region: Option<viewkit::prelude::Rect>,
+        _slop: f32,
+        _scale: f64,
+    ) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn native_window_preview(&self, _window: RemoteWindowId) -> Option<viewkit::image::ImageData> {
+        None
+    }
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError>;
 
     fn native_background_color(

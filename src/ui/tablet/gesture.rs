@@ -5,7 +5,7 @@ use std::{
 };
 use viewkit::geometry::Point;
 
-const SLOP: f32 = 10.0;
+pub(super) const SLOP: f32 = 10.0;
 const LONG_PRESS: Duration = Duration::from_millis(450);
 const SWITCHER_HOLD: Duration = Duration::from_millis(260);
 
@@ -83,6 +83,7 @@ struct Contact {
     velocity: Point,
     kind: Kind,
     editing: bool,
+    passed_slop: bool,
 }
 
 #[derive(Default)]
@@ -116,6 +117,7 @@ impl Gestures {
                 velocity: Point::new(0.0, 0.0),
                 kind: Kind::Pending,
                 editing,
+                passed_slop: false,
             },
         );
         if self.owner.is_none() {
@@ -130,6 +132,9 @@ impl Gestures {
     }
     pub fn owns(&self, id: u64) -> bool {
         self.owner == Some(id)
+    }
+    pub fn active(&self) -> bool {
+        self.owner.is_some()
     }
     pub fn edge_active(&self) -> bool {
         self.owner
@@ -162,7 +167,9 @@ impl Gestures {
         }
         let dx = point.x - contact.start.x;
         let dy = point.y - contact.start.y;
-        if contact.kind == Kind::Pending && dx.hypot(dy) >= SLOP {
+        let moved_outside_slop = dx.hypot(dy) >= SLOP;
+        contact.passed_slop |= moved_outside_slop;
+        if contact.kind == Kind::Pending && moved_outside_slop {
             contact.kind = match contact.origin {
                 Origin::Home(Some(id)) if contact.editing => Kind::Drag(id),
                 Origin::Tap => Kind::Held,
@@ -210,6 +217,7 @@ impl Gestures {
     pub fn tick(&mut self, now: Instant) -> Option<Action> {
         let contact = self.contacts.get_mut(&self.owner?)?;
         if contact.kind == Kind::Pending
+            && !contact.passed_slop
             && now.saturating_duration_since(contact.started) >= LONG_PRESS
         {
             if let Origin::Home(Some(id)) = contact.origin {
@@ -232,7 +240,7 @@ impl Gestures {
     pub fn deadline(&self) -> Option<Instant> {
         let contact = self.contacts.get(&self.owner?)?;
         match contact.kind {
-            Kind::Pending => Some(contact.started + LONG_PRESS),
+            Kind::Pending if !contact.passed_slop => Some(contact.started + LONG_PRESS),
             Kind::Vertical if contact.origin == Origin::Edge => {
                 Some(contact.held_since + SWITCHER_HOLD)
             }
@@ -258,6 +266,7 @@ impl Gestures {
             return Some(Action::Switcher);
         }
         match contact.kind {
+            Kind::Pending if contact.passed_slop => Some(Action::Cancel),
             Kind::Pending if contact.origin == Origin::Edge => Some(Action::EdgeTap(point)),
             Kind::Pending => Some(Action::Tap(point)),
             Kind::Drag(item) => Some(Action::Drop(item, point)),
@@ -320,6 +329,24 @@ impl Gestures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_undecided_drag_cannot_turn_into_a_tap_or_long_press() {
+        let now = Instant::now();
+        let start = Point::new(100.0, 100.0);
+        let diagonal = Point::new(190.0, 190.0);
+        let mut gestures = Gestures::default();
+        assert!(gestures.begin(7, Origin::Home(Some(1)), start, false, now));
+        assert_eq!(
+            gestures.update(7, diagonal, now + Duration::from_millis(100)),
+            None
+        );
+        assert_eq!(gestures.tick(now + LONG_PRESS), None);
+        assert_eq!(
+            gestures.end(7, start, now + LONG_PRESS),
+            Some(Action::Cancel)
+        );
+    }
     #[test]
     fn upward_flick_uses_the_release_position_and_velocity() {
         let now = Instant::now();

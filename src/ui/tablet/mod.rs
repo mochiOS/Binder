@@ -7,7 +7,7 @@ mod render;
 use crate::{
     control_center_preferences::ControlCenterPreferences,
     dock_preferences::DockPreferences,
-    platform::{AppInfo, DesktopPlatform, ProcessId, SystemBarState},
+    platform::{AppInfo, DesktopPlatform, ProcessId, RemoteWindowId, SystemBarState},
     window::{DesktopWindow, DesktopWindows, WindowId},
 };
 use gesture::{Action, Gestures, Origin};
@@ -41,6 +41,13 @@ enum Surface {
     Switcher,
     Folder(u64),
     Controls,
+}
+
+impl Surface {
+    fn sheet_travel(self, height: f32) -> f32 {
+        let fraction = if self == Self::Controls { 0.65 } else { 1.0 };
+        (height * fraction).max(1.0)
+    }
 }
 
 #[derive(Default)]
@@ -188,6 +195,7 @@ pub(crate) struct TabletState {
     navigation_start: Option<NavigationDrag>,
     navigation_bar: NavigationBar,
     switch_origin: Option<(ProcessId, Rect)>,
+    switch_previews: HashMap<RemoteWindowId, Option<viewkit::image::ImageData>>,
     gestures: Gestures,
     legacy_touches: HashSet<u64>,
     pan_start: f32,
@@ -208,7 +216,6 @@ pub(crate) struct TabletState {
     // adapters. Surface remains the authoritative exclusive presentation.
     notification_open: State<bool>,
     control_open: State<bool>,
-    list_delta: f32,
     press: Option<(Rect, viewkit::omochi::OmochiSurface)>,
     error: Option<String>,
     keyboard_captured: Cell<bool>,
@@ -232,6 +239,7 @@ impl Default for TabletState {
             navigation_start: None,
             navigation_bar: NavigationBar::default(),
             switch_origin: None,
+            switch_previews: HashMap::new(),
             gestures: Gestures::default(),
             legacy_touches: HashSet::new(),
             pan_start: 0.,
@@ -252,7 +260,6 @@ impl Default for TabletState {
             notification_settings: ButtonInteractionState::new(),
             notification_open: State::new(false),
             control_open: State::new(false),
-            list_delta: 0.0,
             press: None,
             error: None,
             keyboard_captured: Cell::new(false),
@@ -562,6 +569,7 @@ impl TabletShell {
                 }
                 state.app_x.animate_application(center.x, now);
                 state.app_y.animate_application(center.y, now);
+                state.switch_previews.clear();
                 state.surface = Surface::Application;
                 state.previous = Surface::Application;
                 state.sheet.set(0.0);
@@ -591,7 +599,13 @@ impl TabletShell {
             {
                 context.request_redraw_at(deadline);
             }
-            if state.sheet.value == 0.0 && state.sheet.transition.is_none() {
+            if state.sheet.value == 0.0
+                && state.sheet.transition.is_none()
+                && !state.gestures.active()
+            {
+                if state.surface == Surface::Switcher {
+                    state.switch_previews.clear();
+                }
                 state.surface = state.previous;
             }
             self.notification_open
@@ -638,6 +652,17 @@ impl TabletShell {
         {
             self.home(now, &geometry);
         }
+        let application = self.state.borrow().surface == Surface::Application;
+        let deferred_region = (application
+            && self
+                .foreground()
+                .is_some_and(|window| window.externally_composited()))
+        .then_some(geometry.edge);
+        let _ = self
+            .resources
+            .platform
+            .borrow_mut()
+            .set_deferred_window_input(deferred_region, gesture::SLOP, context.scale_factor());
         let app_maximum = self.library_maximum(&geometry);
         let folder_maximum = self.folder_maximum(&geometry);
         let switch_maximum = self.entries().len().saturating_sub(1) as f32 * geometry.card_pitch();
@@ -696,8 +721,12 @@ impl TabletShell {
                         .process_id
                         .map(|pid| (pid, self.app_transform(geometry).rect(geometry.application)))
                 });
-                self.state.borrow_mut().switch_origin = origin;
-                self.state.borrow_mut().switch_scroll.set(0.0);
+                {
+                    let mut state = self.state.borrow_mut();
+                    state.switch_origin = origin;
+                    state.switch_scroll.set(0.0);
+                    state.switch_previews.clear();
+                }
                 self.home(now, geometry);
                 self.show(Surface::Switcher, now);
             }
@@ -801,6 +830,17 @@ impl TabletShell {
                 velocity,
                 finished,
             } => {
+                let (origin, delta, velocity) = if origin == Origin::NotificationList {
+                    let start = self.state.borrow().list_start;
+                    let offset = self
+                        .notifications
+                        .set_scroll_offset(self.notification_bounds(geometry), start - delta);
+                    let remaining = (delta + offset - start).min(0.0);
+                    let velocity = if remaining < 0.0 { velocity } else { 0.0 };
+                    (Origin::Notifications, remaining, velocity)
+                } else {
+                    (origin, delta, velocity)
+                };
                 if origin == Origin::Dock {
                     let maximum = (self.dock_apps().len() as f32 * geometry.dock_pitch
                         - geometry.dock.size.height
@@ -850,25 +890,20 @@ impl TabletShell {
                         .update_for_repaint(|open| *open = surface == Surface::Controls);
                 }
                 let mut state = self.state.borrow_mut();
+                let travel = surface.sheet_travel(geometry.bounds.size.height);
                 let amount = (if opening { 0.0 } else { state.sheet_start }
-                    + delta * sign / (geometry.bounds.size.height * 0.65).max(1.0))
+                    + delta * sign / travel)
                 .clamp(0.0, 1.0);
+                let speed = velocity * sign / travel;
+                state.sheet.follow(amount, speed);
                 if finished {
-                    state.sheet.velocity =
-                        velocity * sign / (geometry.bounds.size.height * 0.65).max(1.0);
-                    let open = amount
-                        + velocity * sign / geometry.bounds.size.height.max(1.0) * 0.12
-                        > 0.35;
+                    let threshold = if opening { 0.24 } else { 0.80 };
+                    let open = amount + speed * 0.12 >= threshold;
                     state.sheet.animate(if open { 1.0 } else { 0.0 }, now);
                     if !open {
                         self.notification_open
                             .update_for_repaint(|open| *open = false);
                     }
-                } else {
-                    state.sheet.follow(
-                        amount,
-                        velocity * sign / (geometry.bounds.size.height * 0.65).max(1.0),
-                    );
                 }
             }
             Action::Edit(id, point) => {
@@ -1145,9 +1180,9 @@ impl TabletShell {
                 state.list_start = match origin {
                     Origin::Dock => state.dock_scroll,
                     Origin::Folder => state.folder_scroll,
+                    Origin::NotificationList => self.notifications.scroll_offset(),
                     _ => state.app_scroll,
                 };
-                state.list_delta = 0.0;
             }
             if primary
                 && matches!(origin, Origin::Home(Some(_)) | Origin::Dock)
@@ -1228,26 +1263,6 @@ impl TabletShell {
             };
             (action, ends_navigation)
         };
-        if let Some(Action::Sheet {
-            origin: Origin::NotificationList,
-            delta,
-            ..
-        }) = action
-        {
-            let previous = self.state.borrow().list_delta;
-            self.state.borrow_mut().list_delta = delta;
-            self.notifications.handle_event(
-                self.notification_bounds(geometry),
-                &ViewEvent::Scroll {
-                    position,
-                    delta_x: 0.0,
-                    delta_y: delta - previous,
-                },
-                context,
-            );
-            context.request_redraw();
-            return EventResult::Consumed;
-        }
         if let Some(Action::EdgeTap(point)) = action {
             if self.state.borrow().surface == Surface::Application {
                 for event in [
@@ -1567,7 +1582,7 @@ impl TabletShell {
                 } else if matches!(surface, Surface::Folder(_)) {
                     state.folder_scroll =
                         (state.folder_scroll - *delta_y).clamp(0.0, folder_maximum);
-                } else if geometry.dock.contains(*position) {
+                } else if surface == Surface::Home && geometry.dock.contains(*position) {
                     state.dock_scroll = (state.dock_scroll - *delta_y).clamp(0.0, dock_maximum);
                 } else if surface == Surface::Home {
                     let target = model::snap(

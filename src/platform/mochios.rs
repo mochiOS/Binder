@@ -576,6 +576,31 @@ impl DesktopPlatform for MochiOsPlatform {
         Ok(None)
     }
 
+    fn set_deferred_window_input(
+        &mut self,
+        region: Option<viewkit::prelude::Rect>,
+        slop: f32,
+        scale: f64,
+    ) -> Result<(), PlatformError> {
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = self.decoration_manager.as_mut() {
+            return manager
+                .set_deferred_input(region, slop, scale)
+                .map_err(|_| PlatformError::InvalidResponse);
+        }
+        let _ = (region, slop, scale);
+        Ok(())
+    }
+
+    fn native_window_preview(&self, window: RemoteWindowId) -> Option<viewkit::image::ImageData> {
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = &self.decoration_manager {
+            return manager.preview(window);
+        }
+        let _ = window;
+        None
+    }
+
     fn notify_window_resized(
         &mut self,
         notification: super::WindowResizedNotification,
