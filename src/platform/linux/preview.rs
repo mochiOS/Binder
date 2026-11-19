@@ -23,6 +23,7 @@ pub(crate) struct Surface {
     pub list: DisplayList,
     pub has_frame: bool,
     pub cursor: CursorIcon,
+    text_input: bool,
     connection: Rc<RefCell<Connection>>,
     local_id: u64,
     process_id: ProcessId,
@@ -294,6 +295,14 @@ impl PreviewDesktop {
             .map_err(|_| PlatformError::TransportFailure)
     }
 
+    pub fn accepts_software_keys(&self, pid: ProcessId, remote: RemoteWindowId) -> bool {
+        self.children
+            .get(&pid)
+            .and_then(|app| app.windows.get(&remote))
+            .and_then(|id| surface(&renderer(pid, *id)))
+            .is_some_and(|surface| surface.borrow().text_input)
+    }
+
     pub fn layout(
         &mut self,
         pid: ProcessId,
@@ -555,6 +564,7 @@ impl PreviewDesktop {
                                                 list: DisplayList::new(),
                                                 has_frame: false,
                                                 cursor: CursorIcon::Default,
+                                                text_input: false,
                                                 connection: Rc::clone(connection),
                                                 local_id: id,
                                                 process_id: pid,
@@ -572,6 +582,12 @@ impl PreviewDesktop {
                                             + if self.fullscreen_work_area.is_some(){0}else{crate::ui::window_decoration::TITLE_BAR_HEIGHT as u32},
                                         resizable: config.resizable,
                                     });
+                                }
+                                Packet::TextInputActive { id, active } if app.local_windows.contains(&id) => {
+                                    if let Some(surface) = surface(&renderer(pid, id)) {
+                                        surface.borrow_mut().text_input = active;
+                                        self.dirty = true;
+                                    }
                                 }
                                 Packet::Frame { id, list, cursor }
                                     if app.local_windows.contains(&id) =>
@@ -1093,6 +1109,7 @@ mod decoration_admission_tests {
                     list: DisplayList::new(),
                     has_frame: false,
                     cursor: CursorIcon::Default,
+                    text_input: false,
                     connection,
                     local_id: 1,
                     process_id: pid,

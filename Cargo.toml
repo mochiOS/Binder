@@ -17,9 +17,9 @@ mochios = []
 
 [dependencies]
 serde_json = "1"
-mochios-viewkit-gpu-protocol = { git = "https://github.com/mochiOS/syscalls", rev = "977d9a579e1f2b430d6b47e8dce57b516c9d3d9d", package = "mochios-viewkit-gpu-protocol" }
+mochios-viewkit-gpu-protocol = { git = "https://github.com/mochiOS/syscalls", rev = "d711cda9856a0e754f5de14b8ef7259fa480eee4", package = "mochios-viewkit-gpu-protocol" }
 appcore = { package = "mochios-appcore", git = "https://github.com/mochiOS/devkit", default-features = false }
-viewkit = { version = "2.0.0", git = "https://github.com/mochiOS/viewkit", rev = "e237922c673d767d9a88a7b25690518ee7968f80" }
+viewkit = { version = "2.0.0", git = "https://github.com/mochiOS/viewkit", rev = "8f3777a5db0184a154ede23ad08cf396c6531f9e" }
 binder_client = { git = "https://github.com/mochiOS/Binder", package = "binder_client" }
 
 [target.'cfg(target_os = "linux")'.dependencies]

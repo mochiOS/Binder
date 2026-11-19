@@ -564,6 +564,19 @@ impl DesktopPlatform for LinuxPlatform {
         )
     }
 
+    fn accepts_software_keys(&self, process: ProcessId, window: RemoteWindowId) -> bool {
+        self.preview.borrow().accepts_software_keys(process, window)
+    }
+
+    fn software_key(&mut self, process: ProcessId, window: RemoteWindowId, key: char) -> bool {
+        let mut preview = self.preview.borrow_mut();
+        if !preview.accepts_software_keys(process, window) {
+            return false;
+        }
+        let event = viewkit::software_keyboard::software_key_event(key);
+        preview.event(process, window, event).is_ok()
+    }
+
     fn notify_window_focus_changed(
         &mut self,
         notification: WindowFocusChangedNotification,

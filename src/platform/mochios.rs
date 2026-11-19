@@ -601,6 +601,24 @@ impl DesktopPlatform for MochiOsPlatform {
         None
     }
 
+    fn accepts_software_keys(&self, process: ProcessId, window: RemoteWindowId) -> bool {
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = &self.decoration_manager {
+            return manager.accepts_software_keys(process, window);
+        }
+        let _ = (process, window);
+        false
+    }
+
+    fn software_key(&mut self, process: ProcessId, window: RemoteWindowId, key: char) -> bool {
+        #[cfg(target_os = "mochios")]
+        if let Some(manager) = &self.decoration_manager {
+            return manager.software_key(process, window, key);
+        }
+        let _ = (process, window, key);
+        false
+    }
+
     fn notify_window_resized(
         &mut self,
         notification: super::WindowResizedNotification,

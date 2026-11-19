@@ -255,6 +255,12 @@ pub trait DesktopPlatform {
     fn native_window_preview(&self, _window: RemoteWindowId) -> Option<viewkit::image::ImageData> {
         None
     }
+    fn accepts_software_keys(&self, _process: ProcessId, _window: RemoteWindowId) -> bool {
+        false
+    }
+    fn software_key(&mut self, _process: ProcessId, _window: RemoteWindowId, _key: char) -> bool {
+        false
+    }
     fn system_bar_state(&self) -> Result<SystemBarState, PlatformError>;
 
     fn native_background_color(

@@ -9,6 +9,7 @@ pub(super) struct Geometry {
     pub application: Rect,
     pub dock: Rect,
     pub edge: Rect,
+    pub keyboard: Option<Rect>,
     pub search: Rect,
     pub gap: f32,
     pub pitch: f32,
@@ -82,6 +83,15 @@ impl Geometry {
         geometry.library_bottom = geometry.library_bottom.min(geometry.edge.origin.y);
         geometry
     }
+    pub fn with_keyboard(mut self, keyboard: Option<Rect>) -> Self {
+        self.keyboard = keyboard;
+        if let Some(keyboard) = keyboard {
+            self.application.size.height = (keyboard.origin.y - self.application.origin.y)
+                .clamp(1.0, self.application.size.height);
+            self.library_bottom = self.library_bottom.min(keyboard.origin.y);
+        }
+        self
+    }
     pub fn new(bounds: Rect, theme: &Theme, dock_count: usize) -> Self {
         let gap = theme.spacing.large.max(12.0);
         let status = theme.typography.label.line_height + gap;
@@ -141,6 +151,7 @@ impl Geometry {
             ),
             dock,
             edge,
+            keyboard: None,
             search,
             gap,
             pitch,
@@ -1162,6 +1173,9 @@ impl TabletShell {
         } else {
             context.display_list.add_input_region(geometry.bounds);
         }
+        if let Some(keyboard) = geometry.keyboard {
+            context.display_list.add_input_region(keyboard);
+        }
         if surface != Surface::Switcher
             && (surface == Surface::Application
                 || previous == Surface::Application
@@ -1295,6 +1309,15 @@ impl TabletShell {
                     Rect::new(right - 24.0, geometry.bounds.origin.y + 10.0, 24.0, 24.0),
                     context,
                 );
+        }
+        if let Some(bounds) = geometry.keyboard {
+            let state = self.state.borrow();
+            state.keyboard.panel.paint(
+                &state.keyboard.layouts,
+                bounds,
+                system.japanese_input,
+                context,
+            );
         }
         let width = (geometry.bounds.size.width * 0.22).clamp(112.0, 280.0);
         let navigation_amount = self.state.borrow().navigation_bar.amount(amount);

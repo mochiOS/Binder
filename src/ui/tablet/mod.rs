@@ -1,6 +1,7 @@
 //! Tablet shell presentation. Startup selects this root once; application,
 //! notification and window ownership remain in the existing desktop adapters.
 mod gesture;
+mod keyboard;
 mod model;
 mod render;
 
@@ -20,6 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 use viewkit::components::EmptyView;
+use viewkit::software_keyboard::KeyboardAction;
 use viewkit::{
     animation::SpringAnimation,
     event::{EventContext, EventResult, ViewEvent},
@@ -210,6 +212,8 @@ pub(crate) struct TabletState {
     last_focused: Option<WindowId>,
     catalogue: Vec<String>,
     search: TextFieldInteractionState,
+    keyboard: keyboard::Keyboard,
+    last_application_bounds: Option<Rect>,
     notification_interaction: Rc<super::notification_center::NotificationCenterInteraction>,
     notification_settings: ButtonInteractionState,
     // Existing overlay components request dismissal through these retained
@@ -254,6 +258,8 @@ impl Default for TabletState {
             last_focused: None,
             catalogue: Vec::new(),
             search: TextFieldInteractionState::new(),
+            keyboard: keyboard::Keyboard::default(),
+            last_application_bounds: None,
             notification_interaction: Rc::new(
                 super::notification_center::NotificationCenterInteraction::default(),
             ),
@@ -478,12 +484,7 @@ impl TabletShell {
 
     fn prepare(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         let now = Instant::now();
-        let geometry = Geometry::for_environment(
-            bounds,
-            context.theme,
-            self.dock_apps().len(),
-            context.environment(),
-        );
+        let geometry = self.geometry(bounds, context.theme, context.environment());
         if let Err(error) = self
             .resources
             .platform
@@ -495,6 +496,28 @@ impl TabletShell {
         }
         self.refresh.paint(bounds, context);
         let applications = self.resources.apps.get();
+        let text_target = self.text_target();
+        {
+            let mut state = self.state.borrow_mut();
+            state.keyboard.update_target(text_target);
+            if state
+                .catalogue
+                .iter()
+                .map(String::as_str)
+                .ne(applications.iter().map(|app| app.bundle_id.as_str()))
+            {
+                state.keyboard.load(&applications);
+            }
+        }
+        let updated = self.geometry(bounds, context.theme, context.environment());
+        if updated.application != geometry.application {
+            let _ = self
+                .resources
+                .platform
+                .borrow_mut()
+                .set_fullscreen_work_area(Some(updated.application), context.scale_factor());
+        }
+        let geometry = updated;
         let catalogue: Vec<_> = applications
             .iter()
             .map(|app| app.bundle_id.clone())
@@ -546,6 +569,17 @@ impl TabletShell {
                 }
                 state.clear_gestures(now);
                 state.dragged = None;
+            }
+            if state.last_application_bounds != Some(geometry.application) {
+                state.last_application_bounds = Some(geometry.application);
+                if state.app_motion.value >= 0.99 && state.app_motion.transition.is_none() {
+                    state
+                        .app_x
+                        .set(geometry.application.origin.x + geometry.application.size.width * 0.5);
+                    state.app_y.set(
+                        geometry.application.origin.y + geometry.application.size.height * 0.5,
+                    );
+                }
             }
             if focused.is_some() && focused != state.last_focused {
                 let returning = state.presented == focused
@@ -1080,6 +1114,137 @@ impl TabletShell {
             .size(TextFieldSize::Touch)
     }
 
+    fn geometry(&self, bounds: Rect, theme: &Theme, environment: WindowEnvironment) -> Geometry {
+        let geometry =
+            Geometry::for_environment(bounds, theme, self.dock_apps().len(), environment);
+        let keyboard =
+            self.state
+                .borrow()
+                .keyboard
+                .bounds(geometry.edge, geometry.bounds.size.height, theme);
+        geometry.with_keyboard(keyboard)
+    }
+
+    fn text_target(&self) -> Option<keyboard::Target> {
+        let state = self.state.borrow();
+        if state.surface == Surface::Library && state.search.is_focused() {
+            return Some(keyboard::Target::Search);
+        }
+        if state.surface != Surface::Application {
+            return None;
+        }
+        drop(state);
+        let window = self.foreground()?;
+        let pid = window.process_id?;
+        let id = window.remote_window?;
+        self.resources
+            .platform
+            .borrow()
+            .accepts_software_keys(pid, id)
+            .then_some(keyboard::Target::Application(pid, id))
+    }
+
+    fn keyboard_event(
+        &self,
+        geometry: &Geometry,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> bool {
+        let contact = match event {
+            ViewEvent::Touch { id, .. } => *id,
+            _ => MOUSE,
+        };
+        if self.state.borrow().gestures.contains(contact) {
+            return false;
+        }
+        let Some(bounds) = geometry.keyboard else {
+            if matches!(
+                event,
+                ViewEvent::PointerPressed { .. }
+                    | ViewEvent::Touch {
+                        phase: TouchPhase::Started,
+                        ..
+                    }
+            ) {
+                self.state.borrow_mut().keyboard.resume();
+            }
+            return false;
+        };
+        let (consumed, action, kana, target) = {
+            let mut state = self.state.borrow_mut();
+            let keyboard = &mut state.keyboard;
+            let selected = keyboard.panel.selected;
+            let (consumed, action) =
+                keyboard
+                    .panel
+                    .handle(&keyboard.layouts, bounds, event, context.theme());
+            if selected != keyboard.panel.selected {
+                keyboard.save();
+            }
+            let kana = keyboard
+                .layouts
+                .get(keyboard.panel.selected)
+                .is_some_and(|layout| layout.kana);
+            (consumed, action, kana, keyboard.target)
+        };
+        if !consumed {
+            if matches!(
+                event,
+                ViewEvent::PointerPressed { .. }
+                    | ViewEvent::Touch {
+                        phase: TouchPhase::Started,
+                        ..
+                    }
+            ) {
+                self.state.borrow_mut().keyboard.resume();
+            }
+            return false;
+        }
+        match action {
+            Some(KeyboardAction::Dismiss) => self.state.borrow_mut().keyboard.dismiss(),
+            Some(KeyboardAction::ToggleIme) => self.toggle_keyboard_ime(),
+            Some(KeyboardAction::Key(key)) if target.is_some() && target == self.text_target() => {
+                if kana
+                    && ('ぁ'..='ゖ').contains(&key)
+                    && viewkit::platform::input_method::enabled() == Some(false)
+                {
+                    self.toggle_keyboard_ime();
+                }
+                match target {
+                    Some(keyboard::Target::Search) => {
+                        let event = match key {
+                            '\u{8}' => ViewEvent::Backspace,
+                            '\n' => ViewEvent::KeyPressed {
+                                key: Key::Enter,
+                                modifiers: Default::default(),
+                            },
+                            _ => ViewEvent::TextInput {
+                                text: key.to_string(),
+                            },
+                        };
+                        self.search().handle_event(geometry.search, &event, context);
+                    }
+                    Some(keyboard::Target::Application(pid, id)) => {
+                        self.resources
+                            .platform
+                            .borrow_mut()
+                            .software_key(pid, id, key);
+                    }
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+        context.request_redraw();
+        true
+    }
+
+    fn toggle_keyboard_ime(&self) {
+        if let Some(japanese) = viewkit::platform::input_method::toggle() {
+            self.resources.system_bar.update_for_repaint(|system| system.japanese_input = japanese);
+        }
+    }
+
     fn contact(
         &self,
         id: u64,
@@ -1353,12 +1518,7 @@ impl View for TabletShell {
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         self.prepare(bounds, context);
         self.paint_scene(
-            Geometry::for_environment(
-                bounds,
-                context.theme,
-                self.dock_apps().len(),
-                context.environment(),
-            ),
+            self.geometry(bounds, context.theme, context.environment()),
             context,
         );
     }
@@ -1386,12 +1546,10 @@ impl TabletShell {
         event: &ViewEvent,
         context: &mut EventContext<'_>,
     ) -> EventResult {
-        let geometry = Geometry::for_environment(
-            bounds,
-            context.theme(),
-            self.dock_apps().len(),
-            context.environment(),
-        );
+        let geometry = self.geometry(bounds, context.theme(), context.environment());
+        if self.keyboard_event(&geometry, event, context) {
+            return EventResult::Consumed;
+        }
         if self.state.borrow().surface == Surface::Notifications
             && matches!(
                 event,

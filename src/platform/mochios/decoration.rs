@@ -435,6 +435,22 @@ impl DecorationManager {
         })
     }
 
+    pub(super) fn accepts_software_keys(&self, process: ProcessId, window: RemoteWindowId) -> bool {
+        self.owns(process, window)
+            && ipc_call(self.compositor, &wm::text_input_query(window.0))
+                .is_ok_and(|reply| read_u32(&reply, 0) == Some(0) && read_u32(&reply, 4) == Some(1))
+    }
+
+    pub(super) fn software_key(
+        &self,
+        process: ProcessId,
+        window: RemoteWindowId,
+        key: char,
+    ) -> bool {
+        self.accepts_software_keys(process, window)
+            && ipc_call_status(self.compositor, &wm::software_key_request(window.0, key)).is_ok()
+    }
+
     pub(super) fn handle_message(&mut self, event: &[u8]) -> Result<bool, DecorationError> {
         match read_u32(event, 0) {
             Some(DECOR_EVENT_WINDOW) => {
