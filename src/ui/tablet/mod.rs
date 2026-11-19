@@ -559,26 +559,25 @@ impl TabletShell {
                     maximum,
                 ));
                 state.last_size = geometry.bounds.size;
-                if state.app_motion.value >= 0.99 && state.app_motion.transition.is_none() {
-                    state
-                        .app_x
-                        .set(geometry.application.origin.x + geometry.application.size.width * 0.5);
-                    state.app_y.set(
-                        geometry.application.origin.y + geometry.application.size.height * 0.5,
-                    );
-                }
                 state.clear_gestures(now);
                 state.dragged = None;
             }
             if state.last_application_bounds != Some(geometry.application) {
                 state.last_application_bounds = Some(geometry.application);
-                if state.app_motion.value >= 0.99 && state.app_motion.transition.is_none() {
-                    state
-                        .app_x
-                        .set(geometry.application.origin.x + geometry.application.size.width * 0.5);
-                    state.app_y.set(
+                if state.app_motion.target == 1.0 && state.navigation_start.is_none() {
+                    let center = Point::new(
+                        geometry.application.origin.x + geometry.application.size.width * 0.5,
                         geometry.application.origin.y + geometry.application.size.height * 0.5,
                     );
+                    // Opening a keyboard can resize the app during its launch.
+                    // Move the animation destination with the fullscreen area.
+                    if state.app_motion.transition.is_some() {
+                        state.app_x.animate_application(center.x, now);
+                        state.app_y.animate_application(center.y, now);
+                    } else {
+                        state.app_x.set(center.x);
+                        state.app_y.set(center.y);
+                    }
                 }
             }
             if focused.is_some() && focused != state.last_focused {
@@ -1117,11 +1116,11 @@ impl TabletShell {
     fn geometry(&self, bounds: Rect, theme: &Theme, environment: WindowEnvironment) -> Geometry {
         let geometry =
             Geometry::for_environment(bounds, theme, self.dock_apps().len(), environment);
-        let keyboard =
-            self.state
-                .borrow()
-                .keyboard
-                .bounds(geometry.edge, geometry.bounds.size.height, theme);
+        let keyboard = self.state.borrow().keyboard.geometry(
+            geometry.edge,
+            geometry.bounds.size.height,
+            theme,
+        );
         geometry.with_keyboard(keyboard)
     }
 
@@ -1157,7 +1156,7 @@ impl TabletShell {
         if self.state.borrow().gestures.contains(contact) {
             return false;
         }
-        let Some(bounds) = geometry.keyboard else {
+        let Some(presentation) = geometry.keyboard else {
             if matches!(
                 event,
                 ViewEvent::PointerPressed { .. }
@@ -1177,7 +1176,7 @@ impl TabletShell {
             let (consumed, action) =
                 keyboard
                     .panel
-                    .handle(&keyboard.layouts, bounds, event, context.theme());
+                    .handle(&keyboard.layouts, presentation.keys, event, context.theme());
             if selected != keyboard.panel.selected {
                 keyboard.save();
             }

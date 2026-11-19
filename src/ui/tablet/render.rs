@@ -9,7 +9,7 @@ pub(super) struct Geometry {
     pub application: Rect,
     pub dock: Rect,
     pub edge: Rect,
-    pub keyboard: Option<Rect>,
+    pub keyboard: Option<keyboard::KeyboardGeometry>,
     pub search: Rect,
     pub gap: f32,
     pub pitch: f32,
@@ -83,12 +83,14 @@ impl Geometry {
         geometry.library_bottom = geometry.library_bottom.min(geometry.edge.origin.y);
         geometry
     }
-    pub fn with_keyboard(mut self, keyboard: Option<Rect>) -> Self {
+    pub fn with_keyboard(mut self, keyboard: Option<keyboard::KeyboardGeometry>) -> Self {
         self.keyboard = keyboard;
         if let Some(keyboard) = keyboard {
-            self.application.size.height = (keyboard.origin.y - self.application.origin.y)
-                .clamp(1.0, self.application.size.height);
-            self.library_bottom = self.library_bottom.min(keyboard.origin.y);
+            if keyboard.docked {
+                self.application.size.height = (keyboard.keys.origin.y - self.application.origin.y)
+                    .clamp(1.0, self.application.size.height);
+            }
+            self.library_bottom = self.library_bottom.min(keyboard.keys.origin.y);
         }
         self
     }
@@ -1174,7 +1176,7 @@ impl TabletShell {
             context.display_list.add_input_region(geometry.bounds);
         }
         if let Some(keyboard) = geometry.keyboard {
-            context.display_list.add_input_region(keyboard);
+            context.display_list.add_input_region(keyboard.keys);
         }
         if surface != Surface::Switcher
             && (surface == Surface::Application
@@ -1310,11 +1312,16 @@ impl TabletShell {
                     context,
                 );
         }
-        if let Some(bounds) = geometry.keyboard {
+        if let Some(keyboard) = geometry.keyboard {
             let state = self.state.borrow();
-            state.keyboard.panel.paint(
+            state.keyboard.panel.paint_with_footer(
                 &state.keyboard.layouts,
-                bounds,
+                keyboard.keys,
+                if keyboard.docked {
+                    geometry.edge.size.height
+                } else {
+                    0.0
+                },
                 system.japanese_input,
                 context,
             );
@@ -1429,6 +1436,39 @@ mod tests {
         assert_eq!(library.origin.y + library.size.height, 700.);
         assert!(home.library_body().size.height > library.size.height);
     }
+
+    #[test]
+    fn docked_keys_reserve_app_space_but_floating_keys_preserve_it() {
+        let theme = &Theme::LIGHT;
+        let mut keyboard = keyboard::Keyboard::default();
+        keyboard.layouts = viewkit::software_keyboard::parse_layouts(
+            "[US]\na b c\n[かな]\n+あいうえお +かきくけこ",
+        )
+        .unwrap();
+        keyboard.update_target(Some(keyboard::Target::Search));
+        for (width, height) in [(1920., 1080.), (720., 1080.), (600., 480.)] {
+            let screen = Rect::new(0., 0., width, height);
+            let full = Geometry::new(screen, theme, 5).application;
+            for selected in [0, 1] {
+                keyboard.panel.selected = selected;
+                let home = Geometry::new(screen, theme, 5);
+                let panel = keyboard.geometry(home.edge, height, theme).unwrap();
+                let edge = home.edge;
+                let app = home.with_keyboard(Some(panel)).application;
+                assert_eq!(app.origin, full.origin);
+                assert!(panel.keys.origin.y + panel.keys.size.height <= edge.origin.y);
+                if selected == 0 {
+                    assert_eq!(panel.keys.size.width, width);
+                    assert_eq!(app.origin.y + app.size.height, panel.keys.origin.y);
+                } else {
+                    assert!(panel.keys.size.width <= theme.controls.touch_height * 8.5);
+                    assert!(panel.keys.origin.x > width * 0.25);
+                    assert_eq!(app, full);
+                }
+            }
+        }
+    }
+
     #[test]
     fn application_starts_at_the_home_icon_width_in_each_orientation() {
         for (width, height) in [(1280., 800.), (800., 1280.), (640., 480.)] {

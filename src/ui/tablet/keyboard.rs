@@ -12,6 +12,12 @@ pub(super) enum Target {
     Application(ProcessId, RemoteWindowId),
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct KeyboardGeometry {
+    pub keys: Rect,
+    pub docked: bool,
+}
+
 #[derive(Default)]
 pub(super) struct Keyboard {
     pub layouts: Vec<KeyboardLayout>,
@@ -100,16 +106,39 @@ impl Keyboard {
         self.dismissed = None;
     }
 
-    pub fn bounds(&self, edge: Rect, height: f32, theme: &Theme) -> Option<Rect> {
-        if self.target.is_none() || self.dismissed.is_some() || self.layouts.is_empty() {
+    pub fn geometry(
+        &self,
+        edge: Rect,
+        screen_height: f32,
+        theme: &Theme,
+    ) -> Option<KeyboardGeometry> {
+        if self.target.is_none() || self.dismissed.is_some() {
             return None;
         }
-        let height = SoftwareKeyboard::height(&self.layouts, theme).min(height * 0.5);
-        Some(Rect::new(
-            edge.origin.x,
-            edge.origin.y - height,
-            edge.size.width,
-            height,
-        ))
+        let layout = self.layouts.get(self.panel.selected)?;
+        let docked = !layout.kana;
+        let gap = if docked {
+            0.0
+        } else {
+            theme.spacing.medium.min(edge.size.width / 12.0)
+        };
+        let available = (edge.size.width - 2.0 * gap).max(0.0);
+        let width = if docked {
+            available
+        } else {
+            layout.preferred_width(available, theme)
+        };
+        let height = layout
+            .preferred_height(layout.preferred_width(width, theme), theme)
+            .min(screen_height * 0.54);
+        Some(KeyboardGeometry {
+            keys: Rect::new(
+                edge.origin.x + edge.size.width - gap - width,
+                edge.origin.y - gap - height,
+                width,
+                height,
+            ),
+            docked,
+        })
     }
 }
