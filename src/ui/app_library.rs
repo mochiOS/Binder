@@ -332,11 +332,13 @@ where
             return None;
         }
         let presented = self.page_motion.borrow().position;
-        filtered.into_iter()
+        filtered
+            .into_iter()
             .enumerate()
             .find(|(index, _)| {
                 let mut item = Self::item_rect(panel, *index % PAGE_SIZE);
-                item.origin.x += (*index / PAGE_SIZE) as f32 * panel.size.width - presented * panel.size.width;
+                item.origin.x +=
+                    (*index / PAGE_SIZE) as f32 * panel.size.width - presented * panel.size.width;
                 item.contains(position)
             })
             .map(|(_, app_index)| app_index)
@@ -416,11 +418,16 @@ where
         });
     }
 
-    fn activate(&self, app: &AppInfo, context: &mut EventContext<'_>) {
-        self.pending_activation.borrow_mut().queue(app.clone());
+    fn close(&self, context: &mut EventContext<'_>) {
         self.open.set(false);
         self.close_menu();
+        context.set_keyboard_capture(false);
         context.request_redraw();
+    }
+
+    fn activate(&self, app: &AppInfo, context: &mut EventContext<'_>) {
+        self.pending_activation.borrow_mut().queue(app.clone());
+        self.close(context);
     }
 
     fn perform_activation(&self, app: &AppInfo) {
@@ -492,6 +499,8 @@ where
             self.advance_pending_activation(context);
             return;
         }
+        // A modal shell panel must own its backdrop on native compositors too.
+        context.display_list.add_input_region(bounds);
         self.ensure_open_session();
         Rectangle::new()
             .color(RectangleColor::Custom(context.theme.dialog.backdrop))
@@ -510,7 +519,8 @@ where
             },
             page_count > 1,
         );
-        Surface::floating().radius(CornerRadius::Custom(super::desktop_metrics::PANEL_RADIUS))
+        Surface::floating()
+            .radius(CornerRadius::Custom(super::desktop_metrics::PANEL_RADIUS))
             .paint(panel, context);
         Text::styled("Applications", TextRole::TitleSmall).paint(
             Rect::new(panel.origin.x + 34.0, panel.origin.y + 24.0, 300.0, 36.0),
@@ -691,7 +701,18 @@ where
     ) -> EventResult {
         if !self.open.get() {
             self.was_open.set(false);
-            return self.content.handle_event(bounds, event, context);
+            let result = self.content.handle_event(bounds, event, context);
+            if self.open.get() {
+                context.set_keyboard_capture(true);
+            }
+            return result;
+        }
+        if matches!(
+            event,
+            ViewEvent::KeyboardCaptureDenied | ViewEvent::FocusChanged { focused: false }
+        ) {
+            self.close(context);
+            return EventResult::Consumed;
         }
         self.ensure_open_session();
         if let Some(menu_bounds) = self.menu_bounds(bounds) {
@@ -737,8 +758,7 @@ where
             ViewEvent::KeyPressed {
                 key: Key::Escape, ..
             } => {
-                self.open.set(false);
-                context.request_redraw_in(bounds);
+                self.close(context);
             }
             ViewEvent::ArrowLeft => {
                 self.move_selection(-1);
@@ -824,8 +844,7 @@ where
                 button: PointerButton::Primary,
             } => {
                 if !panel.contains_rounded(22.0, *position) {
-                    self.open.set(false);
-                    context.request_redraw_in(bounds);
+                    self.close(context);
                 } else if self.page_count(&self.filtered_indices()) > 1
                     && Self::previous_page_rect(panel).contains(*position)
                 {
@@ -918,6 +937,85 @@ fn adjacent_selection(filtered: &[usize], selected: Option<usize>, offset: isize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct InputPlatform;
+    impl DesktopPlatform for InputPlatform {
+        fn system_bar_state(
+            &self,
+        ) -> Result<crate::platform::SystemBarState, crate::platform::PlatformError> {
+            Ok(crate::platform::SystemBarState::default())
+        }
+        fn refresh(&mut self) -> Result<bool, crate::platform::PlatformError> {
+            Ok(false)
+        }
+        fn open_system_settings(&self) -> Result<(), crate::platform::PlatformError> {
+            panic!("input tests cannot launch settings")
+        }
+        fn perform_system_action(
+            &self,
+            _: crate::platform::SystemAction,
+        ) -> Result<(), crate::platform::PlatformError> {
+            panic!("input tests cannot perform system actions")
+        }
+    }
+    fn input_layer(open: bool) -> AppLibraryLayer<Rectangle> {
+        AppLibraryLayer::new(
+            Rectangle::new(),
+            Rc::new(RefCell::new(InputPlatform)),
+            State::new(DesktopWindows::default()),
+            State::new(Vec::new()),
+            State::new(DockPreferences::default()),
+            State::new(open),
+            Rc::new(RefCell::new(PendingAppActivation::default())),
+            Rc::new(Cell::new(None)),
+            Rc::new(RefCell::new(HashMap::new())),
+        )
+    }
+    #[test]
+    fn modal_library_claims_the_backdrop_only_while_open() {
+        use viewkit::{draw_command::DisplayList, typography::TextMeasurer};
+        let layer = input_layer(true);
+        let bounds = Rect::new(0., 0., 1280., 800.);
+        let theme = Theme::LIGHT;
+        let mut text = TextMeasurer::new();
+        let mut list = DisplayList::new();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut text),
+        );
+        assert!(list.input_regions().contains(&bounds));
+        layer.open.set(false);
+        list.clear();
+        layer.paint(
+            bounds,
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut text),
+        );
+        assert!(!list.input_regions().contains(&bounds));
+    }
+    #[test]
+    fn library_closes_on_escape_outside_click_and_capture_preemption() {
+        use viewkit::typography::TextMeasurer;
+        let theme = Theme::LIGHT;
+        let mut text = TextMeasurer::new();
+        let bounds = Rect::new(0., 0., 1280., 800.);
+        for event in [
+            ViewEvent::KeyPressed {
+                key: Key::Escape,
+                modifiers: KeyModifiers::default(),
+            },
+            ViewEvent::PointerPressed {
+                position: Point::new(1., 400.),
+                button: PointerButton::Primary,
+            },
+            ViewEvent::KeyboardCaptureDenied,
+            ViewEvent::FocusChanged { focused: false },
+        ] {
+            let layer = input_layer(true);
+            let mut context = EventContext::new(&theme, &theme.typography, &mut text);
+            layer.handle_event(bounds, &event, &mut context);
+            assert!(!layer.open.get(), "panel remained open after {event:?}");
+        }
+    }
 
     #[test]
     fn page_motion_retargets_without_jumping_and_reduced_motion_is_immediate() {
