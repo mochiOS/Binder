@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -26,12 +26,6 @@ const SEARCH_HEIGHT: f32 = 38.0;
 const PAGE_BUTTON_SIZE: f32 = 30.0;
 const MENU_WIDTH: f32 = 190.0;
 const MENU_HEIGHT: f32 = 80.0;
-
-#[derive(Clone)]
-enum CachedIcon {
-    Image(ImageData),
-    Missing,
-}
 
 #[derive(Default)]
 struct PageMotion {
@@ -138,7 +132,7 @@ pub(crate) struct AppLibraryLayer<C> {
     menu_action: Rc<Cell<Option<MenuAction>>>,
     pin_menu: Menu,
     unpin_menu: Menu,
-    icon_cache: RefCell<HashMap<PathBuf, CachedIcon>>,
+    icon_cache: super::app_icon::AppIcons,
 }
 
 impl<C> AppLibraryLayer<C>
@@ -199,8 +193,13 @@ where
                 .item(MenuItem::new("Unpin from Dock").on_select(move || {
                     unpin_action.set(Some(MenuAction::Unpin));
                 })),
-            icon_cache: RefCell::new(HashMap::new()),
+            icon_cache: super::app_icon::AppIcons::default(),
         }
+    }
+
+    pub(super) fn with_icon_cache(mut self, cache: super::app_icon::AppIcons) -> Self {
+        self.icon_cache = cache;
+        self
     }
 
     fn panel_rect(bounds: Rect, visible_count: usize, has_multiple_pages: bool) -> Rect {
@@ -454,28 +453,9 @@ where
         }
     }
 
-    fn load_icon(&self, path: &Path) -> CachedIcon {
-        if let Some(icon) = self.icon_cache.borrow().get(path) {
-            return icon.clone();
-        }
-        let icon = if path.extension().and_then(|extension| extension.to_str()) == Some("svg") {
-            SvgData::from_path(path)
-                .ok()
-                .and_then(|svg| ImageData::from_svg(&svg, 72, 72).ok())
-                .map_or(CachedIcon::Missing, CachedIcon::Image)
-        } else {
-            ImageData::thumbnail_from_path(path, 72, 72)
-                .map_or(CachedIcon::Missing, CachedIcon::Image)
-        };
-        self.icon_cache
-            .borrow_mut()
-            .insert(path.to_path_buf(), icon.clone());
-        icon
-    }
-
     fn paint_icon(&self, app: &AppInfo, bounds: Rect, context: &mut PaintContext<'_>) {
         if let Some(path) = app.icon.as_deref()
-            && let CachedIcon::Image(image) = self.load_icon(path)
+            && let Some(image) = self.icon_cache.load_at_size(path, 72)
         {
             super::app_icon::paint(image, bounds, context);
             return;

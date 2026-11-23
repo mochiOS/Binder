@@ -204,6 +204,11 @@ where
         }
     }
 
+    pub(super) fn with_icon_cache(mut self, cache: super::app_icon::AppIcons) -> Self {
+        self.icon_cache = cache;
+        self
+    }
+
     fn active_menu(&self, index: usize) -> &Menu {
         let pinned = self
             .dock_apps()
@@ -382,11 +387,16 @@ where
         let Some(dock) = self.dock_rect(bounds) else {
             return;
         };
-        let tooltip_shadow = context.theme().surface.shadow_outset(&context.theme().shadows);
-        let top = DOCK_ICON_LIFT + DOCK_TOOLTIP_MARGIN + DOCK_TOOLTIP_HEIGHT
+        let tooltip_shadow = context
+            .theme()
+            .surface
+            .shadow_outset(&context.theme().shadows);
+        let top = DOCK_ICON_LIFT
+            + DOCK_TOOLTIP_MARGIN
+            + DOCK_TOOLTIP_HEIGHT
             + DOCK_REDRAW_MARGIN.max(tooltip_shadow);
-        let side_margin = DOCK_TOOLTIP_HORIZONTAL_PADDING + DOCK_TOOLTIP_MAX_WIDTH / 2.0
-            + tooltip_shadow;
+        let side_margin =
+            DOCK_TOOLTIP_HORIZONTAL_PADDING + DOCK_TOOLTIP_MAX_WIDTH / 2.0 + tooltip_shadow;
         let vertical = Rect::new(
             dock.origin.x - side_margin,
             dock.origin.y - top,
@@ -663,7 +673,7 @@ where
             return;
         }
         if let Some(icon) = &app.icon {
-            if let Some(image) = self.icon_cache.load(icon,bounds,context.scale_factor()) {
+            if let Some(image) = self.icon_cache.load(icon, bounds, context.scale_factor()) {
                 super::app_icon::paint(image, bounds, context);
 
                 return;
@@ -676,9 +686,7 @@ where
     fn paint_app_library_icon(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         let material = DockMaterial::for_theme(context.theme);
         Rectangle::new()
-            .color(RectangleColor::Custom(
-                material.app_library_icon_background,
-            ))
+            .color(RectangleColor::Custom(material.app_library_icon_background))
             .radius(super::app_icon::radius(bounds))
             .border(BorderStyle::custom(material.app_library_icon_border, 1.0))
             .paint(bounds, context);
@@ -701,9 +709,7 @@ where
             );
 
             Rectangle::new()
-                .color(RectangleColor::Custom(
-                    material.app_library_icon_tile,
-                ))
+                .color(RectangleColor::Custom(material.app_library_icon_tile))
                 .radius(super::app_icon::radius(cell))
                 .paint(cell, context);
 
@@ -715,7 +721,7 @@ where
                 cell.size.height - inset * 2.0,
             );
             if let Some(path) = app.icon.as_deref()
-                && let Some(image) = self.icon_cache.load(path,icon,context.scale_factor())
+                && let Some(image) = self.icon_cache.load(path, icon, context.scale_factor())
             {
                 super::app_icon::paint(image, icon, context);
             }
@@ -778,9 +784,7 @@ where
         let y = icon.origin.y + icon.size.height + 5.0;
 
         Ellipse::new()
-            .color(EllipseColor::Custom(
-                color,
-            ))
+            .color(EllipseColor::Custom(color))
             .paint(Rect::new(x, y, size, size), context);
     }
 }
@@ -853,12 +857,13 @@ where
         };
         let material = DockMaterial::for_backdrop(background);
         Rectangle::new()
-            .color(RectangleColor::Custom(
-                material.background,
-            ))
+            .color(RectangleColor::Custom(material.background))
             .radius(CornerRadius::Custom(DOCK_RADIUS))
             .shadow(ShadowStyle::Custom(material.shadow))
-            .border(BorderStyle::custom(material.border, context.theme.surface.floating_stroke_width))
+            .border(BorderStyle::custom(
+                material.border,
+                context.theme.surface.floating_stroke_width,
+            ))
             .paint(dock, context);
 
         let apps = self.dock_apps();
@@ -880,9 +885,7 @@ where
                 let item = snap_rect(visual.item);
 
                 Rectangle::new()
-                    .color(RectangleColor::Custom(
-                        hover.with_alpha(opacity as u8),
-                    ))
+                    .color(RectangleColor::Custom(hover.with_alpha(opacity as u8)))
                     .radius(CornerRadius::Custom(DOCK_ITEM_RADIUS))
                     .paint(item, context);
             }

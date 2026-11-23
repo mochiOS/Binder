@@ -67,6 +67,7 @@ pub(crate) fn view(
     context_menu: State<Option<ContextMenuModel>>,
     wallpaper: super::wallpaper::Wallpaper,
     session_user: String,
+    icon_cache: super::AppIcons,
 ) -> Box<dyn View + 'static> {
     let refresh_driver = PlatformRefreshView::new(
         Rc::clone(&platform),
@@ -154,7 +155,8 @@ pub(crate) fn view(
         app_library_open.clone(),
         Rc::clone(&fast_poll_until),
         Rc::clone(&launch_failure_states),
-    );
+    )
+    .with_icon_cache(icon_cache.clone());
 
     let notified_desktop = super::notification_center::NotificationCenterLayer::new(
         docked_desktop,
@@ -174,7 +176,8 @@ pub(crate) fn view(
         Rc::clone(&pending_app_activation),
         Rc::clone(&fast_poll_until),
         launch_failure_states,
-    );
+    )
+    .with_icon_cache(icon_cache.clone());
     let root = super::app_switcher::AppSwitcherLayer::new(
         root,
         Rc::clone(&platform),
@@ -214,7 +217,8 @@ pub(crate) fn view(
         control_center_open,
         notification_center_open,
         app_library_open,
-    );
+    )
+    .with_icon_cache(icon_cache.clone());
     let root = PointerTracker::new(root, Rc::clone(&cursor_pointer)).with_chrome(chrome);
 
     #[cfg(target_os = "mochios")]

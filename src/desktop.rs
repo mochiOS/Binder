@@ -12,6 +12,7 @@ use viewkit::prelude::*;
 
 pub struct BinderApp {
     shell_mode: crate::shell::ShellMode,
+    app_icons: crate::ui::AppIcons,
     tablet: Rc<RefCell<crate::ui::tablet::TabletState>>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     system_bar: State<SystemBarState>,
@@ -85,6 +86,7 @@ impl App for BinderApp {
         }
         Self {
             shell_mode: crate::shell::ShellMode::current(),
+            app_icons: crate::ui::AppIcons::default(),
             tablet: Rc::new(RefCell::new(crate::ui::tablet::TabletState::default())),
             platform,
             system_bar: State::new(system_bar),
@@ -223,6 +225,7 @@ impl App for BinderApp {
             self.context_menu.clone(),
             self.wallpaper.clone(),
             self.session_user.clone(),
+            self.app_icons.clone(),
         )
     }
 

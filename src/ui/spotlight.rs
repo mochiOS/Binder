@@ -99,6 +99,11 @@ impl<C: View> SpotlightLayer<C> {
         }
     }
 
+    pub(super) fn with_icon_cache(mut self, cache: super::app_icon::AppIcons) -> Self {
+        self.icon_cache = cache;
+        self
+    }
+
     fn open(&self, context: &mut EventContext<'_>) {
         context.set_keyboard_capture(true);
         self.menu_open.set(false);
@@ -212,9 +217,9 @@ impl<C: View> SpotlightLayer<C> {
     ) {
         if let SearchAction::Application(app) = &result.action {
             if let Some(path) = app.icon.as_deref()
-                && let Some(icon) = self.icon_cache.load(path,bounds,context.scale_factor())
+                && let Some(icon) = self.icon_cache.load(path, bounds, context.scale_factor())
             {
-                super::app_icon::paint(icon,bounds,context);
+                super::app_icon::paint(icon, bounds, context);
                 return;
             }
             super::app_icon::paint_fallback_icon(bounds, context);
@@ -358,8 +363,7 @@ impl<C: View> View for SpotlightLayer<C> {
         if matches!(
             event,
             ViewEvent::FocusChanged { focused: false } | ViewEvent::KeyboardCaptureDenied
-        )
-            && self.state.borrow().open
+        ) && self.state.borrow().open
         {
             self.close(context);
             context.request_redraw();
