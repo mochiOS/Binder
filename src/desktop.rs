@@ -13,8 +13,6 @@ use viewkit::prelude::*;
 pub struct BinderApp {
     shell_mode: crate::shell::ShellMode,
     tablet: Rc<RefCell<crate::ui::tablet::TabletState>>,
-    #[cfg(target_os = "mochios")]
-    ready_target: Option<mochi_user_platform::service_ready::Target>,
     platform: Rc<RefCell<dyn DesktopPlatform>>,
     system_bar: State<SystemBarState>,
     mochios_menu_open: State<bool>,
@@ -88,8 +86,6 @@ impl App for BinderApp {
         Self {
             shell_mode: crate::shell::ShellMode::current(),
             tablet: Rc::new(RefCell::new(crate::ui::tablet::TabletState::default())),
-            #[cfg(target_os = "mochios")]
-            ready_target: mochi_user_platform::service_ready::take_bootstrap_target(),
             platform,
             system_bar: State::new(system_bar),
             mochios_menu_open: State::new(false),
@@ -168,12 +164,6 @@ impl App for BinderApp {
     }
 
     fn first_frame_presented(&mut self) {
-        #[cfg(target_os = "mochios")]
-        if let Some(target) = self.ready_target.take()
-            && mochi_user_platform::service_ready::notify(target, 0).is_err()
-        {
-            mochi_user_platform::logln!("Binder.app: desktop ready notification failed");
-        }
         self.platform.borrow_mut().first_frame_presented();
     }
 

@@ -7,6 +7,8 @@ mod platform;
 mod session;
 mod shell;
 mod startup;
+#[cfg(any(test, target_os = "mochios"))]
+mod startup_readiness;
 mod ui;
 mod window;
 

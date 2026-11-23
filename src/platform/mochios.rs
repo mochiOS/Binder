@@ -66,6 +66,8 @@ pub struct MochiOsPlatform {
     context_menu_connect_attempted: bool,
     #[cfg(target_os = "mochios")]
     desktop_background: Option<background::Background>,
+    #[cfg(target_os = "mochios")]
+    desktop_ready_target: Option<mochi_user_platform::service_ready::Target>,
 }
 
 impl MochiOsPlatform {
@@ -75,18 +77,11 @@ impl MochiOsPlatform {
     }
 
     pub fn with_context_menu_state(context_menu_state: State<Option<ContextMenuModel>>) -> Self {
-        Self {
+        #[allow(unused_mut)]
+        let mut platform = Self {
             system_bar: SystemBarState::default(),
             input_mode: viewkit::environment::InputMode::Pointer,
-            apps: {
-                let apps = read_apps();
-                #[cfg(target_os = "mochios")]
-                mochi_user_platform::logln!(
-                    "Binder.app: application catalog loaded count={}",
-                    apps.len()
-                );
-                apps
-            },
+            apps: Vec::new(),
             children: HashMap::new(),
             create_window_requests: Vec::new(),
             close_window_requests: Vec::new(),
@@ -107,6 +102,29 @@ impl MochiOsPlatform {
             context_menu_connect_attempted: false,
             #[cfg(target_os = "mochios")]
             desktop_background: None,
+            #[cfg(target_os = "mochios")]
+            desktop_ready_target: mochi_user_platform::service_ready::take_bootstrap_target(),
+        };
+        #[cfg(target_os = "mochios")]
+        platform.start_background();
+        // Catalog I/O can overlap the independent wallpaper read/decode.
+        platform.apps = read_apps();
+        platform
+    }
+
+    #[cfg(target_os = "mochios")]
+    fn start_background(&mut self) {
+        if self.desktop_background.is_some() {
+            return;
+        }
+        match background::Background::start(self.desktop_ready_target) {
+            Ok(background) => {
+                self.desktop_background = Some(background);
+                self.desktop_ready_target = None;
+            }
+            Err(error) => {
+                mochi_user_platform::logln!("Binder.app: desktop background worker failed: {error}")
+            }
         }
     }
 
@@ -746,12 +764,13 @@ impl DesktopPlatform for MochiOsPlatform {
 
     fn first_frame_presented(&mut self) {
         #[cfg(target_os = "mochios")]
-        if self.desktop_background.is_none() {
-            match background::Background::start() {
-                Ok(background) => self.desktop_background = Some(background),
-                Err(error) => mochi_user_platform::logln!(
-                    "Binder.app: desktop background worker failed: {error}"
-                ),
+        {
+            self.start_background();
+            if let Some(background) = &self.desktop_background {
+                background.first_frame_presented();
+            } else if let Some(target) = self.desktop_ready_target.take() {
+                // A failed optional wallpaper worker retains a usable solid backdrop.
+                let _ = mochi_user_platform::service_ready::notify(target, 0);
             }
         }
     }
